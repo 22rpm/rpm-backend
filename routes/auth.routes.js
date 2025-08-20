@@ -9,5 +9,8 @@ router.post('/login', login);
 router.get('/me', authRequired, me);
 router.post('/logout', authRequired, logout);
 router.post('/register', register);
+router.post('/login', login);
+// router.post('/mfa/setup', mfaSetup);    // returns secret/QR using the challengeToken
+// router.post('/mfa/verify', mfaVerify);  // verifies TOTP and sets the auth cookie
 
 module.exports = router;

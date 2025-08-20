@@ -6,6 +6,12 @@ const { findUserByEmail, findRoleByUsername, updateLastLogin } = require('../ser
 const { COOKIE_NAME } = require('../middleware/auth');
 const { registerSchema } = require('../validations/auth.validation');
 const { createUser, assignRole } = require('../services/user.service');
+const speakeasy = require('speakeasy');
+const { buildFingerprint } = require('../utils/fingerprint');
+const { 
+  getDeviceByHash, trustDevice, touchDevice,
+  getMfa, setMfaSecret, enableMfa 
+} = require('../services/security.service');
 
 
 const COOKIE_SECURE = process.env.NODE_ENV === 'production';
@@ -16,47 +22,34 @@ function signJwt(userPayload) {
     issuer: 'rpm-api',
   });
 }
-async function login(req, res) {
-  try {
-    const { value, error } = loginSchema.validate(req.body, { abortEarly: false });
-    if (error) {
-      return res.status(400).json({ ok: false, message: "Validation error", details: error.details });
-    }
-
-    const user = await findUserByEmail(value.email);
-    if (!user) return res.status(401).json({ ok: false, message: "Invalid credentials" });
-
-    const passwordOk = await bcrypt.compare(value.password, user.password);
-    if (!passwordOk) return res.status(401).json({ ok: false, message: "Invalid credentials" });
-
-    const role = await findRoleByUsername(user.username);
-    const payload = { id: user.id, email: user.email, username: user.username, role };
-
-    const token = signJwt(payload);
-
-    // ✅ Update last login timestamp
-    await updateLastLogin(user.id);
-
-    // HIPAA-friendly cookie defaults
-    res.cookie(COOKIE_NAME, token, {
-      httpOnly: true,
-      secure: COOKIE_SECURE,
-      sameSite: "strict",
-      maxAge: parseInt(process.env.JWT_COOKIE_MAXAGE_MS || `${60 * 60 * 1000}`, 10), // default 1h
-      path: "/",
-    });
-
-    return res.status(200).json({
-      ok: true,
-      message: "Login successful",
-      user: { id: user.id, username: user.username, name: user.name, email: user.email },
-      role,
-    });
-  } catch (err) {
-    console.error("Login error:", err);
-    return res.status(500).json({ ok: false, message: "Server error" });
-  }
+function signMfaChallenge(payload) {
+  return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '5m', issuer: 'rpm-api', subject: 'mfa' });
 }
+
+// auth.controller.js
+const login = async (req, res) => {
+  const { email, password } = req.body;
+  const user = await userService.findByEmail(email);
+  if (!user) return res.status(400).json({ ok: false, message: "Invalid email" });
+
+  const valid = await bcrypt.compare(password, user.password);
+  if (!valid) return res.status(400).json({ ok: false, message: "Invalid password" });
+
+  // generate OTP
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  await userService.saveOtp(user.id, otp);
+
+  // send email with Mailtrap
+  await mailer.sendMail({
+    from: '"TeleHealth" <noreply@telehealth.com>',
+    to: user.email,
+    subject: "Your OTP Code",
+    text: `Your OTP code is ${otp}`,
+  });
+
+  return res.json({ ok: true, message: "OTP sent to your email. Please verify." });
+};
+
 
 async function me(req, res) {
   // req.user is set by authRequired middleware
