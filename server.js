@@ -2,7 +2,7 @@
 require('dotenv').config();
 const express = require('express');
 const cookieParser = require('cookie-parser');
-
+const devDataRoutes = require('./routes/auth.routes');
 const authRoutes = require('./routes/auth.routes');
 
 const app = express();
@@ -24,7 +24,7 @@ if (allowed.length) {
 
 // app.get('/health', (req, res) => res.json({ ok: true, service: 'rpm-api', ts: new Date().toISOString() }));
 app.use('/api/auth', authRoutes);
-
+app.use('/api/dev-data', devDataRoutes);
 // 404
 app.use((req, res) => res.status(404).json({ ok: false, message: 'Not found' }));
 

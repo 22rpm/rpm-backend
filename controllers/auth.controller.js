@@ -3,6 +3,7 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { loginSchema } = require('../validations/auth.validation');
 const { findUserByEmail, findRoleByUsername, updateLastLogin } = require('../services/user.service');
+const { insertDevData } = require('../services/devData.service');
 const { COOKIE_NAME } = require('../middleware/auth');
 const { registerSchema } = require('../validations/auth.validation');
 const { createUser, assignRole } = require('../services/user.service');
@@ -165,4 +166,24 @@ const verifyOtpController = async (req, res) => {
   }
 };
 
-module.exports = { login, me, logout, register, verifyOtpController, verifyLogin };
+async function addDevData(req, res) {
+  try {
+    const jsonData = req.body; // data from frontend (assumed JSON)
+
+    if (!jsonData || typeof jsonData !== 'object') {
+      return res.status(400).json({ error: "Invalid JSON data" });
+    }
+
+    const newId = await insertDevData(jsonData);
+
+    return res.status(201).json({
+      message: "Data inserted successfully",
+      id: newId,
+    });
+  } catch (err) {
+    console.error("Error inserting dev data:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+}
+
+module.exports = { login, me, logout, register, verifyOtpController, verifyLogin, addDevData };
