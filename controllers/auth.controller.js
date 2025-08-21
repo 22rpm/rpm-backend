@@ -12,6 +12,9 @@ const {
   getDeviceByHash, trustDevice, touchDevice,
   getMfa, setMfaSecret, enableMfa 
 } = require('../services/security.service');
+const { verifyOtp, createOtp } = require("../services/otp.service");
+const { sendOtpEmail } = require("../services/mail.service");
+
 
 
 const COOKIE_SECURE = process.env.NODE_ENV === 'production';
@@ -27,28 +30,41 @@ function signMfaChallenge(payload) {
 }
 
 // auth.controller.js
-const login = async (req, res) => {
-  const { email, password } = req.body;
-  const user = await userService.findByEmail(email);
-  if (!user) return res.status(400).json({ ok: false, message: "Invalid email" });
+async function login(req, res) {
+  try {
+    const { email, password } = req.body;
 
-  const valid = await bcrypt.compare(password, user.password);
-  if (!valid) return res.status(400).json({ ok: false, message: "Invalid password" });
+    // ✅ Get user from DB through service
+    const user = await findUserByEmail(email);
+    if (!user) {
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
 
-  // generate OTP
-  const otp = Math.floor(100000 + Math.random() * 900000).toString();
-  await userService.saveOtp(user.id, otp);
+    // ✅ Check password
+    const validPassword = await bcrypt.compare(password, user.password);
+    if (!validPassword) {
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
 
-  // send email with Mailtrap
-  await mailer.sendMail({
-    from: '"TeleHealth" <noreply@telehealth.com>',
-    to: user.email,
-    subject: "Your OTP Code",
-    text: `Your OTP code is ${otp}`,
-  });
+    // ✅ Generate OTP (6-digit)
+    const otp = ("" + Math.floor(100000 + Math.random() * 900000)).substring(0, 6);
 
-  return res.json({ ok: true, message: "OTP sent to your email. Please verify." });
-};
+    // ✅ Store OTP in otp_tokens table via service
+    await createOtp(user.id, otp, "login");
+
+    // ✅ Send OTP (via email service or SMS)
+    if (sendOtpEmail) {
+      await sendOtpEmail(user.email, otp);
+    } else {
+      console.log(`OTP for ${email}: ${otp}`); // fallback for dev
+    }
+
+    return res.json({ message: "OTP sent, please verify" });
+  } catch (err) {
+    console.error("Login error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+}
 
 
 async function me(req, res) {
@@ -111,4 +127,42 @@ async function register(req, res) {
   }
 }
 
-module.exports = { login, me, logout, register };
+async function verifyLogin(req, res) {
+  const { userId, otp } = req.body;
+
+  const valid = await verifyOtp(userId, otp, "login");
+  if (!valid) return res.status(400).json({ message: "Invalid or expired OTP" });
+
+  // issue JWT or session here
+  return res.json({ message: "Login successful", token: "jwt-token-here" });
+}
+
+const verifyOtpController = async (req, res) => {
+  try {
+    const { email, otp } = req.body;
+    // 1. Find user
+    const user = await findUserByEmail(email);
+    
+    if (!user) return res.status(400).json({ error: "User not found" });
+
+    // 2. Call the service
+    const valid = await verifyOtp(user.id, otp, "login");
+    console.log(valid);
+    
+    if (!valid) return res.status(400).json({ error: "Invalid or expired OTP" });
+
+    // 3. Generate JWT
+    const token = jwt.sign(
+      { id: user.id, email: user.email },
+      process.env.JWT_SECRET,
+      { expiresIn: "1h" }
+    );
+
+    return res.json({ message: "OTP verified successfully", token });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "Server error" });
+  }
+};
+
+module.exports = { login, me, logout, register, verifyOtpController, verifyLogin };

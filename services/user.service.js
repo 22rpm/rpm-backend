@@ -41,11 +41,17 @@ async function updateLastLogin(userId) {
   );
 }
 
+async function getUserById(userId) {
+  const [rows] = await db.query("SELECT * FROM users WHERE id = ?", [userId]);
+  return rows[0] || null;
+}
+
 
 module.exports = {
   findUserByEmail,
   findRoleByUsername,
   createUser,
   assignRole,
-  updateLastLogin
+  updateLastLogin,
+  getUserById
 };
