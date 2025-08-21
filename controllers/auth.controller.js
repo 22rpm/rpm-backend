@@ -59,7 +59,7 @@ async function login(req, res) {
       console.log(`OTP for ${email}: ${otp}`); // fallback for dev
     }
 
-    return res.json({ message: "OTP sent, please verify" });
+    return res.status(200).json({ message: "OTP sent, please verify" });
   } catch (err) {
     console.error("Login error:", err);
     return res.status(500).json({ error: "Server error" });

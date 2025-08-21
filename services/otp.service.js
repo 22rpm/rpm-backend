@@ -3,13 +3,7 @@ const db = require("../config/db");
 async function createOtp(userId, otp, type = "login", expiresInMinutes = 5) {
   const createdAt = new Date();
   const expiresAt = new Date(Date.now() + expiresInMinutes * 60000);
-  //   const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 min expiry
-  //   const expiresAt = new Date(Date.now()); // 5 min expiry
-//   console.log(`Current Time: ${createdAt}`);
-//   console.log(
-//     `Creating OTP for user ${userId} of type ${type} that expires at ${expiresAt}`
-//   );
-
+  
   await db.query(
     "INSERT INTO otp_tokens (user_id, otp_code, otp_type, created_at, expires_at) VALUES (?, ?, ?, ?, ?)",
     [userId, otp, type, createdAt, expiresAt]
