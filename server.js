@@ -1,15 +1,25 @@
 // server.js
 require("dotenv").config();
+
 const express = require("express");
+const http = require("http");
 const cookieParser = require("cookie-parser");
+const { initializeSocket } = require("./socket/socketServer");
+
 const devDataRoutes = require("./routes/auth.routes");
 const authRoutes = require("./routes/auth.routes");
+const messageRoutes = require("./routes/messageRoutes");
+
 const swaggerDocs = require("./config/swagger");
-const fs = require("fs");
-const path = require("path");
 const swaggerUi = require("swagger-ui-express");
 
+const fs = require("fs");
+const path = require("path");
+
 const app = express();
+
+const server = http.createServer(app);
+
 app.use(express.json());
 app.use(cookieParser());
 
@@ -23,12 +33,15 @@ if (allowed.length) {
   app.use(
     cors({
       origin: (origin, cb) => cb(null, !origin || allowed.includes(origin)),
+      methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+      allowedHeaders: ["Content-Type", "Authorization"],
       credentials: true,
     })
   );
 }
 
 // app.get('/health', (req, res) => res.json({ ok: true, service: 'rpm-api', ts: new Date().toISOString() }));
+app.use("/api/messages", messageRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/dev-data", devDataRoutes);
 
@@ -52,5 +65,7 @@ app.use((req, res) =>
   res.status(404).json({ ok: false, message: "Not found" })
 );
 
+initializeSocket(server);
+
 const port = process.env.PORT || 4000;
-app.listen(port, () => console.log(`Server started on ${port}`));
+server.listen(port, () => console.log(`Server started on ${port}`));

@@ -21,4 +21,22 @@ function authRequired(req, res, next) {
   }
 }
 
-module.exports = { authRequired, COOKIE_NAME };
+// this is being used in live chat messageService
+function authMiddleware(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) {
+    return res.status(401).json({ message: "No token provided" });
+  }
+
+  const token = authHeader.split(" ")[1]; // after "Bearer"
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded;  // 🔑 now req.user will exist
+    next();
+  } catch (err) {
+    return res.status(401).json({ message: "Invalid token" });
+  }
+}
+
+
+module.exports = { authRequired, COOKIE_NAME, authMiddleware};
