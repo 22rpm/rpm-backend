@@ -6,6 +6,7 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "nodemon server.js",
+    "dev": "nodemon app.js",
     "migrate": "node migration-runner.js"
   },
   "keywords": [],
@@ -29,6 +30,8 @@
     "ua-parser-js": "^2.0.4"
   },
   "devDependencies": {
-    "sequelize-cli": "^6.6.3"
+    "sequelize-cli": "^6.6.3",
+    "swagger-jsdoc": "^6.2.8",
+    "swagger-ui-express": "^5.0.1"
   }
 }

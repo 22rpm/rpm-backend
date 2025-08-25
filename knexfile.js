@@ -6,11 +6,11 @@ module.exports = {
       host: "127.0.0.1",
       user: "root",
       password: "root",
-      database: "rpm_db"
+      database: "rpm_db",
     },
     migrations: {
-      directory: "./migrations"
-    }
+      directory: "./config/migrations",
+    },
   },
 
   production: {
@@ -19,10 +19,10 @@ module.exports = {
       host: process.env.DB_HOST,
       user: process.env.DB_USER,
       password: process.env.DB_PASS,
-      database: process.env.DB_NAME
+      database: process.env.DB_NAME,
     },
     migrations: {
-      directory: "./migrations"
-    }
-  }
+      directory: "./config/migrations",
+    },
+  },
 };

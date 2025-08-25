@@ -25,7 +25,7 @@ const { verifyOtp, createOtp } = require("../services/otp.service");
 const { sendOtpEmail } = require("../services/mail.service");
 const crypto = require("crypto");
 const { saveOrUpdateUserDevice } = require("../services/device.service");
-
+const { deleteRefreshTokenForDevice } = require("../services/auth.service");
 
 const COOKIE_SECURE = process.env.NODE_ENV === "production";
 
@@ -88,14 +88,51 @@ async function me(req, res) {
   return res.status(200).json({ ok: true, user: req.user });
 }
 
+// async function logout(req, res) {
+//   res.clearCookie(COOKIE_NAME, {
+//     httpOnly: true,
+//     secure: COOKIE_SECURE,
+//     sameSite: "strict",
+//     path: "/",
+//   });
+//   return res.status(200).json({ ok: true, message: "Logged out" });
+// }
+
 async function logout(req, res) {
-  res.clearCookie(COOKIE_NAME, {
-    httpOnly: true,
-    secure: COOKIE_SECURE,
-    sameSite: "strict",
-    path: "/",
-  });
-  return res.status(200).json({ ok: true, message: "Logged out" });
+  try {
+    const refreshToken = req.cookies["refresh_token"];
+    const deviceFingerprint = req.body.device_fingerprint; // frontend must send it
+
+    if (refreshToken && deviceFingerprint && req.user?.id) {
+      // remove refresh token record from DB for this device
+      await deleteRefreshTokenForDevice(
+        req.user.id,
+        deviceFingerprint,
+        refreshToken
+      );
+    }
+
+    // clear access token
+    res.clearCookie(COOKIE_NAME, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      path: "/",
+    });
+
+    // clear refresh token
+    res.clearCookie("refresh_token", {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      path: "/",
+    });
+
+    return res.status(200).json({ ok: true, message: "Logged out" });
+  } catch (err) {
+    console.error("Logout error:", err);
+    return res.status(500).json({ ok: false, message: "Server error" });
+  }
 }
 
 async function register(req, res) {
@@ -104,13 +141,11 @@ async function register(req, res) {
       abortEarly: false,
     });
     if (error) {
-      return res
-        .status(400)
-        .json({
-          ok: false,
-          message: "Validation error",
-          details: error.details,
-        });
+      return res.status(400).json({
+        ok: false,
+        message: "Validation error",
+        details: error.details,
+      });
     }
 
     // Check if email already exists
@@ -225,7 +260,6 @@ const verifyOtpController = async (req, res) => {
       sameSite: "strict",
       maxAge: 14 * 24 * 60 * 60 * 1000, // 14 days
     });
-
 
     // Optionally also return some basic response (without token)
     return res.status(200).json({ message: "OTP verified successfully" });
