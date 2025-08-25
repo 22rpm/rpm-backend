@@ -5,7 +5,7 @@ module.exports = {
     connection: {
       host: "localhost",
       user: "root",
-      password: "Rmt@123",
+      password: "root",
       database: "rpm_db",
     },
     migrations: {
