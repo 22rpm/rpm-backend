@@ -200,53 +200,40 @@ async function verifyLogin(req, res) {
 
 const verifyOtpController = async (req, res) => {
   try {
-    const { email, otp } = req.body;
+    const { email, otp, device_fingerprint } = req.body;
 
     // 1. Find user
     const user = await findUserByEmail(email);
     if (!user) return res.status(400).json({ error: "User not found" });
+
+    const role = await findRoleByUsername(user.username);
 
     // 2. Verify OTP via service
     const valid = await verifyOtp(user.id, otp, "login");
     if (!valid)
       return res.status(400).json({ error: "Invalid or expired OTP" });
 
-    // 3. Generate JWT
-    const token = jwt.sign(
-      { id: user.id, email: user.email },
-      process.env.JWT_SECRET,
-      { expiresIn: "1h" }
-    );
-
-    // // 4. Send token as cookie (httpOnly + secure in production)
-    // res.cookie("auth_token", token, {
-    //   httpOnly: true, // cannot be accessed via JS
-    //   secure: process.env.NODE_ENV === "production", // only https in prod
-    //   sameSite: "strict", // helps prevent CSRF
-    //   maxAge: 60 * 60 * 1000, // 1 hour
-    // });
-
-    // in verifyOtpController (after OTP validation)
+    // 3. Generate short-lived Access Token (include role in payload)
     const accessToken = jwt.sign(
-      { id: user.id, email: user.email },
+      { id: user.id, email: user.email, role: user.role }, // 👈 include role
       process.env.JWT_SECRET,
-      { expiresIn: "15m" } // short-lived
+      { expiresIn: "15m" }
     );
 
+    // 4. Generate Refresh Token
     const refreshToken = crypto.randomBytes(64).toString("hex");
 
-    // persist/rotate refresh token & session bounds on this device
+    // 5. Persist/rotate refresh token & session
     await saveOrUpdateUserDevice({
       userId: user.id,
-      deviceFingerprint: req.body.device_fingerprint,
+      deviceFingerprint: device_fingerprint,
       ipAddress: req.ip,
       userAgent: req.headers["user-agent"],
       refreshToken,
-      // new fields:
       absoluteExpiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000), // 14 days
     });
 
-    // cookies
+    // 6. Set cookies
     res.cookie("auth_token", accessToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
@@ -261,8 +248,15 @@ const verifyOtpController = async (req, res) => {
       maxAge: 14 * 24 * 60 * 60 * 1000, // 14 days
     });
 
-    // Optionally also return some basic response (without token)
-    return res.status(200).json({ message: "OTP verified successfully" });
+    // 7. Respond with role so frontend knows dashboard to show
+    return res.status(200).json({
+      message: "OTP verified successfully",
+      user: {
+        id: user.id,
+        email: user.email,
+        role: role,
+      },
+    });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: "Server error" });
