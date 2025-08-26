@@ -11,4 +11,8 @@ router.get('/conversations', messageController.getUserConversations);
 router.get('/conversation/:userId', messageController.getConversation);
 router.get('/clinicians', messageController.getClinicians);
 
+//patient route
+router.get('/patients', messageController.getPatients);
+
+
 module.exports = router;

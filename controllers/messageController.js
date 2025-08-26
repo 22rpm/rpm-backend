@@ -91,6 +91,56 @@ class MessageController {
       });
     }
   }
+  
+  async getPatients(req, res) {
+  try {
+    const patients = await messageService.getPatients();
+    
+    // Process health data and add status
+    const processedPatients = patients.map(patient => {
+      let status = 'Normal';
+      let heartRate = 72;
+      let lastReading = 'No data';
+      
+      if (patient.health_data) {
+        const healthData = typeof patient.health_data === 'string' 
+          ? JSON.parse(patient.health_data) 
+          : patient.health_data;
+        
+        heartRate = healthData.heartRate || 72;
+        lastReading = healthData.lastReading || 'No data';
+        
+        // Determine status based on heart rate
+        if (heartRate > 90) {
+          status = 'Alert';
+        } else if (heartRate < 50 || heartRate > 100) {
+          status = 'Critical';
+        }
+      }
+      
+      return {
+        id: patient.id,
+        name: patient.name,
+        email: patient.email,
+        status,
+        heartRate,
+        lastReading
+      };
+    });
+
+    res.json({
+      success: true,
+      data: processedPatients
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get patients',
+      error: error.message
+    });
+  }
+}
+
 }
 
 module.exports = new MessageController();

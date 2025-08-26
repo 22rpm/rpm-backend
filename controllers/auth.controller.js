@@ -44,50 +44,11 @@ function signMfaChallenge(payload) {
 }
 
 // auth.controller.js
-async function login(req, res) {
-  try {
-    const { email, password } = req.body;
-
-    // ✅ Get user from DB through service
-    const user = await findUserByEmail(email);
-    if (!user) {
-      return res.status(401).json({ message: "Invalid credentials" });
-    }
-
-    // ✅ Check password
-    const validPassword = await bcrypt.compare(password, user.password);
-    if (!validPassword) {
-      return res.status(401).json({ message: "Invalid credentials" });
-    }
-
-    // ✅ Generate OTP (6-digit)
-    const otp = ("" + Math.floor(100000 + Math.random() * 900000)).substring(
-      0,
-      6
-    );
-
-    // ✅ Store OTP in otp_tokens table via service
-    await createOtp(user.id, otp, "login");
-
-    // ✅ Send OTP (via email service or SMS)
-    if (sendOtpEmail) {
-      await sendOtpEmail(user.email, otp);
-    } else {
-      console.log(`OTP for ${email}: ${otp}`); // fallback for dev
-    }
-
-    return res.status(200).json({ message: "OTP sent, please verify" });
-  } catch (err) {
-    console.error("Login error:", err);
-    return res.status(500).json({ error: "Server error" });
-  }
-}
-
 // async function login(req, res) {
 //   try {
 //     const { email, password } = req.body;
 
-//     // ✅ Get user from DB
+//     // ✅ Get user from DB through service
 //     const user = await findUserByEmail(email);
 //     if (!user) {
 //       return res.status(401).json({ message: "Invalid credentials" });
@@ -99,30 +60,69 @@ async function login(req, res) {
 //       return res.status(401).json({ message: "Invalid credentials" });
 //     }
 
-//     // ✅ Generate JWT (or session)
-//     const token = jwt.sign(
-//       { id: user.id, role: user.role },
-//       process.env.JWT_SECRET || "dev_secret",
-//       { expiresIn: "1h" }
+//     // ✅ Generate OTP (6-digit)
+//     const otp = ("" + Math.floor(100000 + Math.random() * 900000)).substring(
+//       0,
+//       6
 //     );
 
-//     // ✅ Respond with user + token
-//     return res.status(200).json({
-//       ok: true,
-//       message: "Login successful",
-//       user: {
-//         id: user.id,
-//         email: user.email,
-//         role: user.role,
-//         name: user.name,
-//       },
-//       token,
-//     });
+//     // ✅ Store OTP in otp_tokens table via service
+//     await createOtp(user.id, otp, "login");
+
+//     // ✅ Send OTP (via email service or SMS)
+//     if (sendOtpEmail) {
+//       await sendOtpEmail(user.email, otp);
+//     } else {
+//       console.log(`OTP for ${email}: ${otp}`); // fallback for dev
+//     }
+
+//     return res.status(200).json({ message: "OTP sent, please verify" });
 //   } catch (err) {
 //     console.error("Login error:", err);
 //     return res.status(500).json({ error: "Server error" });
 //   }
 // }
+
+async function login(req, res) {
+  try {
+    const { email, password } = req.body;
+
+    // ✅ Get user from DB
+    const user = await findUserByEmail(email);
+    if (!user) {
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
+
+    // ✅ Check password
+    const validPassword = await bcrypt.compare(password, user.password);
+    if (!validPassword) {
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
+
+    // ✅ Generate JWT (or session)
+    const token = jwt.sign(
+      { id: user.id, role: user.role },
+      process.env.JWT_SECRET || "dev_secret",
+      { expiresIn: "1h" }
+    );
+
+    // ✅ Respond with user + token
+    return res.status(200).json({
+      ok: true,
+      message: "Login successful",
+      user: {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        name: user.name,
+      },
+      token,
+    });
+  } catch (err) {
+    console.error("Login error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+}
 
 async function me(req, res) {
   // req.user is set by authRequired middleware

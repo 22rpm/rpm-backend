@@ -27,6 +27,7 @@ class MessageService {
         .where('messages.id', messageId)
         .first();
     } catch (error) {
+      console.log(error)
       throw error;
     }
   }
@@ -43,6 +44,7 @@ class MessageService {
         .orderBy('created_at', 'desc')
         .limit(limit);
     } catch (error) {
+      console.log(error)
       throw error;
     }
   }
@@ -67,6 +69,7 @@ class MessageService {
         )
         .orderBy('messages.created_at', 'desc');
     } catch (error) {
+      console.log(error)
       throw error;
     }
   }
@@ -77,6 +80,7 @@ class MessageService {
         .where({ sender_id: userId2, receiver_id: userId1, is_read: false })
         .update({ is_read: true });
     } catch (error) {
+      console.log(error)
       throw error;
     }
   }
@@ -88,9 +92,29 @@ class MessageService {
         .leftJoin('role', 'users.id', 'role.user_id')
         .where('role.role_type', 'clinician');
     } catch (error) {
+      console.log(error)
       throw error;
     }
   }
+  async getPatients() {
+  try {
+    return await db('users')
+      .select(
+        'users.id',
+        'users.name', 
+        'users.email',
+        'dev_data.data as health_data'
+      )
+      .leftJoin('role', 'users.id', 'role.user_id')
+      .leftJoin('dev_data', 'users.id', 'dev_data.dev_id')
+      .where('role.role_type', 'patient')
+      .orderBy('users.name');
+  } catch (error) {
+    console.log(error);
+    throw error;
+  }
+}
+
 }
 
 module.exports = new MessageService();
