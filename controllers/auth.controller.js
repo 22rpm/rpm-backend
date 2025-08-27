@@ -154,8 +154,14 @@ async function logout(req, res) {
       );
     }
 
+    // Prevent caching of this response
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+    res.setHeader("Surrogate-Control", "no-store");
+
     // clear access token
-    res.clearCookie(COOKIE_NAME, {
+    res.clearCookie("token", {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "strict",
