@@ -5,7 +5,9 @@ const COOKIE_NAME = process.env.JWT_COOKIE_NAME || "auth_token";
 
 function authRequired(req, res, next) {
   try {
-    const token = req.cookies[COOKIE_NAME];
+    console.log(req.cookies);
+    const token = req.cookies.token;
+    console.log("Token from cookies:", token);
     if (!token)
       return res.status(401).json({ ok: false, message: "Unauthorized" });
 

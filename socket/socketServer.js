@@ -1,6 +1,8 @@
 // socket/socketServer.js
 const socketIo = require('socket.io');
 const jwt = require('jsonwebtoken');
+const cookie = require('cookie');
+
 
 let io;
 const userSockets = new Map(); // Store user_id -> socket_id mapping
@@ -8,14 +10,23 @@ const userSockets = new Map(); // Store user_id -> socket_id mapping
 const initializeSocket = (server) => {
   io = socketIo(server, {
     cors: {
-      origin: "*",
-      methods: ["GET", "POST"]
+      origin: "http://localhost:5173",
+      methods: ["GET", "POST"],
+      credentials: true
     }
   });
 
   // Auth middleware
   io.use((socket, next) => {
-    const token = socket.handshake.auth.token;
+    // const token = socket.handshake.auth.token;
+     let token;
+
+    // Parse cookies from handshake headers
+    if (socket.handshake.headers.cookie) {
+      const cookies = cookie.parse(socket.handshake.headers.cookie);
+      token = cookies.token; // "token" is the name of your JWT cookie
+    }
+
     if (!token) {
       return next(new Error('Authentication error'));
     }

@@ -7,6 +7,7 @@ class MessageController {
     try {
       const { receiverId, message } = req.body;
       const senderId = req.user.id; // From JWT middleware
+      console.log('sendMessage called with:', { senderId, receiverId, message });
 
       const savedMessage = await messageService.saveMessage(senderId, receiverId, message);
 
@@ -59,7 +60,9 @@ class MessageController {
 
   async getUserConversations(req, res) {
     try {
-      const userId = 1
+      console.log(req.user);
+      const userId = req.user.id;
+      console.log('Fetching conversations for userId:', userId);
       const conversations = await messageService.getUserConversations(userId);
 
       res.json({
