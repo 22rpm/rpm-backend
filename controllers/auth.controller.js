@@ -145,13 +145,11 @@ async function me(req, res) {
 async function logout(req, res) {
   try {
     const refreshToken = req.cookies["refresh_token"];
-    const deviceFingerprint = req.body.device_fingerprint; // frontend must send it
+    // const deviceFingerprint = req.body.device_fingerprint; // frontend must send it
 
-    if (refreshToken && deviceFingerprint && req.user?.id) {
+    if (refreshToken) {
       // remove refresh token record from DB for this device
       await deleteRefreshTokenForDevice(
-        req.user.id,
-        deviceFingerprint,
         refreshToken
       );
     }

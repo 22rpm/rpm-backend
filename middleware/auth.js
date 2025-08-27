@@ -1,25 +1,80 @@
 // middleware/auth.js
 const jwt = require("jsonwebtoken");
+const { findUserDeviceSession } = require("../services/auth.service");
 
 const COOKIE_NAME = process.env.JWT_COOKIE_NAME || "auth_token";
 
-function authRequired(req, res, next) {
+
+// function authRequired(req, res, next) {
+//   try {
+//     console.log(req.cookies);
+//     const token = req.cookies.token;
+//     console.log("Token from cookies:", token);
+//     if (!token)
+//       return res.status(401).json({ ok: false, message: "Unauthorized" });
+
+//     const payload = jwt.verify(token, process.env.JWT_SECRET);
+//     req.user = payload; // { id, email, username, role }
+//     console.log("JWT_SECRET in middleware:", process.env.JWT_SECRET);
+
+//     next();
+//   } catch (err) {
+//     return res
+//       .status(401)
+//       .json({ ok: false, message: "Invalid or expired token" });
+//   }
+// }
+
+
+async function authRequired(req, res, next) {
   try {
-    console.log(req.cookies);
     const token = req.cookies.token;
-    console.log("Token from cookies:", token);
-    if (!token)
+    const refreshToken = req.cookies.refresh_token;
+
+    if (!token || !refreshToken) {
       return res.status(401).json({ ok: false, message: "Unauthorized" });
+    }
 
+    // Verify access token
     const payload = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = payload; // { id, email, username, role }
-    console.log("JWT_SECRET in middleware:", process.env.JWT_SECRET);
+    req.user = payload; // { id, email, role }
 
+    console.log(payload)
+
+    // Get device info
+    // const deviceFingerprint = req.headers["x-device-fingerprint"];
+    const deviceFingerprint = "unique-browser-hash"; // For testing, replace with actual fingerprinting logic
+    const userAgent = req.headers["user-agent"];
+    const ipAddress =
+      req.headers["x-forwarded-for"] || req.connection.remoteAddress;
+
+    // Lookup in DB via service
+    const device = await findUserDeviceSession({
+      userId: payload.id,
+      refreshToken,
+      deviceFingerprint,
+      userAgent,
+      ipAddress,
+    });
+
+    if (!device) {
+      return res.status(401).json({ ok: false, message: "Unauthorized" });
+    }
+
+    // Check absolute expiration
+    const now = new Date();
+    if (device.absolute_expires_at && now > device.absolute_expires_at) {
+      return res.status(401).json({
+        ok: false,
+        message: "Session expired. Please log in again.",
+      });
+    }
+
+    // ✅ Passed all checks
     next();
   } catch (err) {
-    return res
-      .status(401)
-      .json({ ok: false, message: "Invalid or expired token" });
+    console.error("Auth error:", err.message);
+    return res.status(401).json({ ok: false, message: "Invalid or expired token" });
   }
 }
 
