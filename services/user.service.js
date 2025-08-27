@@ -19,13 +19,15 @@ async function findRoleByUsername(username) {
   return rows[0]?.role_type || null;
 }
 
-async function createUser({ username, name, email, password }) {
+async function createUser({ username, name, email, password, phoneNumber, is_active }) {
   const [result] = await db.query(
-    'INSERT INTO users (username, name, email, password) VALUES (?, ?, ?, ?)',
-    [username, name, email, password]
+    `INSERT INTO users (username, name, email, password, phoneNumber, is_active)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [username, name, email, password, phoneNumber, is_active]
   );
   return result.insertId;
 }
+
 
 async function assignRole({ username, userId, role }) {
   await db.query(

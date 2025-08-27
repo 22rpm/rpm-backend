@@ -4,8 +4,8 @@ module.exports = {
     client: "mysql2",
     connection: {
       host: "localhost",
-      user: "root",
-      password: "root",
+      user: "mahad_mansoor",
+      password: "mahad_mansoor",
       database: "rpm_db",
     },
     migrations: {

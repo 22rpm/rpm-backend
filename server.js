@@ -9,7 +9,7 @@ const { initializeSocket } = require("./socket/socketServer");
 const devDataRoutes = require("./routes/auth.routes");
 const authRoutes = require("./routes/auth.routes");
 const messageRoutes = require("./routes/messageRoutes");
-
+const adminRoutes=require('./routes/admin.routes')
 const swaggerDocs = require("./config/swagger");
 const swaggerUi = require("swagger-ui-express");
 
@@ -33,7 +33,7 @@ if (allowed.length) {
   app.use(
     cors({
       origin: (origin, cb) => cb(null, !origin || allowed.includes(origin)),
-      methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+      methods: ["GET", "POST", "PUT", "PATCH","DELETE", "OPTIONS"],
       allowedHeaders: ["Content-Type", "Authorization"],
       credentials: true,
     })
@@ -44,6 +44,7 @@ if (allowed.length) {
 app.use("/api/messages", messageRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/dev-data", devDataRoutes);
+app.use("/api/admin",adminRoutes)
 
 // ✅ Load swagger.json
 const swaggerDocument = JSON.parse(
