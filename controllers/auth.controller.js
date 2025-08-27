@@ -1,6 +1,8 @@
 // controllers/auth.controller.js
 const bcrypt = require("bcrypt");
-const jwt = require("jsonwebtoken");
+const jwt = require("jsonwebtoken")
+  const pool = require("../config/db"); // Adjust the path to your database configuration
+;
 const { loginSchema } = require("../validations/auth.validation");
 const {
   findUserByEmail,
@@ -177,18 +179,31 @@ async function logout(req, res) {
   }
 }
 
+
 async function register(req, res) {
+  console.log("Before adding user - req.body:", req.body);
   try {
-    const { value, error } = registerSchema.validate(req.body, {
+    // Map status to is_active
+    const modifiedBody = {
+      ...req.body,
+      is_active: req.body.status === "Active" ? true : false,
+    };
+    delete modifiedBody.status; // Remove status to match schema
+    console.log("Before adding user - modifiedBody:", modifiedBody);
+
+    const { value, error } = registerSchema.validate(modifiedBody, {
       abortEarly: false,
     });
     if (error) {
+      console.log("Validation error:", error.details);
       return res.status(400).json({
         ok: false,
         message: "Validation error",
         details: error.details,
       });
     }
+
+    console.log("Before adding user - validated value:", value);
 
     // Check if email already exists
     const existing = await findUserByEmail(value.email);
@@ -199,18 +214,30 @@ async function register(req, res) {
     }
 
     const hashed = await bcrypt.hash(value.password, 12);
-    const userId = await createUser({
-      username: value.username,
-      name: value.name,
-      email: value.email,
-      password: hashed,
-    });
+   const userId = await createUser({
+  username: value.username,
+  name: value.name,
+  email: value.email,
+  password: hashed,
+  phoneNumber: value.phoneNumber || null,
+  is_active: value.is_active,
+});
+
+
+    // Query the database to confirm the saved user
+    const [savedUser] = await pool.execute(
+      `SELECT id, username, name, email, phoneNumber, is_active FROM users WHERE id = ?`,
+      [userId]
+    );
+    console.log("After saving user - saved user data:", savedUser[0]);
 
     await assignRole({
       username: value.username,
       userId,
       role: value.role,
     });
+
+    console.log("After adding user - userId:", userId);
 
     return res.status(201).json({
       ok: true,
@@ -220,6 +247,7 @@ async function register(req, res) {
         username: value.username,
         name: value.name,
         email: value.email,
+        phoneNumber: value.phoneNumber || null,
         role: value.role,
       },
     });
