@@ -6,12 +6,14 @@ const {
   logout,
   register,
   verifyOtpController,
+  refresh
 } = require("../controllers/auth.controller");
 const { authRequired } = require("../middleware/auth");
 const { addDevData } = require("../controllers/auth.controller");
 
 const router = express.Router();
 
+router.post("/refresh-token", refresh );
 router.post("/login", login);
 router.get("/check-me", authRequired, me);
 router.post("/logout", authRequired, logout);
