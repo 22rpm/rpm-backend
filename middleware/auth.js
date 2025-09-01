@@ -4,7 +4,6 @@ const { findUserDeviceSession } = require("../services/auth.service");
 
 const COOKIE_NAME = process.env.JWT_COOKIE_NAME || "auth_token";
 
-
 // function authRequired(req, res, next) {
 //   try {
 //     console.log(req.cookies);
@@ -25,7 +24,6 @@ const COOKIE_NAME = process.env.JWT_COOKIE_NAME || "auth_token";
 //   }
 // }
 
-
 async function authRequired(req, res, next) {
   try {
     const token = req.cookies.token;
@@ -39,7 +37,7 @@ async function authRequired(req, res, next) {
     const payload = jwt.verify(token, process.env.JWT_SECRET);
     req.user = payload; // { id, email, role }
 
-    console.log(payload)
+    // console.log("Payload: ", payload);
 
     // Get device info
     // const deviceFingerprint = req.headers["x-device-fingerprint"];
@@ -74,13 +72,15 @@ async function authRequired(req, res, next) {
     next();
   } catch (err) {
     console.error("Auth error:", err.message);
-    return res.status(401).json({ ok: false, message: "Invalid or expired token" });
+    return res
+      .status(401)
+      .json({ ok: false, message: "Invalid or expired token" });
   }
 }
 
 // this is being used in live chat messageService
 function authMiddleware(req, res, next) {
-  const authHeader = req.headers['authorization'];
+  const authHeader = req.headers["authorization"];
   if (!authHeader) {
     return res.status(401).json({ message: "No token provided" });
   }
@@ -88,12 +88,11 @@ function authMiddleware(req, res, next) {
   const token = authHeader.split(" ")[1]; // after "Bearer"
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = decoded;  // 🔑 now req.user will exist
+    req.user = decoded; // 🔑 now req.user will exist
     next();
   } catch (err) {
     return res.status(401).json({ message: "Invalid token" });
   }
 }
 
-
-module.exports = { authRequired, COOKIE_NAME, authMiddleware};
+module.exports = { authRequired, COOKIE_NAME, authMiddleware };

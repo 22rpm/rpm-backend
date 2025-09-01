@@ -1,9 +1,9 @@
 // services/user.service.js
-const db = require('../config/db');
+const db = require("../config/db");
 
 async function findUserByEmail(email) {
   const [rows] = await db.query(
-    'SELECT id, username, name, email, password, created_at, updated_at FROM users WHERE email = ? LIMIT 1',
+    "SELECT id, username, name, email, password, phoneNumber, created_at, updated_at FROM users WHERE email = ? LIMIT 1",
     [email]
   );
   return rows[0] || null;
@@ -13,13 +13,20 @@ async function findUserByEmail(email) {
 // Prefer joining on user_id once schema is fixed.
 async function findRoleByUsername(username) {
   const [rows] = await db.query(
-    'SELECT role_type FROM role WHERE username = ? ORDER BY id DESC LIMIT 1',
+    "SELECT role_type FROM role WHERE username = ? ORDER BY id DESC LIMIT 1",
     [username]
   );
   return rows[0]?.role_type || null;
 }
 
-async function createUser({ username, name, email, password, phoneNumber, is_active }) {
+async function createUser({
+  username,
+  name,
+  email,
+  password,
+  phoneNumber,
+  is_active,
+}) {
   const [result] = await db.query(
     `INSERT INTO users (username, name, email, password, phoneNumber, is_active)
      VALUES (?, ?, ?, ?, ?, ?)`,
@@ -28,19 +35,15 @@ async function createUser({ username, name, email, password, phoneNumber, is_act
   return result.insertId;
 }
 
-
 async function assignRole({ username, userId, role }) {
   await db.query(
-    'INSERT INTO role (username, user_id, role_type) VALUES (?, ?, ?)',
+    "INSERT INTO role (username, user_id, role_type) VALUES (?, ?, ?)",
     [username, userId, role]
   );
 }
 
 async function updateLastLogin(userId) {
-  await db.query(
-    "UPDATE users SET last_login = NOW() WHERE id = ?",
-    [userId]
-  );
+  await db.query("UPDATE users SET last_login = NOW() WHERE id = ?", [userId]);
 }
 
 async function getUserById(userId) {
@@ -48,12 +51,11 @@ async function getUserById(userId) {
   return rows[0] || null;
 }
 
-
 module.exports = {
   findUserByEmail,
   findRoleByUsername,
   createUser,
   assignRole,
   updateLastLogin,
-  getUserById
+  getUserById,
 };

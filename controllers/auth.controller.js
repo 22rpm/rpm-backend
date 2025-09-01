@@ -1,8 +1,7 @@
 // controllers/auth.controller.js
 const bcrypt = require("bcrypt");
-const jwt = require("jsonwebtoken")
-  const pool = require("../config/db"); // Adjust the path to your database configuration
-;
+const jwt = require("jsonwebtoken");
+const pool = require("../config/db"); // Adjust the path to your database configuration
 const { loginSchema } = require("../validations/auth.validation");
 const {
   findUserByEmail,
@@ -149,13 +148,14 @@ async function logout(req, res) {
 
     if (refreshToken) {
       // remove refresh token record from DB for this device
-      await deleteRefreshTokenForDevice(
-        refreshToken
-      );
+      await deleteRefreshTokenForDevice(refreshToken);
     }
 
     // Prevent caching of this response
-    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.setHeader(
+      "Cache-Control",
+      "no-store, no-cache, must-revalidate, proxy-revalidate"
+    );
     res.setHeader("Pragma", "no-cache");
     res.setHeader("Expires", "0");
     res.setHeader("Surrogate-Control", "no-store");
@@ -182,7 +182,6 @@ async function logout(req, res) {
     return res.status(500).json({ ok: false, message: "Server error" });
   }
 }
-
 
 async function register(req, res) {
   console.log("Before adding user - req.body:", req.body);
@@ -218,15 +217,14 @@ async function register(req, res) {
     }
 
     const hashed = await bcrypt.hash(value.password, 12);
-   const userId = await createUser({
-  username: value.username,
-  name: value.name,
-  email: value.email,
-  password: hashed,
-  phoneNumber: value.phoneNumber || null,
-  is_active: value.is_active,
-});
-
+    const userId = await createUser({
+      username: value.username,
+      name: value.name,
+      email: value.email,
+      password: hashed,
+      phoneNumber: value.phoneNumber || null,
+      is_active: value.is_active,
+    });
 
     // Query the database to confirm the saved user
     const [savedUser] = await pool.execute(
@@ -289,18 +287,22 @@ const verifyOtpController = async (req, res) => {
 
     // 3. Generate short-lived Access Token (include role in payload)
     const accessToken = jwt.sign(
-      { id: user.id, name:user.name, userName:user.username, email: user.email, role: user.role }, // 👈 include role
+      {
+        id: user.id,
+        name: user.name,
+        userName: user.username,
+        email: user.email,
+        role: user.role,
+        phoneNumber: user.phoneNumber,
+      }, // 👈 include role
       process.env.JWT_SECRET,
-      { expiresIn: "15m" }
+      { expiresIn: "45m" }
     );
 
-    
     // 4. Generate Refresh Token
-    const refreshToken = jwt.sign(
-  { id: user.id },
-  process.env.JWT_SECRET,
-  { expiresIn: "14d" }
-);
+    const refreshToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
+      expiresIn: "14d",
+    });
     // const refreshToken = crypto.randomBytes(64).toString("hex");
 
     // 5. Persist/rotate refresh token & session
@@ -318,8 +320,8 @@ const verifyOtpController = async (req, res) => {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "strict",
-      maxAge: 15 * 60 * 1000,
-      maxAge: 1 * 60 * 1000, // for testing auth
+      maxAge: 45 * 60 * 1000,
+      // maxAge: 1 * 60 * 1000, // for testing auth
     });
 
     res.cookie("refresh_token", refreshToken, {
@@ -336,7 +338,7 @@ const verifyOtpController = async (req, res) => {
         id: user.id,
         email: user.email,
         role: role,
-      }
+      },
     });
   } catch (err) {
     console.error(err);
@@ -459,17 +461,19 @@ const refresh = async (req, res) => {
     const refreshToken = req.cookies.refresh_token;
     console.log("Refresh token request received:", req.cookies);
     console.log("Refresh token request received:", refreshToken);
-    if (!refreshToken) return res.status(401).json({ message: "No refresh token" });
+    if (!refreshToken)
+      return res.status(401).json({ message: "No refresh token" });
 
     // Verify refresh token
     jwt.verify(refreshToken, process.env.JWT_SECRET, async (err, decoded) => {
-      if (err) return res.status(403).json({ message: "Invalid refresh token" });
+      if (err)
+        return res.status(403).json({ message: "Invalid refresh token" });
 
       // Check if still valid in DB
-      const [rows] = await pool.query("SELECT * FROM users WHERE id = ? AND refresh_token = ?", [
-        decoded.id,
-        refreshToken,
-      ]);
+      const [rows] = await pool.query(
+        "SELECT * FROM users WHERE id = ? AND refresh_token = ?",
+        [decoded.id, refreshToken]
+      );
 
       if (rows.length === 0) {
         return res.status(403).json({ message: "Invalid refresh token" });
