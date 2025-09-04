@@ -28,7 +28,8 @@ async function authRequired(req, res, next) {
   try {
     const token = req.cookies.token;
     const refreshToken = req.cookies.refresh_token;
-
+    console.log("Request Cookies:", req.cookies);
+    console.log(req);
     if (!token || !refreshToken) {
       return res.status(401).json({ ok: false, message: "Unauthorized" });
     }
@@ -36,6 +37,8 @@ async function authRequired(req, res, next) {
     // Verify access token
     const payload = jwt.verify(token, process.env.JWT_SECRET);
     req.user = payload; // { id, email, role }
+
+    console.log("Payload: ", payload);
 
     // console.log("Payload: ", payload);
 

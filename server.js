@@ -7,6 +7,7 @@ const cookieParser = require("cookie-parser");
 const { initializeSocket } = require("./socket/socketServer");
 
 const devDataRoutes = require("./routes/auth.routes");
+const deviceDataRoutes = require("./routes/deviceData.routes");
 const authRoutes = require("./routes/auth.routes");
 const messageRoutes = require("./routes/messageRoutes");
 const adminRoutes = require("./routes/admin.routes");
@@ -45,8 +46,11 @@ if (allowed.length) {
 app.use("/api/messages", messageRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/dev-data", devDataRoutes);
+app.use("/api/device-data", deviceDataRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/settings", settingsRoutes);
+
+
 
 // ✅ Load swagger.json
 const swaggerDocument = JSON.parse(
