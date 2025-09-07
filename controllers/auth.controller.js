@@ -309,7 +309,7 @@ const verifyOtpController = async (req, res) => {
     await saveOrUpdateUserDevice({
       userId: user.id,
       deviceFingerprint: device_fingerprint,
-      ipAddress: req.ip,
+      ipAddress: req.headers["x-forwarded-for"]?.split(",")[0] || req.ip,
       userAgent: req.headers["user-agent"],
       refreshToken,
       absoluteExpiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000), // 14 days

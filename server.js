@@ -24,6 +24,7 @@ const server = http.createServer(app);
 
 app.use(express.json());
 app.use(cookieParser());
+app.set("trust proxy", true);
 
 // CORS example (adjust origins as needed). Cookies need credentials=true on client.
 const allowed = (process.env.CORS_ORIGINS || "")

@@ -46,8 +46,8 @@ async function authRequired(req, res, next) {
     // const deviceFingerprint = req.headers["x-device-fingerprint"];
     const deviceFingerprint = "unique-browser-hash"; // For testing, replace with actual fingerprinting logic
     const userAgent = req.headers["user-agent"];
-    const ipAddress =
-      req.headers["x-forwarded-for"] || req.connection.remoteAddress;
+    // const ipAddress = req.headers["x-forwarded-for"] || req.connection.remoteAddress;
+    const ipAddress = req.headers["x-forwarded-for"]?.split(",")[0] || req.ip; // ✅ consistent with controller
 
     // Lookup in DB via service
     const device = await findUserDeviceSession({

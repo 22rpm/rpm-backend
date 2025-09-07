@@ -10,9 +10,9 @@ const userSockets = new Map(); // Store user_id -> socket_id mapping
 const initializeSocket = (server) => {
   io = socketIo(server, {
     // For Production, Please change the path and CORS settings accordingly
-    path: "/rpm-be/socket.io/", 
+    // path: "/rpm-be/socket.io/", 
     cors: {
-      origin: "http://localhost:5174", // Adjust to your client URL
+      origin: ["http://localhost:5174","http://50.18.96.20"], // Adjust to your client URL
       methods: ["GET", "POST"],
       credentials: true
     }
