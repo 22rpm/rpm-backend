@@ -38,7 +38,7 @@ async function authRequired(req, res, next) {
     const payload = jwt.verify(token, process.env.JWT_SECRET);
     req.user = payload; // { id, email, role }
 
-    console.log("Payload: ", payload);
+    // console.log("Payload: ", payload);
 
     // console.log("Payload: ", payload);
 
