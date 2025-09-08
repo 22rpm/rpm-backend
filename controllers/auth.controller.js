@@ -319,7 +319,8 @@ const verifyOtpController = async (req, res) => {
     res.cookie("token", accessToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
+      // sameSite: "strict",
+      sameSite: none,
       maxAge: 45 * 60 * 1000,
       // maxAge: 1 * 60 * 1000, // for testing auth
     });
@@ -327,7 +328,8 @@ const verifyOtpController = async (req, res) => {
     res.cookie("refresh_token", refreshToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
+      // sameSite: "strict",
+      sameSite: none,
       maxAge: 14 * 24 * 60 * 60 * 1000, // 14 days
     });
 

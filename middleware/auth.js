@@ -29,7 +29,7 @@ async function authRequired(req, res, next) {
     const token = req.cookies.token;
     const refreshToken = req.cookies.refresh_token;
     console.log("Request Cookies:", req.cookies);
-    console.log(req);
+    // console.log(req);
     if (!token || !refreshToken) {
       return res.status(401).json({ ok: false, message: "Unauthorized" });
     }
