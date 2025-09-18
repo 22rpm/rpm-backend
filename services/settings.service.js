@@ -1,6 +1,18 @@
 const pool = require("../config/db");
 
 async function updateSettingsService(userId, { name, username, email, phone }) {
+  // Basic validation for fields
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    const error = new Error("Invalid email format");
+    error.code = "INVALID_EMAIL";
+    throw error;
+  }
+  if (phone && !/^\+?[\d\s-]{10,15}$/.test(phone)) {
+    const error = new Error("Invalid phone number format");
+    error.code = "INVALID_PHONE";
+    throw error;
+  }
+
   // Check unique username
   if (username) {
     const [rows] = await pool.execute(
@@ -44,12 +56,13 @@ async function updateSettingsService(userId, { name, username, email, phone }) {
     values.push(email);
   }
   if (phone) {
-    fields.push("phoneNumber = ?"); // ✅ matches schema
+    fields.push("phoneNumber = ?");
     values.push(phone);
   }
 
+  // No fields to update, return null to indicate no changes
   if (fields.length === 0) {
-    return null; // nothing to update
+    return null;
   }
 
   values.push(userId);

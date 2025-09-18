@@ -1,0 +1,23 @@
+{
+  "development": {
+    "username": "root",
+    "password": "Mehtab@123",
+    "database": "rpm_db",          
+    "host": "127.0.0.1",
+    "dialect": "mysql"
+  },
+  "test": {
+    "username": "root",
+    "password": "your_mysql_password",
+    "database": "rpm_db_test",
+    "host": "127.0.0.1",
+    "dialect": "mysql"
+  },
+  "production": {
+    "username": "root",
+    "password": "your_mysql_password",
+    "database": "rpm_db_prod",
+    "host": "127.0.0.1",
+    "dialect": "mysql"
+  }
+}
