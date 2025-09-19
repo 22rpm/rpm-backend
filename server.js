@@ -6,7 +6,7 @@ const http = require("http");
 const cookieParser = require("cookie-parser");
 const { initializeSocket } = require("./socket/socketServer");
 
-const devDataRoutes = require("./routes/auth.routes");
+const devDataRoutes = require("./routes/deviceData.routes");
 // const deviceDataRoutes = require("./routes/deviceData.routes");
 const authRoutes = require("./routes/auth.routes");
 const messageRoutes = require("./routes/messageRoutes");

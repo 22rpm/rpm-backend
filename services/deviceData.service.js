@@ -1,4 +1,4 @@
-const db = require("../db"); // your MySQL pool
+const db = require("../config/db"); // your MySQL pool
 
 const createDeviceDataService = async (username, devId, bpData) => {
   // ensure device belongs to user
@@ -83,6 +83,8 @@ const saveDeviceDataService = async (user, devId, data) => {
 };
 
 const saveGenericDeviceDataService = async (user, devType, devName, data) => {
+  console.log("user data",user);
+  
   const username = user.email || user.id; // Depends on what’s in the token
 
   // Validate devType
@@ -120,4 +122,70 @@ const saveGenericDeviceDataService = async (user, devType, devName, data) => {
     data,
   };
 };
-module.exports = { createDeviceDataService, createBPDataService ,saveGenericDeviceDataService,saveDeviceDataService};
+const getGenericDeviceDataService = async (user, devType, devName, limit, offset) => {
+  const username = user.email || user.id; // Depends on what’s in the token
+
+  // Validate devType
+  if (!devType) {
+    throw new Error("Device type (devType) is required");
+  }
+
+  // Build WHERE clause for device query
+  let whereClause = "username = ? AND dev_type = ?";
+  let params = [username, devType];
+
+  // Add devName filter if provided
+  if (devName) {
+    whereClause += " AND name = ?";
+    params.push(devName);
+  }
+
+  // Find device
+  const [devices] = await db.query(
+    `SELECT id, name FROM devices WHERE ${whereClause}`,
+    params
+  );
+
+  if (devices.length === 0) {
+    throw new Error("No device found for the specified type and user");
+  }
+
+  const deviceId = devices[0].id;
+  const deviceName = devices[0].name;
+
+  // Get device data with pagination
+  const [dataRows] = await db.query(
+    `SELECT id, dev_id, data, created_at 
+     FROM dev_data 
+     WHERE dev_id = ? 
+     ORDER BY created_at DESC 
+     LIMIT ? OFFSET ?`,
+    [deviceId, limit, offset]
+  );
+
+  // Get total count for pagination
+  const [[countResult]] = await db.query(
+    "SELECT COUNT(*) as total FROM dev_data WHERE dev_id = ?",
+    [deviceId]
+  );
+
+  // Parse JSON data
+  const parsedData = dataRows.map(row => ({
+    id: row.id,
+    deviceId: row.dev_id,
+    data: JSON.parse(row.data),
+    createdAt: row.created_at,
+  }));
+
+  return {
+    deviceId,
+    deviceType: devType,
+    deviceName,
+    totalRecords: countResult.total,
+    limit,
+    offset,
+    records: parsedData,
+    hasMore: offset + limit < countResult.total,
+  };
+};
+module.exports = { createDeviceDataService, createBPDataService ,saveGenericDeviceDataService,saveDeviceDataService,getGenericDeviceDataService};
