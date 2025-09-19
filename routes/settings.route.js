@@ -7,6 +7,6 @@ const {
 } = require("../controllers/settings.controller");
 const { authRequired } = require("../middleware/auth");
 
-router.put("/", authRequired, updateSettingsController);
+router.patch("/", authRequired, updateSettingsController);
 
 module.exports = router;

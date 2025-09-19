@@ -56,5 +56,68 @@ const createBPDataService = async (user, bpData) => {
     bpData,
   };
 };
+const saveDeviceDataService = async (user, devId, data) => {
+  const username = user.email || user.id; // Depends on what’s in the token
 
-module.exports = { createDeviceDataService, createBPDataService };
+  // Validate device belongs to user
+  const [devices] = await db.query(
+    "SELECT id FROM devices WHERE id = ? AND username = ?",
+    [devId, username]
+  );
+
+  if (devices.length === 0) {
+    throw new Error("Device not found or does not belong to this user");
+  }
+
+  // Insert device data into dev_data
+  const [result] = await db.query(
+    "INSERT INTO dev_data (dev_id, data) VALUES (?, ?)",
+    [devId, JSON.stringify(data)]
+  );
+
+  return {
+    insertId: result.insertId,
+    devId,
+    data,
+  };
+};
+
+const saveGenericDeviceDataService = async (user, devType, devName, data) => {
+  const username = user.email || user.id; // Depends on what’s in the token
+
+  // Validate devType
+  if (!devType) {
+    throw new Error("Device type (devType) is required");
+  }
+
+  // Find or create device
+  let deviceId;
+  const [existing] = await db.query(
+    "SELECT id FROM devices WHERE username = ? AND dev_type = ?",
+    [username, devType]
+  );
+
+  if (existing.length > 0) {
+    deviceId = existing[0].id;
+  } else {
+    const deviceName = devName || `${devType} Device`; // Fallback name
+    const [insertRes] = await db.query(
+      "INSERT INTO devices (username, name, dev_type) VALUES (?, ?, ?)",
+      [username, deviceName, devType]
+    );
+    deviceId = insertRes.insertId;
+  }
+
+  // Insert device data into dev_data
+  const [result] = await db.query(
+    "INSERT INTO dev_data (dev_id, data) VALUES (?, ?)",
+    [deviceId, JSON.stringify(data)]
+  );
+
+  return {
+    insertId: result.insertId,
+    devId: deviceId,
+    data,
+  };
+};
+module.exports = { createDeviceDataService, createBPDataService ,saveGenericDeviceDataService,saveDeviceDataService};
