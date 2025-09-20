@@ -27,6 +27,6 @@ const runMigrations = async () => {
   } finally {
     await sequelize.close();
   }
-};
+};x``
 
 runMigrations();
