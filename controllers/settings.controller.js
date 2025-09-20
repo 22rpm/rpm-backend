@@ -1,23 +1,19 @@
 const { updateSettingsService } = require("../services/settings.service");
 const jwt = require("jsonwebtoken");
 
-
 const updateSettingsController = async (req, res) => {
   try {
     console.log("Update settings request body:", req.body);
 
-    // Check for empty request body
     if (Object.keys(req.body).length === 0) {
       return res.status(400).json({ error: "No changes provided" });
     }
 
-    // 1. Get token from cookies
     const token = req.cookies.token;
     if (!token) {
       return res.status(401).json({ error: "No token provided" });
     }
 
-    // 2. Verify & decode JWT
     let decoded;
     try {
       decoded = jwt.verify(token, process.env.JWT_SECRET);
@@ -28,31 +24,48 @@ const updateSettingsController = async (req, res) => {
     }
 
     const userId = decoded.id;
+    const { name, username, email, phoneNumber } = req.body;
+    console.log("Fields to update:", { name, username, email, phoneNumber });
 
-    // 3. Extract fields from request body
-    const { name, username, email, phone } = req.body;
-    console.log("Fields to update:", { name, username, email, phone });
-
-    // 4. Call service to update settings
     const result = await updateSettingsService(userId, {
       name,
       username,
       email,
-      phone,
+      phoneNumber,
     });
 
-    // Handle case where nothing was updated
     if (!result) {
       return res.status(200).json({ message: "No changes applied" });
     }
 
-    // Rename fields to match frontend expectations
+    // Generate new token with updated user data
+    const newToken = jwt.sign(
+      {
+        id: result.id,
+        name: result.name,
+        username: result.username,
+        email: result.email,
+        role: decoded.role, // Preserve role from original token
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "1h" } // Adjust expiration as needed
+    );
+
+    // Set new token in cookies
+    res.cookie("token", newToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      maxAge: 3600000, // 1 hour in milliseconds
+    });
+
     const userResponse = {
       id: result.id,
       name: result.name,
       userName: result.username,
       email: result.email,
       phoneNumber: result.phoneNumber,
+      role: result.role, // Include role if needed by frontend
     };
 
     return res.status(200).json({

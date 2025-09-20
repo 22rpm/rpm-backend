@@ -126,9 +126,34 @@ async function login(req, res) {
 //   }
 // }
 
+// controllers/auth.controller.js
 async function me(req, res) {
-  // req.user is set by authRequired middleware
-  return res.status(200).json({ ok: true, user: req.user });
+  try {
+    const userId = req.user.id; // From JWT token via authRequired middleware
+    const [rows] = await pool.execute(
+      "SELECT id, name, username, email, phoneNumber FROM users WHERE id = ?",
+      [userId]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ ok: false, error: "User not found" });
+    }
+
+    const user = rows[0];
+    return res.status(200).json({
+      ok: true,
+      user: {
+        id: user.id,
+        name: user.name,
+        username: user.username,
+        email: user.email,
+        phoneNumber: user.phoneNumber || null,
+      },
+    });
+  } catch (err) {
+    console.error("Check-me error:", err);
+    return res.status(500).json({ ok: false, error: "Server error" });
+  }
 }
 
 // async function logout(req, res) {
@@ -290,7 +315,7 @@ const verifyOtpController = async (req, res) => {
       {
         id: user.id,
         name: user.name,
-        userName: user.username,
+        username: user.username,
         email: user.email,
         role: user.role,
         phoneNumber: user.phoneNumber,
