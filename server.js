@@ -42,6 +42,7 @@ if (allowed.length) {
     })
   );
 }
+app.use(express.urlencoded({ extended: true }));
 
 // app.get('/health', (req, res) => res.json({ ok: true, service: 'rpm-api', ts: new Date().toISOString() }));
 app.use("/api/messages", messageRoutes);
@@ -50,8 +51,6 @@ app.use("/api/dev-data", devDataRoutes);
 // app.use("/api/device-data", deviceDataRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/settings", settingsRoutes);
-
-
 
 // ✅ Load swagger.json
 const swaggerDocument = JSON.parse(
