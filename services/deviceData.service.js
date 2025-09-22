@@ -83,7 +83,6 @@ const saveDeviceDataService = async (user, devId, data) => {
 };
 
 const saveGenericDeviceDataService = async (user, devType, devName, data) => {
-  console.log("user data",user);
   
   const username = user.email || user.id; // Depends on what’s in the token
 

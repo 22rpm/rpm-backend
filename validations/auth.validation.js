@@ -35,7 +35,7 @@ const registerSchema = Joi.object({
     'string.min': 'Password must be at least 6 characters',
     'string.max': 'Password cannot exceed 128 characters',
   }),
-  role: Joi.string().valid('admin', 'clinician', 'patient').required().messages({
+  role: Joi.string().valid('admin', 'clinician', 'patient','super-admin').required().messages({
     'any.required': 'Role is required',
     'any.only': 'Role must be one of: admin, clinician, patient',
   }),

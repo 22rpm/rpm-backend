@@ -304,7 +304,7 @@ const verifyOtpController = async (req, res) => {
     if (!user) return res.status(400).json({ error: "User not found" });
 
     const role = await findRoleByUsername(user.username);
-
+console.log("user role ",role)
     // 2. Verify OTP via service
     const valid = await verifyOtp(user.id, otp, "login");
     if (!valid)
@@ -357,7 +357,7 @@ const verifyOtpController = async (req, res) => {
       // sameSite: none,
       maxAge: 14 * 24 * 60 * 60 * 1000, // 14 days
     });
-
+console.log("hello user",user)
     // 7. Respond with role so frontend knows dashboard to show
     return res.status(200).json({
       message: "OTP verified successfully",
