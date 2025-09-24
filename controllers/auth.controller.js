@@ -7,6 +7,7 @@ const {
   findUserByEmail,
   findRoleByUsername,
   updateLastLogin,
+  findUserByUsername,
 } = require("../services/user.service");
 const { insertDevData } = require("../services/devData.service");
 const { COOKIE_NAME } = require("../middleware/auth");
@@ -45,12 +46,19 @@ function signMfaChallenge(payload) {
 }
 
 // auth.controller.js
+// controllers/auth.controller.js
 async function login(req, res) {
   try {
-    const { email, password } = req.body;
+    const { identifier, password, method } = req.body;
 
-    // ✅ Get user from DB through service
-    const user = await findUserByEmail(email);
+    // Determine if identifier is email or username
+    let user;
+    if (method === "email") {
+      user = await findUserByEmail(identifier);
+    } else {
+      user = await findUserByUsername(identifier);
+    }
+
     if (!user) {
       return res.status(401).json({ message: "Invalid credentials" });
     }
@@ -61,24 +69,90 @@ async function login(req, res) {
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
-    // ✅ Generate OTP (6-digit)
-    const otp = ("" + Math.floor(100000 + Math.random() * 900000)).substring(
-      0,
-      6
-    );
-    console.log(`Generated OTP for ${email}: ${otp}`);
+    // If login method is username, directly authenticate without OTP
+    if (method === "username") {
+      // Generate access token
+      const accessToken = jwt.sign(
+        {
+          id: user.id,
+          name: user.name,
+          username: user.username,
+          email: user.email,
+          role: user.role,
+          phoneNumber: user.phoneNumber,
+        },
+        process.env.JWT_SECRET,
+        { expiresIn: "45m" }
+      );
 
-    // ✅ Store OTP in otp_tokens table via service
-    await createOtp(user.id, otp, "login");
+      // Generate refresh token
+      const refreshToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
+        expiresIn: "14d",
+      });
 
-    // ✅ Send OTP (via email service or SMS)
-    if (sendOtpEmail) {
-      await sendOtpEmail(user.email, otp);
-    } else {
-      console.log(`OTP for ${email}: ${otp}`); // fallback for dev
+      // Save device session
+      await saveOrUpdateUserDevice({
+        userId: user.id,
+        deviceFingerprint: req.body.device_fingerprint || "username-login",
+        ipAddress: req.headers["x-forwarded-for"]?.split(",")[0] || req.ip,
+        userAgent: req.headers["user-agent"],
+        refreshToken,
+        absoluteExpiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+      });
+
+      // Set cookies
+      res.cookie("token", accessToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "strict",
+        maxAge: 45 * 60 * 1000,
+      });
+
+      res.cookie("refresh_token", refreshToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "strict",
+        maxAge: 14 * 24 * 60 * 60 * 1000,
+      });
+
+      // Get user role
+      const role = await findRoleByUsername(user.username);
+
+      return res.status(200).json({
+        message: "Login successful",
+        user: {
+          id: user.id,
+          email: user.email,
+          role: role,
+        },
+        token: accessToken,
+      });
     }
 
-    return res.status(200).json({ message: "OTP sent, please verify" });
+    // If login method is email, proceed with OTP flow
+    if (method === "email") {
+      // ✅ Generate OTP (6-digit)
+      const otp = ("" + Math.floor(100000 + Math.random() * 900000)).substring(
+        0,
+        6
+      );
+      console.log(`Generated OTP for ${identifier}: ${otp}`);
+
+      // ✅ Store OTP in otp_tokens table via service
+      await createOtp(user.id, otp, "login");
+
+      // ✅ Send OTP
+      if (sendOtpEmail) {
+        await sendOtpEmail(user.email, otp);
+      } else {
+        console.log(`OTP for ${identifier}: ${otp}`); // fallback for dev
+      }
+
+      return res.status(200).json({
+        message: "OTP sent, please verify",
+        requiresOtp: true,
+      });
+    }
   } catch (err) {
     console.error("Login error:", err);
     return res.status(500).json({ error: "Server error" });
@@ -304,7 +378,7 @@ const verifyOtpController = async (req, res) => {
     if (!user) return res.status(400).json({ error: "User not found" });
 
     const role = await findRoleByUsername(user.username);
-console.log("user role ",role)
+    console.log("user role ", role);
     // 2. Verify OTP via service
     const valid = await verifyOtp(user.id, otp, "login");
     if (!valid)
@@ -357,7 +431,7 @@ console.log("user role ",role)
       // sameSite: none,
       maxAge: 14 * 24 * 60 * 60 * 1000, // 14 days
     });
-console.log("hello user",user)
+    console.log("hello user", user);
     // 7. Respond with role so frontend knows dashboard to show
     return res.status(200).json({
       message: "OTP verified successfully",

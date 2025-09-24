@@ -50,12 +50,20 @@ async function getUserById(userId) {
   const [rows] = await db.query("SELECT * FROM users WHERE id = ?", [userId]);
   return rows[0] || null;
 }
+async function findUserByUsername(username) {
+  const [rows] = await db.query(
+    "SELECT id, username, name, email, password, phoneNumber, created_at, updated_at FROM users WHERE username = ? LIMIT 1",
+    [username]
+  );
+  return rows[0] || null;
+}
 
 module.exports = {
   findUserByEmail,
   findRoleByUsername,
   createUser,
   assignRole,
+  findUserByUsername,
   updateLastLogin,
   getUserById,
 };
