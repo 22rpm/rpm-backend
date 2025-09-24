@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const organizationController = require("../controllers/organization.controller");
-const { validateRequest } = require("../middleware/validate");
+const  validateRequest= require("../middleware/validate");
 const {
   addOrganizationSchema,
   editOrganizationSchema,
