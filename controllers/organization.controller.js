@@ -139,11 +139,11 @@ async function deleteOrganization(req, res) {
   try {
     const { id } = req.params;
     const existingOrg = await organizationService.findOrganizationById(id);
-    if (!existingOrg || existingOrg.is_deleted) {
+    if (!existingOrg) {
       return res.status(404).json({ ok: false, message: "Organization not found" });
     }
 
-    await organizationService.softDeleteOrganization(id);
+    await organizationService.softDeleteOrganization(id); // Still calls softDeleteOrganization, but it now performs a hard delete
     return res.status(200).json({ ok: true, message: "Organization deleted successfully" });
   } catch (err) {
     console.error("Delete organization error:", err);
