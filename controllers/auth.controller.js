@@ -69,16 +69,22 @@ async function login(req, res) {
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
+    // Get user role
+    const role = await findRoleByUsername(user.username);
+    if (!role) {
+      return res.status(401).json({ message: "User role not found" });
+    }
+
     // If login method is username, directly authenticate without OTP
     if (method === "username") {
-      // Generate access token
+      // Generate access token - MAKE SURE ROLE IS INCLUDED
       const accessToken = jwt.sign(
         {
           id: user.id,
           name: user.name,
           username: user.username,
           email: user.email,
-          role: user.role,
+          role: role, // ← This is important!
           phoneNumber: user.phoneNumber,
         },
         process.env.JWT_SECRET,
@@ -90,33 +96,38 @@ async function login(req, res) {
         expiresIn: "14d",
       });
 
+      const deviceFingerprint = req.body.device_fingerprint || "unique-browser-hash";
+
+      console.log("Setting cookies for username login:");
+      console.log("Access Token present:", !!accessToken);
+      console.log("Refresh Token present:", !!refreshToken);
+
       // Save device session
       await saveOrUpdateUserDevice({
         userId: user.id,
-        deviceFingerprint: req.body.device_fingerprint || "username-login",
+        deviceFingerprint: deviceFingerprint,
         ipAddress: req.headers["x-forwarded-for"]?.split(",")[0] || req.ip,
         userAgent: req.headers["user-agent"],
         refreshToken,
         absoluteExpiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
       });
 
-      // Set cookies
+      // Set cookies - MAKE SURE THESE ARE SET CORRECTLY
       res.cookie("token", accessToken, {
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
         sameSite: "strict",
-        maxAge: 45 * 60 * 1000,
+        maxAge: 45 * 60 * 1000, // 45 minutes
       });
 
       res.cookie("refresh_token", refreshToken, {
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
         sameSite: "strict",
-        maxAge: 14 * 24 * 60 * 60 * 1000,
+        maxAge: 14 * 24 * 60 * 60 * 1000, // 14 days
       });
 
-      // Get user role
-      const role = await findRoleByUsername(user.username);
+      console.log("Cookies set successfully");
 
       return res.status(200).json({
         message: "Login successful",
@@ -145,7 +156,7 @@ async function login(req, res) {
       if (sendOtpEmail) {
         await sendOtpEmail(user.email, otp);
       } else {
-        console.log(`OTP for ${identifier}: ${otp}`); // fallback for dev
+        console.log(`OTP for ${identifier}: ${otp}`);
       }
 
       return res.status(200).json({

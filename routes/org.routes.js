@@ -45,5 +45,5 @@ router.patch(
 router.delete("/admins/:id", organizationController.deleteAdmin);
 router.get("/organizations", organizationController.getAllOrganizations);
 router.get("/admins", organizationController.getAllAdmins);
-
+router.get("/organizations/:id/admins", organizationController.getOrganizationAdmins);
 module.exports = router;

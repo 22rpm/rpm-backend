@@ -28,26 +28,31 @@ async function authRequired(req, res, next) {
   try {
     const token = req.cookies.token;
     const refreshToken = req.cookies.refresh_token;
-    console.log("Request Cookies:", req.cookies);
-    // console.log(req);
+    
+    // console.log("=== AUTH REQUIRED MIDDLEWARE ===");
+    // console.log("Request Cookies:", req.cookies);
+    // console.log("Token present:", !!token);
+    // console.log("Refresh Token present:", !!refreshToken);
+
     if (!token || !refreshToken) {
-      return res.status(401).json({ ok: false, message: "Unauthorized" });
+      console.log("Missing tokens - Token:", !!token, "Refresh:", !!refreshToken);
+      return res.status(401).json({ ok: false, message: "Unauthorized - Missing tokens" });
     }
 
     // Verify access token
     const payload = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = payload; // { id, email, role }
+    // console.log("Token payload:", payload);
+    req.user = payload;
 
-    // console.log("Payload: ", payload);
-
-    // console.log("Payload: ", payload);
-
-    // Get device info
-    // const deviceFingerprint = req.headers["x-device-fingerprint"];
-    const deviceFingerprint = "unique-browser-hash"; // For testing, replace with actual fingerprinting logic
+    const deviceFingerprint = "unique-browser-hash";
     const userAgent = req.headers["user-agent"];
-    // const ipAddress = req.headers["x-forwarded-for"] || req.connection.remoteAddress;
-    const ipAddress = req.headers["x-forwarded-for"]?.split(",")[0] || req.ip; // ✅ consistent with controller
+    const ipAddress = req.headers["x-forwarded-for"]?.split(",")[0] || req.ip;
+
+    // console.log("Looking for device session with:", {
+    //   userId: payload.id,
+    //   refreshToken: refreshToken.substring(0, 10) + "...", // Log first 10 chars only
+    //   deviceFingerprint,
+    // });
 
     // Lookup in DB via service
     const device = await findUserDeviceSession({
@@ -58,29 +63,36 @@ async function authRequired(req, res, next) {
       ipAddress,
     });
 
+    console.log("Device session found:", !!device);
+
     if (!device) {
-      return res.status(401).json({ ok: false, message: "Unauthorized" });
+      console.log("No device session found in database");
+      return res.status(401).json({ ok: false, message: "Unauthorized - No session" });
     }
 
     // Check absolute expiration
     const now = new Date();
     if (device.absolute_expires_at && now > device.absolute_expires_at) {
+      console.log("Session expired:", device.absolute_expires_at);
       return res.status(401).json({
         ok: false,
         message: "Session expired. Please log in again.",
       });
     }
 
-    // ✅ Passed all checks
+    console.log("✅ Auth passed successfully");
     next();
   } catch (err) {
     console.error("Auth error:", err.message);
-    return res
-      .status(401)
-      .json({ ok: false, message: "Invalid or expired token" });
+    if (err.name === "JsonWebTokenError") {
+      return res.status(401).json({ ok: false, message: "Invalid token" });
+    }
+    if (err.name === "TokenExpiredError") {
+      return res.status(401).json({ ok: false, message: "Token expired" });
+    }
+    return res.status(401).json({ ok: false, message: "Authentication failed" });
   }
 }
-
 // this is being used in live chat messageService
 function authMiddleware(req, res, next) {
   const authHeader = req.headers["authorization"];
