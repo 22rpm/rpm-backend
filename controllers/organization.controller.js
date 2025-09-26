@@ -87,6 +87,7 @@ async function editOrganization(req, res) {
 async function addAdminToOrganization(req, res) {
   try {
     const { id } = req.params;
+    console.log("org id ", id);
     const { username, name, email, password, phoneNumber } = req.body;
 
     const existingOrg = await organizationService.findOrganizationById(id);
@@ -106,9 +107,11 @@ async function addAdminToOrganization(req, res) {
       email,
       password: hashedPassword,
       phoneNumber: phoneNumber || null,
-      organization_id: id,
+      organization_id: parseInt(id), // Ensure it's a number
       is_active: true,
     });
+
+    console.log("user id", userId, "Type:", typeof userId);
 
     await organizationService.assignRole({
       username,
@@ -117,6 +120,8 @@ async function addAdminToOrganization(req, res) {
     });
 
     const savedUser = await organizationService.findUserById(userId);
+    console.log("saved user", savedUser);
+    
     return res.status(201).json({
       ok: true,
       message: "Admin added successfully",
@@ -139,11 +144,11 @@ async function deleteOrganization(req, res) {
   try {
     const { id } = req.params;
     const existingOrg = await organizationService.findOrganizationById(id);
-    if (!existingOrg || existingOrg.is_deleted) {
+    if (!existingOrg) {
       return res.status(404).json({ ok: false, message: "Organization not found" });
     }
 
-    await organizationService.softDeleteOrganization(id);
+    await organizationService.softDeleteOrganization(id); // Still calls softDeleteOrganization, but it now performs a hard delete
     return res.status(200).json({ ok: true, message: "Organization deleted successfully" });
   } catch (err) {
     console.error("Delete organization error:", err);
@@ -151,23 +156,52 @@ async function deleteOrganization(req, res) {
   }
 }
 
+
 async function editAdmin(req, res) {
   try {
     const { id } = req.params;
-    const { name, email, phoneNumber } = req.body;
+    const { name, email, phoneNumber, password } = req.body;
+    
+    console.log("Request body:", req.body);
+    console.log("Admin ID:", id);
+
+    // Validate required fields
+    if (!name || !email) {
+      return res.status(400).json({ 
+        ok: false, 
+        message: "Name and email are required" 
+      });
+    }
 
     const existingUser = await organizationService.findUserById(id);
     if (!existingUser) {
       return res.status(404).json({ ok: false, message: "Admin not found" });
     }
 
+    // Check if email already exists (excluding current user)
     const existingEmail = await organizationService.findUserByEmail(email);
     if (existingEmail && existingEmail.id !== parseInt(id)) {
       return res.status(409).json({ ok: false, message: "Email already exists" });
     }
 
-    await organizationService.updateUser(id, { name, email, phoneNumber: phoneNumber || null });
+    // Prepare update data - preserve existing phoneNumber if not provided
+    const updateData = { 
+      name: name.trim(), 
+      email: email.trim(),
+      // Only update phoneNumber if it's provided (not undefined)
+      phoneNumber: phoneNumber !== undefined ? (phoneNumber || null) : existingUser.phoneNumber
+    };
+    
+    // Only include password if provided and not empty
+    if (password && password.trim() !== "") {
+      updateData.password = password.trim();
+    }
+
+    console.log("Final update data:", updateData);
+    
+    await organizationService.updateUser(id, updateData);
     const updatedUser = await organizationService.findUserById(id);
+    
     return res.status(200).json({
       ok: true,
       message: "Admin updated successfully",
@@ -180,9 +214,13 @@ async function editAdmin(req, res) {
     });
   } catch (err) {
     console.error("Edit admin error:", err);
-    return res.status(500).json({ ok: false, message: "Server error" });
+    return res.status(500).json({ 
+      ok: false, 
+      message: "Server error while updating admin" 
+    });
   }
 }
+
 
 async function resetPassword(req, res) {
   try {
@@ -254,7 +292,8 @@ async function deleteAdmin(req, res) {
 
 async function getAllOrganizations(req, res) {
   try {
-    const organizations = await organizationService.getAllOrganizations();
+    const organizations = await organizationService.getAllOrganizationsWithAdminCount();
+    
     return res.status(200).json({
       ok: true,
       organizations: organizations.map((org) => ({
@@ -263,6 +302,7 @@ async function getAllOrganizations(req, res) {
         org_code: org.org_code,
         created_at: org.created_at,
         updated_at: org.updated_at,
+        admin_count: parseInt(org.admin_count) || 0,
       })),
     });
   } catch (err) {
@@ -293,7 +333,34 @@ async function getAllAdmins(req, res) {
     return res.status(500).json({ ok: false, message: "Server error" });
   }
 }
+async function getOrganizationAdmins(req, res) {
+  try {
+    const { id } = req.params; // Organization ID from the route parameter
 
+    // Fetch admins for the organization
+    const admins = await organizationService.getOrganizationsAdmins(id);
+
+    return res.status(200).json({
+      ok: true,
+      admins: admins.map((admin) => ({
+        id: admin.id,
+        name: admin.name,
+        email: admin.email,
+        organization_id: admin.organization_id,
+        created_at: admin.created_at,
+        updated_at: admin.updated_at,
+        is_active: admin.is_active,
+        phoneNumber:admin.phoneNumber
+      })),
+    });
+  } catch (err) {
+    console.error("Get organization admins error:", err);
+    if (err.message === "Organization not found") {
+      return res.status(404).json({ ok: false, message: "Organization not found" });
+    }
+    return res.status(500).json({ ok: false, message: "Server error" });
+  }
+}
 module.exports = {
   addOrganization,
   editOrganization,
@@ -305,4 +372,5 @@ module.exports = {
   deleteAdmin,
   getAllOrganizations,
   getAllAdmins,
+  getOrganizationAdmins
 };
