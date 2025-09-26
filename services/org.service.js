@@ -42,12 +42,10 @@ async function softDeleteOrganization(id) {
   if (isNaN(parsedId)) {
     throw new Error("Invalid organization ID");
   }
-  await knex("organizations")
-    .where({ id: parsedId })
-    .update({
-      is_deleted: true,
-      updated_at: new Date(),
-    });
+  await knex("organizations").where({ id: parsedId }).update({
+    is_deleted: true,
+    updated_at: new Date(),
+  });
 }
 async function getOrganizationById(id) {
   const parsedId = parseInt(id);
@@ -62,7 +60,20 @@ async function getOrganizationById(id) {
 async function getAllOrganizations() {
   return await knex("organizations")
     .where({ is_deleted: false })
-    .select("*");
+    .select(
+      "organizations.id",
+      "organizations.name",
+      "organizations.org_code",
+      "organizations.created_at",
+      "organizations.updated_at",
+      knex.raw(`
+        (SELECT COUNT(*) 
+         FROM users 
+         JOIN roles ON users.id = roles.user_id 
+         WHERE users.organization_id = organizations.id 
+         AND roles.role_type = 'admin') as total_admins
+      `)
+    );
 }
 
 // User and role functions remain unchanged
@@ -136,8 +147,12 @@ async function updateUserStatus(id, isActive) {
 
 async function deleteUser(id) {
   await knex.transaction(async (trx) => {
-    await trx("role").where({ user_id: parseInt(id) }).del();
-    await trx("users").where({ id: parseInt(id) }).del();
+    await trx("role")
+      .where({ user_id: parseInt(id) })
+      .del();
+    await trx("users")
+      .where({ id: parseInt(id) })
+      .del();
   });
 }
 
@@ -172,9 +187,7 @@ async function findUserById(id) {
   if (isNaN(parsedId)) {
     throw new Error("Invalid user ID");
   }
-  return await knex("users")
-    .where({ id: parsedId })
-    .first();
+  return await knex("users").where({ id: parsedId }).first();
 }
 
 module.exports = {

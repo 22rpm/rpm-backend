@@ -308,11 +308,19 @@ async function register(req, res) {
     console.log("Before adding user - validated value:", value);
 
     // Check if email already exists
-    const existing = await findUserByEmail(value.email);
-    if (existing) {
+    const existingEmail = await findUserByEmail(value.email);
+    if (existingEmail) {
       return res
         .status(409)
         .json({ ok: false, message: "Email already exists" });
+    }
+
+    // Check if username already exists
+    const existingUsername = await findUserByUsername(value.username);
+    if (existingUsername) {
+      return res
+        .status(409)
+        .json({ ok: false, message: "Username already exists" });
     }
 
     const hashed = await bcrypt.hash(value.password, 12);
