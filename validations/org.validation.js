@@ -29,6 +29,7 @@ const editAdminSchema = Joi.object({
   name: Joi.string().min(3).max(255).required(),
   email: Joi.string().email().required(),
   phoneNumber: Joi.string().max(20).allow(null, ""),
+  password: Joi.string().min(8).optional(),
 });
 
 const resetPasswordSchema = Joi.object({
