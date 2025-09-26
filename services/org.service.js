@@ -186,6 +186,7 @@ async function findUserById(id) {
   const parsedId = parseInt(id);
   if (isNaN(parsedId)) {
     throw new Error("Invalid user ID");
+    throw new Error("Invalid user ID");
   }
   return await knex("users").where({ id: parsedId }).first();
 }
@@ -240,6 +241,28 @@ async function getOrganizationsAdmins(organizationId) {
     return admins;
   } catch (error) {
     console.error("Error fetching organization admins:", error);
+    throw error;
+  }
+}
+async function getAllOrganizationsWithAdminCount() {
+  try {
+    const organizations = await knex("organizations as o")
+      .leftJoin("users as u", "o.id", "u.organization_id")
+      .where("o.is_deleted", 0)
+      .select(
+        "o.id",
+        "o.name",
+        "o.org_code",
+        "o.created_at",
+        "o.updated_at",
+        knex.raw("COUNT(u.id) as admin_count")
+      )
+      .groupBy("o.id", "o.name", "o.org_code", "o.created_at", "o.updated_at")
+      .orderBy("o.created_at", "desc");
+
+    return organizations;
+  } catch (error) {
+    console.error("Error fetching organizations with admin count:", error);
     throw error;
   }
 }

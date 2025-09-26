@@ -8,16 +8,23 @@ async function addOrganization(req, res) {
 
     const existingOrg = await organizationService.findOrganizationByCode(code);
     if (existingOrg) {
-      return res.status(409).json({ ok: false, message: "Organization code already exists" });
+      return res
+        .status(409)
+        .json({ ok: false, message: "Organization code already exists" });
     }
 
     const existingUser = await organizationService.findUserByEmail(email);
     if (existingUser) {
-      return res.status(409).json({ ok: false, message: "Admin email already exists" });
+      return res
+        .status(409)
+        .json({ ok: false, message: "Admin email already exists" });
     }
 
     const hashedPassword = await bcrypt.hash(password, 12);
-    const organizationId = await organizationService.createOrganization({ name, code });
+    const organizationId = await organizationService.createOrganization({
+      name,
+      code,
+    });
     const userId = await organizationService.createUser({
       username,
       name: adminName,
@@ -34,7 +41,9 @@ async function addOrganization(req, res) {
       role: "admin",
     });
 
-    const savedOrg = await organizationService.getOrganizationById(organizationId);
+    const savedOrg = await organizationService.getOrganizationById(
+      organizationId
+    );
     return res.status(201).json({
       ok: true,
       message: "Organization created successfully",
@@ -58,12 +67,16 @@ async function editOrganization(req, res) {
 
     const existingOrg = await organizationService.findOrganizationById(id);
     if (!existingOrg || existingOrg.is_deleted) {
-      return res.status(404).json({ ok: false, message: "Organization not found" });
+      return res
+        .status(404)
+        .json({ ok: false, message: "Organization not found" });
     }
 
     const existingCode = await organizationService.findOrganizationByCode(code);
     if (existingCode && existingCode.id !== parseInt(id)) {
-      return res.status(409).json({ ok: false, message: "Organization code already exists" });
+      return res
+        .status(409)
+        .json({ ok: false, message: "Organization code already exists" });
     }
 
     await organizationService.updateOrganization(id, { name, code });
@@ -92,12 +105,16 @@ async function addAdminToOrganization(req, res) {
 
     const existingOrg = await organizationService.findOrganizationById(id);
     if (!existingOrg || existingOrg.is_deleted) {
-      return res.status(404).json({ ok: false, message: "Organization not found" });
+      return res
+        .status(404)
+        .json({ ok: false, message: "Organization not found" });
     }
 
     const existingUser = await organizationService.findUserByEmail(email);
     if (existingUser) {
-      return res.status(409).json({ ok: false, message: "Admin email already exists" });
+      return res
+        .status(409)
+        .json({ ok: false, message: "Admin email already exists" });
     }
 
     const hashedPassword = await bcrypt.hash(password, 12);
@@ -121,7 +138,7 @@ async function addAdminToOrganization(req, res) {
 
     const savedUser = await organizationService.findUserById(userId);
     console.log("saved user", savedUser);
-    
+
     return res.status(201).json({
       ok: true,
       message: "Admin added successfully",
@@ -145,31 +162,34 @@ async function deleteOrganization(req, res) {
     const { id } = req.params;
     const existingOrg = await organizationService.findOrganizationById(id);
     if (!existingOrg) {
-      return res.status(404).json({ ok: false, message: "Organization not found" });
+      return res
+        .status(404)
+        .json({ ok: false, message: "Organization not found" });
     }
 
     await organizationService.softDeleteOrganization(id); // Still calls softDeleteOrganization, but it now performs a hard delete
-    return res.status(200).json({ ok: true, message: "Organization deleted successfully" });
+    return res
+      .status(200)
+      .json({ ok: true, message: "Organization deleted successfully" });
   } catch (err) {
     console.error("Delete organization error:", err);
     return res.status(500).json({ ok: false, message: "Server error" });
   }
 }
 
-
 async function editAdmin(req, res) {
   try {
     const { id } = req.params;
     const { name, email, phoneNumber, password } = req.body;
-    
+
     console.log("Request body:", req.body);
     console.log("Admin ID:", id);
 
     // Validate required fields
     if (!name || !email) {
-      return res.status(400).json({ 
-        ok: false, 
-        message: "Name and email are required" 
+      return res.status(400).json({
+        ok: false,
+        message: "Name and email are required",
       });
     }
 
@@ -181,27 +201,32 @@ async function editAdmin(req, res) {
     // Check if email already exists (excluding current user)
     const existingEmail = await organizationService.findUserByEmail(email);
     if (existingEmail && existingEmail.id !== parseInt(id)) {
-      return res.status(409).json({ ok: false, message: "Email already exists" });
+      return res
+        .status(409)
+        .json({ ok: false, message: "Email already exists" });
     }
 
     // Prepare update data - preserve existing phoneNumber if not provided
-    const updateData = { 
-      name: name.trim(), 
+    const updateData = {
+      name: name.trim(),
       email: email.trim(),
       // Only update phoneNumber if it's provided (not undefined)
-      phoneNumber: phoneNumber !== undefined ? (phoneNumber || null) : existingUser.phoneNumber
+      phoneNumber:
+        phoneNumber !== undefined
+          ? phoneNumber || null
+          : existingUser.phoneNumber,
     };
-    
+
     // Only include password if provided and not empty
     if (password && password.trim() !== "") {
       updateData.password = password.trim();
     }
 
     console.log("Final update data:", updateData);
-    
+
     await organizationService.updateUser(id, updateData);
     const updatedUser = await organizationService.findUserById(id);
-    
+
     return res.status(200).json({
       ok: true,
       message: "Admin updated successfully",
@@ -214,13 +239,12 @@ async function editAdmin(req, res) {
     });
   } catch (err) {
     console.error("Edit admin error:", err);
-    return res.status(500).json({ 
-      ok: false, 
-      message: "Server error while updating admin" 
+    return res.status(500).json({
+      ok: false,
+      message: "Server error while updating admin",
     });
   }
 }
-
 
 async function resetPassword(req, res) {
   try {
@@ -244,7 +268,9 @@ async function resetPassword(req, res) {
     // Placeholder for sending email
     console.log(`Password reset for ${email}. New password: ${newPassword}`);
 
-    return res.status(200).json({ ok: true, message: "Password reset initiated" });
+    return res
+      .status(200)
+      .json({ ok: true, message: "Password reset initiated" });
   } catch (err) {
     console.error("Reset password error:", err);
     return res.status(500).json({ ok: false, message: "Server error" });
@@ -254,19 +280,31 @@ async function resetPassword(req, res) {
 async function toggleAdminStatus(req, res) {
   try {
     const { id } = req.params;
-    const { status } = req.body;
+    const { is_active } = req.body;
 
     const user = await organizationService.findUserById(id);
     if (!user) {
       return res.status(404).json({ ok: false, message: "Admin not found" });
     }
 
-    const isActive = status === "Active";
-    await organizationService.updateUserStatus(id, isActive);
+    // Validate that is_active is 0 or 1
+    if (typeof is_active !== "number" || ![0, 1].includes(is_active)) {
+      return res.status(400).json({
+        ok: false,
+        message: "Invalid is_active value; must be 0 or 1",
+      });
+    }
+
+    // Use is_active directly (already 0 or 1)
+    const newIsActive = is_active;
+
+    await organizationService.updateUserStatus(id, newIsActive);
     return res.status(200).json({
       ok: true,
-      message: `Admin status updated to ${status}`,
-      admin: { id, status },
+      message: `Admin status updated to ${
+        newIsActive === 1 ? "Active" : "Inactive"
+      }`,
+      admin: { id, is_active: newIsActive },
     });
   } catch (err) {
     console.error("Toggle admin status error:", err);
@@ -283,7 +321,9 @@ async function deleteAdmin(req, res) {
     }
 
     await organizationService.deleteUser(id);
-    return res.status(200).json({ ok: true, message: "Admin deleted successfully" });
+    return res
+      .status(200)
+      .json({ ok: true, message: "Admin deleted successfully" });
   } catch (err) {
     console.error("Delete admin error:", err);
     return res.status(500).json({ ok: false, message: "Server error" });
@@ -292,8 +332,9 @@ async function deleteAdmin(req, res) {
 
 async function getAllOrganizations(req, res) {
   try {
-    const organizations = await organizationService.getAllOrganizationsWithAdminCount();
-    
+    const organizations =
+      await organizationService.getAllOrganizationsWithAdminCount();
+
     return res.status(200).json({
       ok: true,
       organizations: organizations.map((org) => ({
@@ -350,17 +391,20 @@ async function getOrganizationAdmins(req, res) {
         created_at: admin.created_at,
         updated_at: admin.updated_at,
         is_active: admin.is_active,
-        phoneNumber:admin.phoneNumber
+        phoneNumber: admin.phoneNumber,
       })),
     });
   } catch (err) {
     console.error("Get organization admins error:", err);
     if (err.message === "Organization not found") {
-      return res.status(404).json({ ok: false, message: "Organization not found" });
+      return res
+        .status(404)
+        .json({ ok: false, message: "Organization not found" });
     }
     return res.status(500).json({ ok: false, message: "Server error" });
   }
 }
+
 module.exports = {
   addOrganization,
   editOrganization,
@@ -372,5 +416,5 @@ module.exports = {
   deleteAdmin,
   getAllOrganizations,
   getAllAdmins,
-  getOrganizationAdmins
+  getOrganizationAdmins,
 };

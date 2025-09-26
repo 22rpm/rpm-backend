@@ -37,7 +37,7 @@ const resetPasswordSchema = Joi.object({
 });
 
 const toggleStatusSchema = Joi.object({
-  status: Joi.string().valid("Active", "Inactive").required(),
+  is_active: Joi.number().valid(0, 1).required(), // Expect 0 or 1
 });
 
 module.exports = {
