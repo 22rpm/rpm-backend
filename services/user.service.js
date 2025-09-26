@@ -26,11 +26,12 @@ async function createUser({
   password,
   phoneNumber,
   is_active,
+  organization_id, // Add this parameter
 }) {
   const [result] = await db.query(
-    `INSERT INTO users (username, name, email, password, phoneNumber, is_active)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [username, name, email, password, phoneNumber, is_active]
+    `INSERT INTO users (username, name, email, password, phoneNumber, is_active, organization_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`, // Add organization_id placeholder
+    [username, name, email, password, phoneNumber, is_active, organization_id] // Add organization_id value
   );
   return result.insertId;
 }
@@ -58,8 +59,6 @@ async function findUserByUsername(username) {
   return rows[0] || null;
 }
 
-
-
 module.exports = {
   findUserByEmail,
   findRoleByUsername,
@@ -68,5 +67,4 @@ module.exports = {
   findUserByUsername,
   updateLastLogin,
   getUserById,
-  
 };

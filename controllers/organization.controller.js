@@ -1,6 +1,6 @@
 const bcrypt = require("bcrypt");
 const organizationService = require("../services/org.service");
-
+const db = require("../config/db");
 async function addOrganization(req, res) {
   try {
     const { name, code, admin } = req.body;
@@ -405,7 +405,60 @@ async function getOrganizationAdmins(req, res) {
   }
 }
 
+// Get all doctors by organization ID
+async function getDoctorsByOrganization(req, res) {
+  try {
+    const { organizationId } = req.params;
+
+    // Validate organizationId
+    if (!organizationId || isNaN(parseInt(organizationId))) {
+      return res.status(400).json({
+        ok: false,
+        message: "Valid organization ID is required",
+      });
+    }
+
+    // Query to get doctors from the specific organization
+    const [doctors] = await db.query(
+      `
+      SELECT 
+        u.id,
+        u.name,
+        u.username,
+        u.email,
+        u.phoneNumber,
+        u.is_active
+      FROM users u
+      INNER JOIN role ur ON u.id = ur.user_id
+      WHERE u.organization_id = ? 
+        AND ur.role_type = 'clinician'
+        AND u.is_active = true
+      ORDER BY u.name ASC
+    `,
+      [organizationId]
+    );
+
+    return res.status(200).json({
+      ok: true,
+      doctors: doctors.map((doctor) => ({
+        id: doctor.id,
+        name: doctor.name,
+        username: doctor.username,
+        email: doctor.email,
+        phoneNumber: doctor.phoneNumber,
+        is_active: doctor.is_active,
+      })),
+    });
+  } catch (err) {
+    console.error("Get doctors error:", err);
+    return res.status(500).json({
+      ok: false,
+      message: "Server error while fetching doctors",
+    });
+  }
+}
 module.exports = {
+  getDoctorsByOrganization,
   addOrganization,
   editOrganization,
   addAdminToOrganization,

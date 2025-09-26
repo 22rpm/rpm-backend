@@ -1,16 +1,12 @@
 // services/auth.service.js
 const pool = require("../config/db"); // your mysql2 pool
 
-async function deleteRefreshTokenForDevice(
-  refreshToken
-) {
+async function deleteRefreshTokenForDevice(refreshToken) {
   const query = `
     DELETE FROM user_devices
     WHERE refresh_token = ?
   `;
-  const [result] = await pool.execute(query, [
-    refreshToken,
-  ]);
+  const [result] = await pool.execute(query, [refreshToken]);
   return result.affectedRows > 0;
 }
 
@@ -51,7 +47,7 @@ async function assignDoctorsToPatient(patientId, doctorIds, assignedBy) {
 
   const values = doctorIds.map((doctorId) => [patientId, doctorId, assignedBy]);
 
-  await db.query(
+  await pool.query(
     "INSERT IGNORE INTO patient_doctor_assignments (patient_id, doctor_id, assigned_by) VALUES ?",
     [values]
   );

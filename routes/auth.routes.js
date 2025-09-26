@@ -6,18 +6,18 @@ const {
   logout,
   register,
   verifyOtpController,
-  refresh
+  refresh,
 } = require("../controllers/auth.controller");
 const { authRequired } = require("../middleware/auth");
 const { addDevData } = require("../controllers/auth.controller");
 
 const router = express.Router();
 
-router.post("/refresh-token", refresh );
+router.post("/refresh-token", refresh);
 router.post("/login", login);
 router.get("/check-me", authRequired, me);
 router.post("/logout", authRequired, logout);
-router.post("/register", register);
+router.post("/register", authRequired, register);
 router.post("/verify-otp", verifyOtpController);
 router.post("/", addDevData);
 // router.post('/mfa/setup', mfaSetup);    // returns secret/QR using the challengeToken

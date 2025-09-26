@@ -12,9 +12,6 @@ import {
 
 export async function getAllUsers(req, res) {
   try {
-    console.log("=== GET ALL USERS CONTROLLER ===");
-    console.log("User ID from JWT:", req.user.id);
-
     const currentUserId = req.user.id;
 
     if (!currentUserId) {
@@ -72,7 +69,7 @@ export async function getAllUsers(req, res) {
     console.error("Error fetching users:", err);
     return res.status(500).json({ ok: false, message: "Server error" });
   }
-};
+}
 export async function updateUser(req, res) {
   try {
     const { userId } = req.params;

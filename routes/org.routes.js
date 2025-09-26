@@ -49,5 +49,9 @@ router.get(
   "/organizations/:id/admins",
   organizationController.getOrganizationAdmins
 );
+router.get(
+  "/organization/:organizationId",
+  organizationController.getDoctorsByOrganization
+);
 
 module.exports = router;

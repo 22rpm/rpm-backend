@@ -309,19 +309,25 @@ async function logout(req, res) {
 }
 
 async function register(req, res) {
-  console.log("Before adding user - req.body:", req.body);
+  // console.log("Before adding user - req.body:", req.body);
+  console.log("user dta", req.user);
+
   try {
+    // Extract doctor assignment fields before validation
+    const { assignedDoctors, doctorIds, ...userData } = req.body;
+
     // Map status to is_active
     const modifiedBody = {
-      ...req.body,
+      ...userData, // Use the extracted userData (without doctor fields)
       is_active: req.body.status === "Active" ? true : false,
-      organization_id: req.user?.organization_id || req.body.organization_id, // super-admin sets org, or from logged-in user
+      organization_id: req.user?.organization_id || req.body.organization_id,
     };
     delete modifiedBody.status;
 
     const { value, error } = registerSchema.validate(modifiedBody, {
       abortEarly: false,
     });
+    console.log("Validation result:", { value });
     if (error) {
       return res.status(400).json({
         ok: false,
@@ -353,7 +359,7 @@ async function register(req, res) {
       password: hashed,
       phoneNumber: value.phoneNumber || null,
       is_active: value.is_active,
-      organization_id: value.organization_id, // ✅ attach org
+      organization_id: value.organization_id,
     });
 
     // Save role
@@ -364,8 +370,9 @@ async function register(req, res) {
     });
 
     // If role is patient and doctorIds were provided → assign doctors
-    if (value.role === "patient" && req.body.doctorIds?.length) {
-      await assignDoctorsToPatient(userId, req.body.doctorIds, req.user.id); // service function
+    // Use the extracted doctorIds from the original req.body
+    if (value.role === "patient" && doctorIds?.length) {
+      await assignDoctorsToPatient(userId, doctorIds, req.user.id);
     }
 
     return res.status(201).json({
