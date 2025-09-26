@@ -58,7 +58,22 @@ async function getOrganizationById(id) {
 }
 
 async function getAllOrganizations() {
-  return await knex("organizations").where({ is_deleted: false }).select("*");
+  return await knex("organizations")
+    .where({ is_deleted: false })
+    .select(
+      "organizations.id",
+      "organizations.name",
+      "organizations.org_code",
+      "organizations.created_at",
+      "organizations.updated_at",
+      knex.raw(`
+        (SELECT COUNT(*) 
+         FROM users 
+         JOIN roles ON users.id = roles.user_id 
+         WHERE users.organization_id = organizations.id 
+         AND roles.role_type = 'admin') as total_admins
+      `)
+    );
 }
 
 // User and role functions remain unchanged
@@ -192,107 +207,11 @@ async function findUserById(id) {
   const parsedId = typeof id === "number" ? id : parseInt(id);
 
   if (isNaN(parsedId)) {
-    throw new Error(`Invalid user ID: ${id}`);
-  }
-
-  return await knex("users").where({ id: parsedId }).first();
-}
-// In services/org.service.js
-
-// In services/org.service.js
-
-async function getAllOrganizationsWithAdminCount() {
-  try {
-    const organizations = await knex("organizations as o")
-      .leftJoin("users as u", "o.id", "u.organization_id")
-      .where("o.is_deleted", 0)
-      .select(
-        "o.id",
-        "o.name",
-        "o.org_code",
-        "o.created_at",
-        "o.updated_at",
-        knex.raw("COUNT(u.id) as admin_count")
-      )
-      .groupBy("o.id", "o.name", "o.org_code", "o.created_at", "o.updated_at")
-      .orderBy("o.created_at", "desc");
-
-    return organizations;
-  } catch (error) {
-    console.error("Error fetching organizations with admin count:", error);
-    throw error;
-  }
-}
-
-async function getAdminCountByOrganizationId(organizationId) {
-  try {
-    const result = await knex("users")
-      .where("organization_id", organizationId)
-      .count("id as admin_count")
-      .first();
-
-    return result.admin_count;
-  } catch (error) {
-    console.error("Error counting admins:", error);
-    return 0;
-  }
-}
-
-async function getOrganizationsAdmins(organizationId) {
-  try {
-    // Check if the organization exists and is not deleted
-    const organization = await knex("organizations")
-      .where({ id: organizationId, is_deleted: 0 })
-      .first();
-
-    if (!organization) {
-      throw new Error("Organization not found");
-    }
-
-    // Fetch admins for the organization
-    const admins = await knex("users")
-      .where({ organization_id: organizationId })
-      .select(
-        "id",
-        "name",
-        "email",
-        "organization_id",
-        "created_at",
-        "updated_at",
-        "is_active",
-        "phoneNumber"
-      )
-      .orderBy("created_at", "desc");
-
-    return admins;
-  } catch (error) {
-    console.error("Error fetching organization admins:", error);
-    throw error;
-  }
-}
-
-async function findUserById(id) {
-  const parsedId = typeof id === "number" ? id : parseInt(id, 10);
-  if (isNaN(parsedId)) {
-    throw new Error(`Invalid user ID: ${id}`);
+    throw new Error("Invalid user ID");
   }
   return await knex("users").where({ id: parsedId }).first();
 }
 
-// --- updateUserStatus (persist and return updated user)
-async function updateUserStatus(id, isActive) {
-  const parsedId = typeof id === "number" ? id : parseInt(id, 10);
-  if (isNaN(parsedId)) throw new Error(`Invalid user ID: ${id}`);
-
-  const normalized = Number(isActive) === 1 ? 1 : 0;
-
-  await knex("users").where({ id: parsedId }).update({
-    is_active: normalized,
-    updated_at: new Date(),
-  });
-
-  return await findUserById(parsedId);
-}
 module.exports = {
   createOrganization,
   findOrganizationById,
