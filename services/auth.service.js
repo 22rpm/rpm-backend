@@ -46,8 +46,22 @@ async function findUserDeviceSession({
 
   return rows.length > 0 ? rows[0] : null;
 }
+async function assignDoctorsToPatient(patientId, doctorIds, assignedBy) {
+  if (!Array.isArray(doctorIds) || doctorIds.length === 0) return;
 
+  const values = doctorIds.map((doctorId) => [patientId, doctorId, assignedBy]);
+
+  await db.query(
+    "INSERT IGNORE INTO patient_doctor_assignments (patient_id, doctor_id, assigned_by) VALUES ?",
+    [values]
+  );
+
+  console.log(
+    `✅ Assigned patient ${patientId} to doctors: ${doctorIds.join(",")}`
+  );
+}
 module.exports = {
   deleteRefreshTokenForDevice,
   findUserDeviceSession,
+  assignDoctorsToPatient,
 };

@@ -27,7 +27,10 @@ const { verifyOtp, createOtp } = require("../services/otp.service");
 const { sendOtpEmail } = require("../services/mail.service");
 const crypto = require("crypto");
 const { saveOrUpdateUserDevice } = require("../services/device.service");
-const { deleteRefreshTokenForDevice } = require("../services/auth.service");
+const {
+  deleteRefreshTokenForDevice,
+  assignDoctorsToPatient,
+} = require("../services/auth.service");
 
 const COOKIE_SECURE = process.env.NODE_ENV === "production";
 
@@ -71,10 +74,13 @@ async function login(req, res) {
 
     // Get user role
     const role = await findRoleByUsername(user.username);
+    console.log("Fetched role from database:", role); // 👈 ADD THIS LOG
+
     if (!role) {
       return res.status(401).json({ message: "User role not found" });
     }
-
+    const role_type = role.role_type;
+    const org_id = user.organization_id || null;
     // If login method is username, directly authenticate without OTP
     if (method === "username") {
       // Generate access token - MAKE SURE ROLE IS INCLUDED
@@ -84,7 +90,8 @@ async function login(req, res) {
           name: user.name,
           username: user.username,
           email: user.email,
-          role: role, // ← This is important!
+          role_type: role_type, // ✅ now includes role
+          org_id: org_id,
           phoneNumber: user.phoneNumber,
         },
         process.env.JWT_SECRET,
@@ -96,7 +103,8 @@ async function login(req, res) {
         expiresIn: "14d",
       });
 
-      const deviceFingerprint = req.body.device_fingerprint || "unique-browser-hash";
+      const deviceFingerprint =
+        req.body.device_fingerprint || "unique-browser-hash";
 
       console.log("Setting cookies for username login:");
       console.log("Access Token present:", !!accessToken);
@@ -216,9 +224,14 @@ async function me(req, res) {
   try {
     const userId = req.user.id; // From JWT token via authRequired middleware
     const [rows] = await pool.execute(
-      "SELECT id, name, username, email, phoneNumber FROM users WHERE id = ?",
+      "SELECT id, name, username, email, organization_id, phoneNumber FROM users WHERE id = ?",
       [userId]
     );
+    const [role] = await pool.execute(
+      "SELECT role_type FROM role WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+      [userId]
+    );
+    console.log("user role ", role);
 
     if (rows.length === 0) {
       return res.status(404).json({ ok: false, error: "User not found" });
@@ -233,6 +246,8 @@ async function me(req, res) {
         username: user.username,
         email: user.email,
         phoneNumber: user.phoneNumber || null,
+        organizationId: user.organization_id, // 👈 add orgId here
+        role: role[0]?.role_type || "user", // 👈 add role here
       },
     });
   } catch (err) {
@@ -300,15 +315,14 @@ async function register(req, res) {
     const modifiedBody = {
       ...req.body,
       is_active: req.body.status === "Active" ? true : false,
+      organization_id: req.user?.organization_id || req.body.organization_id, // super-admin sets org, or from logged-in user
     };
-    delete modifiedBody.status; // Remove status to match schema
-    console.log("Before adding user - modifiedBody:", modifiedBody);
+    delete modifiedBody.status;
 
     const { value, error } = registerSchema.validate(modifiedBody, {
       abortEarly: false,
     });
     if (error) {
-      console.log("Validation error:", error.details);
       return res.status(400).json({
         ok: false,
         message: "Validation error",
@@ -316,17 +330,13 @@ async function register(req, res) {
       });
     }
 
-    console.log("Before adding user - validated value:", value);
-
-    // Check if email already exists
+    // Check email/username uniqueness
     const existingEmail = await findUserByEmail(value.email);
     if (existingEmail) {
       return res
         .status(409)
         .json({ ok: false, message: "Email already exists" });
     }
-
-    // Check if username already exists
     const existingUsername = await findUserByUsername(value.username);
     if (existingUsername) {
       return res
@@ -334,6 +344,7 @@ async function register(req, res) {
         .json({ ok: false, message: "Username already exists" });
     }
 
+    // Create user
     const hashed = await bcrypt.hash(value.password, 12);
     const userId = await createUser({
       username: value.username,
@@ -342,22 +353,20 @@ async function register(req, res) {
       password: hashed,
       phoneNumber: value.phoneNumber || null,
       is_active: value.is_active,
+      organization_id: value.organization_id, // ✅ attach org
     });
 
-    // Query the database to confirm the saved user
-    const [savedUser] = await pool.execute(
-      `SELECT id, username, name, email, phoneNumber, is_active FROM users WHERE id = ?`,
-      [userId]
-    );
-    console.log("After saving user - saved user data:", savedUser[0]);
-
+    // Save role
     await assignRole({
       username: value.username,
       userId,
       role: value.role,
     });
 
-    console.log("After adding user - userId:", userId);
+    // If role is patient and doctorIds were provided → assign doctors
+    if (value.role === "patient" && req.body.doctorIds?.length) {
+      await assignDoctorsToPatient(userId, req.body.doctorIds, req.user.id); // service function
+    }
 
     return res.status(201).json({
       ok: true,
@@ -369,6 +378,7 @@ async function register(req, res) {
         email: value.email,
         phoneNumber: value.phoneNumber || null,
         role: value.role,
+        organization_id: value.organization_id,
       },
     });
   } catch (err) {

@@ -28,20 +28,27 @@ async function authRequired(req, res, next) {
   try {
     const token = req.cookies.token;
     const refreshToken = req.cookies.refresh_token;
-    
+
     // console.log("=== AUTH REQUIRED MIDDLEWARE ===");
     // console.log("Request Cookies:", req.cookies);
     // console.log("Token present:", !!token);
     // console.log("Refresh Token present:", !!refreshToken);
 
     if (!token || !refreshToken) {
-      console.log("Missing tokens - Token:", !!token, "Refresh:", !!refreshToken);
-      return res.status(401).json({ ok: false, message: "Unauthorized - Missing tokens" });
+      console.log(
+        "Missing tokens - Token:",
+        !!token,
+        "Refresh:",
+        !!refreshToken
+      );
+      return res
+        .status(401)
+        .json({ ok: false, message: "Unauthorized - Missing tokens" });
     }
 
     // Verify access token
     const payload = jwt.verify(token, process.env.JWT_SECRET);
-    // console.log("Token payload:", payload);
+    console.log("Token payload:", payload);
     req.user = payload;
 
     const deviceFingerprint = "unique-browser-hash";
@@ -67,7 +74,9 @@ async function authRequired(req, res, next) {
 
     if (!device) {
       console.log("No device session found in database");
-      return res.status(401).json({ ok: false, message: "Unauthorized - No session" });
+      return res
+        .status(401)
+        .json({ ok: false, message: "Unauthorized - No session" });
     }
 
     // Check absolute expiration
@@ -90,7 +99,9 @@ async function authRequired(req, res, next) {
     if (err.name === "TokenExpiredError") {
       return res.status(401).json({ ok: false, message: "Token expired" });
     }
-    return res.status(401).json({ ok: false, message: "Authentication failed" });
+    return res
+      .status(401)
+      .json({ ok: false, message: "Authentication failed" });
   }
 }
 // this is being used in live chat messageService

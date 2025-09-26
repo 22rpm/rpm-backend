@@ -5,31 +5,74 @@ import {
   updateUser as updateUserService,
   toggleUserStatus as toggleUserStatusService,
   deleteUser as deleteUserService,
+  findOrgUsersWithRoles,
+  getUserWithRoleAndOrg,
+  findAllUsers,
 } from "../services/admin.service.js"; // note the .js extension
 
 export async function getAllUsers(req, res) {
   try {
-    console.log("Fetching all users");
+    console.log("=== GET ALL USERS CONTROLLER ===");
+    console.log("User ID from JWT:", req.user.id);
 
-    const isAdmin = true; // TEMP FIX
-    if (!isAdmin) {
-      return res.status(403).json({ ok: false, message: "Admin access required" });
+    const currentUserId = req.user.id;
+
+    if (!currentUserId) {
+      console.log("Unauthorized access attempt to getAllUsers");
+      return res.status(401).json({ ok: false, message: "Unauthorized" });
     }
 
-    const users = await findAllUsersWithRoles();
-    console.log("users", users);
+    // ✅ Fetch complete user data with role from database
+    const currentUser = await getUserWithRoleAndOrg(currentUserId);
+    console.log("Current user data from database:", currentUser);
 
-    return res.status(200).json({
-      ok: true,
-      message: "Users fetched successfully",
-      users,
+    if (!currentUser) {
+      return res.status(403).json({ ok: false, message: "User not found" });
+    }
+
+    const role_type = currentUser.role_type;
+    const org_id = currentUser.org_id;
+
+    console.log("Extracted role_type:", role_type);
+    console.log("Extracted org_id:", org_id);
+
+    // ✅ Check if user is admin
+    if (role_type === "admin") {
+      // ✅ Org Admin - has org_id
+      if (org_id) {
+        console.log(
+          "User is org admin, fetching org users for org_id:",
+          org_id
+        );
+        const users = await findOrgUsersWithRoles(org_id);
+        return res.status(200).json({
+          ok: true,
+          message: "Users fetched successfully",
+          users,
+        });
+      }
+      // ✅ Super Admin - no org_id
+      else {
+        console.log("User is super admin, fetching all users");
+        const allUsers = await findAllUsers();
+        return res.status(200).json({
+          ok: true,
+          message: "All users fetched successfully (Super Admin)",
+          users: allUsers,
+        });
+      }
+    }
+
+    console.log("Access denied - User role:", role_type);
+    return res.status(403).json({
+      ok: false,
+      message: `Access denied. Admin privileges required. Current role: ${role_type}`,
     });
   } catch (err) {
     console.error("Error fetching users:", err);
     return res.status(500).json({ ok: false, message: "Server error" });
   }
-}
-
+};
 export async function updateUser(req, res) {
   try {
     const { userId } = req.params;

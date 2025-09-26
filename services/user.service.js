@@ -58,6 +58,8 @@ async function findUserByUsername(username) {
   return rows[0] || null;
 }
 
+
+
 module.exports = {
   findUserByEmail,
   findRoleByUsername,
@@ -66,4 +68,5 @@ module.exports = {
   findUserByUsername,
   updateLastLogin,
   getUserById,
+  
 };
