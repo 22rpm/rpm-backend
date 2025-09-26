@@ -211,7 +211,60 @@ async function findUserById(id) {
   }
   return await knex("users").where({ id: parsedId }).first();
 }
+async function getOrganizationsAdmins(organizationId) {
+  try {
+    // Check if the organization exists and is not deleted
+    const organization = await knex("organizations")
+      .where({ id: organizationId, is_deleted: 0 })
+      .first();
 
+    if (!organization) {
+      throw new Error("Organization not found");
+    }
+
+    // Fetch admins for the organization
+    const admins = await knex("users")
+      .where({ organization_id: organizationId })
+      .select(
+        "id",
+        "name",
+        "email",
+        "organization_id",
+        "created_at",
+        "updated_at",
+        "is_active",
+        "phoneNumber"
+      )
+      .orderBy("created_at", "desc");
+
+    return admins;
+  } catch (error) {
+    console.error("Error fetching organization admins:", error);
+    throw error;
+  }
+}
+async function getAllOrganizationsWithAdminCount() {
+  try {
+    const organizations = await knex("organizations as o")
+      .leftJoin("users as u", "o.id", "u.organization_id")
+      .where("o.is_deleted", 0)
+      .select(
+        "o.id",
+        "o.name",
+        "o.org_code",
+        "o.created_at",
+        "o.updated_at",
+        knex.raw("COUNT(u.id) as admin_count")
+      )
+      .groupBy("o.id", "o.name", "o.org_code", "o.created_at", "o.updated_at")
+      .orderBy("o.created_at", "desc");
+
+    return organizations;
+  } catch (error) {
+    console.error("Error fetching organizations with admin count:", error);
+    throw error;
+  }
+}
 module.exports = {
   createOrganization,
   findOrganizationById,
