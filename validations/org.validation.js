@@ -29,6 +29,7 @@ const editAdminSchema = Joi.object({
   name: Joi.string().min(3).max(255).required(),
   email: Joi.string().email().required(),
   phoneNumber: Joi.string().max(20).allow(null, ""),
+  password: Joi.string().min(8).optional(),
 });
 
 const resetPasswordSchema = Joi.object({
@@ -36,7 +37,7 @@ const resetPasswordSchema = Joi.object({
 });
 
 const toggleStatusSchema = Joi.object({
-  status: Joi.string().valid("Active", "Inactive").required(),
+  is_active: Joi.number().valid(0, 1).required(), // Expect 0 or 1
 });
 
 module.exports = {

@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const organizationController = require("../controllers/organization.controller");
-const  validateRequest= require("../middleware/validate");
+const validateRequest = require("../middleware/validate");
 const {
   addOrganizationSchema,
   editOrganizationSchema,
@@ -45,5 +45,9 @@ router.patch(
 router.delete("/admins/:id", organizationController.deleteAdmin);
 router.get("/organizations", organizationController.getAllOrganizations);
 router.get("/admins", organizationController.getAllAdmins);
-router.get("/organizations/:id/admins", organizationController.getOrganizationAdmins);
+router.get(
+  "/organizations/:id/admins",
+  organizationController.getOrganizationAdmins
+);
+
 module.exports = router;
