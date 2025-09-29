@@ -21,7 +21,6 @@ export async function getAllUsers(req, res) {
 
     // ✅ Fetch complete user data with role from database
     const currentUser = await getUserWithRoleAndOrg(currentUserId);
-    console.log("Current user data from database:", currentUser);
 
     if (!currentUser) {
       return res.status(403).json({ ok: false, message: "User not found" });
@@ -30,17 +29,10 @@ export async function getAllUsers(req, res) {
     const role_type = currentUser.role_type;
     const org_id = currentUser.org_id;
 
-    console.log("Extracted role_type:", role_type);
-    console.log("Extracted org_id:", org_id);
-
     // ✅ Check if user is admin
     if (role_type === "admin") {
       // ✅ Org Admin - has org_id
       if (org_id) {
-        console.log(
-          "User is org admin, fetching org users for org_id:",
-          org_id
-        );
         const users = await findOrgUsersWithRoles(org_id);
         return res.status(200).json({
           ok: true,
@@ -50,7 +42,6 @@ export async function getAllUsers(req, res) {
       }
       // ✅ Super Admin - no org_id
       else {
-        console.log("User is super admin, fetching all users");
         const allUsers = await findAllUsers();
         return res.status(200).json({
           ok: true,
@@ -60,7 +51,6 @@ export async function getAllUsers(req, res) {
       }
     }
 
-    console.log("Access denied - User role:", role_type);
     return res.status(403).json({
       ok: false,
       message: `Access denied. Admin privileges required. Current role: ${role_type}`,
@@ -151,5 +141,183 @@ export async function deleteUser(req, res) {
   } catch (err) {
     console.error("Delete user error:", err);
     return res.status(500).json({ ok: false, message: "Server error" });
+  }
+}
+
+// Get assigned doctors for a patient
+export async function getAssignedDoctors(req, res) {
+  const { patientId } = req.params;
+  console.log("patientId", patientId);
+
+  try {
+    // First get the patient's organization_id
+    const [patientRows] = await pool.query(
+      `SELECT organization_id FROM users WHERE id = ?`,
+      [patientId]
+    );
+    console.log("patientRows", patientRows);
+
+    if (patientRows.length === 0) {
+      return res.status(404).json({
+        ok: false,
+        message: "Patient not found",
+      });
+    }
+
+    const organizationId = patientRows[0].organization_id;
+    console.log("organizationId from patient:", organizationId);
+
+    const [rows] = await pool.query(
+      `
+      SELECT u.id, u.name, u.email, u.phoneNumber
+      FROM patient_doctor_assignments pda
+      JOIN users u ON pda.doctor_id = u.id
+      WHERE pda.patient_id = ? AND u.organization_id = ?
+      `,
+      [patientId, organizationId]
+    );
+
+    res.json({ ok: true, doctors: rows });
+  } catch (err) {
+    console.error("Get assigned doctors error:", err);
+    res.status(500).json({ ok: false, message: "Server error" });
+  }
+}
+// Update doctor assignments for a patient (add/remove)
+// Update doctor assignments for a patient (add/remove)
+export async function updateDoctorAssignments(req, res) {
+  const { patientId } = req.params;
+  console.log("patientId", patientId);
+
+  const { addDoctorIds = [], removeDoctorIds = [] } = req.body;
+  const assignedBy = req.user.id;
+  console.log("user req", req.user);
+
+  console.log("addDoctorIds", addDoctorIds);
+  console.log("removeDoctorIds", removeDoctorIds);
+
+  if (!Array.isArray(addDoctorIds) || !Array.isArray(removeDoctorIds)) {
+    return res.status(400).json({
+      ok: false,
+      message: "addDoctorIds and removeDoctorIds must be arrays",
+    });
+  }
+
+  // Convert IDs to numbers to ensure type consistency
+  const numericAddDoctorIds = addDoctorIds.map(Number);
+  const numericRemoveDoctorIds = removeDoctorIds.map(Number);
+  console.log("numericAddDoctorIds", numericAddDoctorIds);
+  console.log("numericRemoveDoctorIds", numericRemoveDoctorIds);
+
+  try {
+    // First get the patient's organization_id
+    const [patientRows] = await pool.query(
+      `SELECT id, organization_id FROM users WHERE id = ?`,
+      [patientId]
+    );
+
+    if (patientRows.length === 0) {
+      return res.status(404).json({
+        ok: false,
+        message: "Patient not found",
+      });
+    }
+
+    const organizationId = patientRows[0].organization_id;
+    console.log("organizationId from patient:", organizationId);
+
+    // Validate doctors exist and are clinicians in the same org
+    const allDoctorIds = [...numericAddDoctorIds, ...numericRemoveDoctorIds];
+
+    if (allDoctorIds.length > 0) {
+      const [doctors] = await pool.query(
+        `
+        SELECT u.id
+        FROM users u
+        JOIN role r ON u.id = r.user_id
+        WHERE u.id IN (?) 
+          AND r.role_type = 'clinician' 
+          AND u.organization_id = ?
+          AND u.is_active = 1
+        `,
+        [allDoctorIds, organizationId]
+      );
+
+      console.log(`Valid doctors found:`, doctors);
+
+      const validDoctorIds = doctors.map((d) => d.id);
+      console.log("Valid doctor IDs:", validDoctorIds);
+
+      const invalidAddIds = numericAddDoctorIds.filter(
+        (id) => !validDoctorIds.includes(id)
+      );
+      const invalidRemoveIds = numericRemoveDoctorIds.filter(
+        (id) => !validDoctorIds.includes(id)
+      );
+
+      if (invalidAddIds.length > 0 || invalidRemoveIds.length > 0) {
+        return res.status(400).json({
+          ok: false,
+          message: `Invalid doctor IDs: ${[
+            ...invalidAddIds,
+            ...invalidRemoveIds,
+          ].join(", ")}`,
+        });
+      }
+    }
+
+    // Start transaction to ensure atomicity
+    await pool.query("START TRANSACTION");
+
+    // Add new assignments (only if not already assigned)
+    if (numericAddDoctorIds.length > 0) {
+      // First check which assignments already exist to avoid duplicates
+      const [existingAssignments] = await pool.query(
+        "SELECT doctor_id FROM patient_doctor_assignments WHERE patient_id = ? AND doctor_id IN (?)",
+        [patientId, numericAddDoctorIds]
+      );
+
+      const existingDoctorIds = existingAssignments.map((row) => row.doctor_id);
+      const newDoctorIds = numericAddDoctorIds.filter(
+        (id) => !existingDoctorIds.includes(id)
+      );
+
+      if (newDoctorIds.length > 0) {
+        const values = newDoctorIds.map((doctorId) => [
+          patientId,
+          doctorId,
+          assignedBy,
+        ]);
+        await pool.query(
+          "INSERT INTO patient_doctor_assignments (patient_id, doctor_id, assigned_by) VALUES ?",
+          [values]
+        );
+        console.log(`Added ${newDoctorIds.length} new doctor assignments`);
+      }
+    }
+
+    // Remove assignments
+    if (numericRemoveDoctorIds.length > 0) {
+      const [result] = await pool.query(
+        "DELETE FROM patient_doctor_assignments WHERE patient_id = ? AND doctor_id IN (?)",
+        [patientId, numericRemoveDoctorIds]
+      );
+      console.log(`Removed ${result.affectedRows} doctor assignments`);
+    }
+
+    await pool.query("COMMIT");
+
+    res.json({
+      ok: true,
+      message: "Doctor assignments updated successfully",
+    });
+  } catch (err) {
+    await pool.query("ROLLBACK");
+    console.error("Update doctor assignments error:", err);
+    res.status(500).json({
+      ok: false,
+      message: "Server error",
+      error: err.message,
+    });
   }
 }

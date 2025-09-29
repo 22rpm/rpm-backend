@@ -3,7 +3,7 @@ const db = require("../config/db");
 
 async function findUserByEmail(email) {
   const [rows] = await db.query(
-    "SELECT id, username, name, email, password, phoneNumber, created_at, updated_at FROM users WHERE email = ? LIMIT 1",
+    "SELECT id, username, name, email, password, phoneNumber, created_at, organization_id, updated_at FROM users WHERE email = ? LIMIT 1",
     [email]
   );
   return rows[0] || null;
@@ -53,7 +53,7 @@ async function getUserById(userId) {
 }
 async function findUserByUsername(username) {
   const [rows] = await db.query(
-    "SELECT id, username, name, email, password, phoneNumber, created_at, updated_at FROM users WHERE username = ? LIMIT 1",
+    "SELECT id, username, name, email, password, organization_id, phoneNumber, created_at, updated_at FROM users WHERE username = ? LIMIT 1",
     [username]
   );
   return rows[0] || null;

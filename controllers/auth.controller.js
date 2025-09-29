@@ -31,6 +31,7 @@ const {
   deleteRefreshTokenForDevice,
   assignDoctorsToPatient,
 } = require("../services/auth.service");
+const { log } = require("console");
 
 const COOKIE_SECURE = process.env.NODE_ENV === "production";
 
@@ -79,8 +80,13 @@ async function login(req, res) {
     if (!role) {
       return res.status(401).json({ message: "User role not found" });
     }
-    const role_type = role.role_type;
-    const org_id = user.organization_id || null;
+    const role_type = role;
+    const org_id = user.organization_id;
+    console.log(
+      "user role nd org id in the login  ",
+      user.organization_id,
+      role_type
+    );
     // If login method is username, directly authenticate without OTP
     if (method === "username") {
       // Generate access token - MAKE SURE ROLE IS INCLUDED
@@ -231,7 +237,6 @@ async function me(req, res) {
       "SELECT role_type FROM role WHERE user_id = ? ORDER BY id DESC LIMIT 1",
       [userId]
     );
-    console.log("user role ", role);
 
     if (rows.length === 0) {
       return res.status(404).json({ ok: false, error: "User not found" });
