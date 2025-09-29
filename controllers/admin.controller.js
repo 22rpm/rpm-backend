@@ -9,7 +9,7 @@ import {
   getUserWithRoleAndOrg,
   findAllUsers,
 } from "../services/admin.service.js"; // note the .js extension
-
+import bcrypt from "bcrypt";
 export async function getAllUsers(req, res) {
   try {
     const currentUserId = req.user.id;
@@ -63,7 +63,7 @@ export async function getAllUsers(req, res) {
 export async function updateUser(req, res) {
   try {
     const { userId } = req.params;
-    const { name, email, phoneNumber, status } = req.body; // read from body
+    const { name, email, phoneNumber, status, password } = req.body;
 
     let is_active = null;
     if (status) {
@@ -71,12 +71,32 @@ export async function updateUser(req, res) {
       else if (status.toLowerCase() === "inactive") is_active = 0;
     }
 
-    await pool.query(
-      `UPDATE users 
-       SET name = ?, email = ?, phoneNumber = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP 
-       WHERE id = ?`,
-      [name, email, phoneNumber, is_active, userId]
-    );
+    // Build the update query dynamically
+    let updateFields = [
+      "name = ?",
+      "email = ?",
+      "phoneNumber = ?",
+      "is_active = ?",
+      "updated_at = CURRENT_TIMESTAMP",
+    ];
+    let queryParams = [name, email, phoneNumber, is_active];
+
+    // Add password to update if provided
+    if (password && password.trim() !== "") {
+      // Hash the password before storing
+      const saltRounds = 10;
+      const hashedPassword = await bcrypt.hash(password, saltRounds);
+
+      updateFields.push("password = ?");
+      queryParams.push(hashedPassword);
+    }
+
+    // Add userId as the last parameter for WHERE clause
+    queryParams.push(userId);
+
+    const query = `UPDATE users SET ${updateFields.join(", ")} WHERE id = ?`;
+
+    await pool.query(query, queryParams);
 
     res.json({ ok: true, message: "User updated successfully" });
   } catch (error) {
@@ -84,7 +104,6 @@ export async function updateUser(req, res) {
     res.status(500).json({ ok: false, message: "Failed to update user" });
   }
 }
-
 export async function toggleUserStatus(req, res) {
   try {
     const { userId } = req.params;
