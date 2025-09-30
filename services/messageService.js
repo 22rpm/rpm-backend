@@ -83,11 +83,16 @@ class MessageService {
           this.select(db.raw("MAX(m2.created_at)"))
             .from("messages as m2")
             .whereRaw(
-              " (CASE WHEN m2.sender_id = ? THEN m2.receiver_id ELSE m2.sender_id END) = (CASE WHEN m1.sender_id = ? THEN m1.receiver_id ELSE m1.sender_id END) ",
+              "(CASE WHEN m2.sender_id = ? THEN m2.receiver_id ELSE m2.sender_id END) = (CASE WHEN m1.sender_id = ? THEN m1.receiver_id ELSE m1.sender_id END)",
               [userId, userId]
             );
         })
-        .groupBy("other_user_id");
+        .groupBy(
+          "other_user_id",
+          "other_user_name",
+          "last_message",
+          "last_message_time"
+        );
     } catch (error) {
       console.log(error);
       throw error;
