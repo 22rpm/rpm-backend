@@ -57,84 +57,85 @@ class MessageService {
 
   async getUserConversations(userId) {
     try {
-      return await db("messages")
+      return await db("messages as m1")
         .select(
           db.raw(
-            "CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as other_user_id",
+            "CASE WHEN m1.sender_id = ? THEN m1.receiver_id ELSE m1.sender_id END as other_user_id",
             [userId]
           ),
           db.raw(
-            "CASE WHEN sender_id = ? THEN receiver.name ELSE sender.name END as other_user_name",
+            "CASE WHEN m1.sender_id = ? THEN r.name ELSE s.name END as other_user_name",
             [userId]
           ),
-          "messages.message as last_message",
-          "messages.created_at as last_message_time",
+          "m1.message as last_message",
+          "m1.created_at as last_message_time",
           db.raw(
-            "COUNT(CASE WHEN receiver_id = ? AND is_read = false THEN 1 END) as unread_count",
+            "SUM(CASE WHEN m1.receiver_id = ? AND m1.is_read = false THEN 1 ELSE 0 END) as unread_count",
             [userId]
           )
         )
-        .leftJoin("users as sender", "messages.sender_id", "sender.id")
-        .leftJoin("users as receiver", "messages.receiver_id", "receiver.id")
-        .where("sender_id", userId)
-        .orWhere("receiver_id", userId)
-        .groupBy(
-          db.raw(
-            "CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END",
-            [userId]
-          ),
-          "messages.id"
-        )
-        .orderBy("messages.created_at", "desc");
+        .leftJoin("users as s", "m1.sender_id", "s.id")
+        .leftJoin("users as r", "m1.receiver_id", "r.id")
+        .where(function () {
+          this.where("m1.sender_id", userId).orWhere("m1.receiver_id", userId);
+        })
+        .andWhere("m1.created_at", function () {
+          this.select(db.raw("MAX(m2.created_at)"))
+            .from("messages as m2")
+            .whereRaw(
+              " (CASE WHEN m2.sender_id = ? THEN m2.receiver_id ELSE m2.sender_id END) = (CASE WHEN m1.sender_id = ? THEN m1.receiver_id ELSE m1.sender_id END) ",
+              [userId, userId]
+            );
+        })
+        .groupBy("other_user_id");
     } catch (error) {
       console.log(error);
       throw error;
     }
   }
 
-//   async getUserConversations(userId) {
-//   try {
-//     const subquery = db("messages")
-//       .select(
-//         db.raw("CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as other_user_id", [userId]),
-//         db.raw("CASE WHEN sender_id = ? THEN receiver.name ELSE sender.name END as other_user_name", [userId]),
-//         db.raw("MAX(created_at) as max_created_at")
-//       )
-//       .leftJoin("users as sender", "messages.sender_id", "sender.id")
-//       .leftJoin("users as receiver", "messages.receiver_id", "receiver.id")
-//       .where("sender_id", userId)
-//       .orWhere("receiver_id", userId)
-//       .groupBy("other_user_id", "other_user_name")
-//       .as("conv");
+  //   async getUserConversations(userId) {
+  //   try {
+  //     const subquery = db("messages")
+  //       .select(
+  //         db.raw("CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as other_user_id", [userId]),
+  //         db.raw("CASE WHEN sender_id = ? THEN receiver.name ELSE sender.name END as other_user_name", [userId]),
+  //         db.raw("MAX(created_at) as max_created_at")
+  //       )
+  //       .leftJoin("users as sender", "messages.sender_id", "sender.id")
+  //       .leftJoin("users as receiver", "messages.receiver_id", "receiver.id")
+  //       .where("sender_id", userId)
+  //       .orWhere("receiver_id", userId)
+  //       .groupBy("other_user_id", "other_user_name")
+  //       .as("conv");
 
-//     return await db("messages as m")
-//       .select(
-//         "conv.other_user_id",
-//         "conv.other_user_name",
-//         "m.message as last_message",
-//         "m.created_at as last_message_time",
-//         db.raw("SUM(CASE WHEN m.receiver_id = ? AND m.is_read = false THEN 1 ELSE 0 END) as unread_count", [userId])
-//       )
-//       .join(subquery, function () {
-//         this.on(function () {
-//           this.on("m.sender_id", "=", db.raw("?", [userId]))
-//             .andOn("m.receiver_id", "=", "conv.other_user_id")
-//             .orOn(function () {
-//               this.on("m.receiver_id", "=", db.raw("?", [userId]))
-//                 .andOn("m.sender_id", "=", "conv.other_user_id");
-//             });
-//         })
-//         .andOn("m.created_at", "=", "conv.max_created_at");
-//       })
-//       .groupBy("conv.other_user_id", "conv.other_user_name", "m.message", "m.created_at")
-//       .orderBy("m.created_at", "desc");
-//   } catch (error) {
-//     console.error(error);
-//     throw error;
-//   }
-// }
+  //     return await db("messages as m")
+  //       .select(
+  //         "conv.other_user_id",
+  //         "conv.other_user_name",
+  //         "m.message as last_message",
+  //         "m.created_at as last_message_time",
+  //         db.raw("SUM(CASE WHEN m.receiver_id = ? AND m.is_read = false THEN 1 ELSE 0 END) as unread_count", [userId])
+  //       )
+  //       .join(subquery, function () {
+  //         this.on(function () {
+  //           this.on("m.sender_id", "=", db.raw("?", [userId]))
+  //             .andOn("m.receiver_id", "=", "conv.other_user_id")
+  //             .orOn(function () {
+  //               this.on("m.receiver_id", "=", db.raw("?", [userId]))
+  //                 .andOn("m.sender_id", "=", "conv.other_user_id");
+  //             });
+  //         })
+  //         .andOn("m.created_at", "=", "conv.max_created_at");
+  //       })
+  //       .groupBy("conv.other_user_id", "conv.other_user_name", "m.message", "m.created_at")
+  //       .orderBy("m.created_at", "desc");
+  //   } catch (error) {
+  //     console.error(error);
+  //     throw error;
+  //   }
+  // }
 
-  
   async markAsRead(userId1, userId2) {
     try {
       return await db("messages")
@@ -157,7 +158,7 @@ class MessageService {
       throw error;
     }
   }
-  async getPatients() {
+  async getPatients(doctorId) {
     try {
       return await db("users")
         .select(
@@ -168,7 +169,13 @@ class MessageService {
         )
         .leftJoin("role", "users.id", "role.user_id")
         .leftJoin("dev_data", "users.id", "dev_data.dev_id")
+        .innerJoin(
+          "patient_doctor_assignments",
+          "users.id",
+          "patient_doctor_assignments.patient_id"
+        )
         .where("role.role_type", "patient")
+        .where("patient_doctor_assignments.doctor_id", doctorId)
         .orderBy("users.name");
     } catch (error) {
       console.log(error);

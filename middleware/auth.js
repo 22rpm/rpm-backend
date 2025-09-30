@@ -48,7 +48,7 @@ async function authRequired(req, res, next) {
 
     // Verify access token
     const payload = jwt.verify(token, process.env.JWT_SECRET);
-    console.log("Token payload:", payload);
+    // console.log("Token payload:", payload);
     req.user = payload;
 
     const deviceFingerprint = "unique-browser-hash";
