@@ -94,32 +94,44 @@ router.post("/test-alert", async (req, res) => {
 
     console.log("🔍 DEBUG: Users found:", usersCheck);
 
-    // Verify all dr_ids exist and are doctors by checking the role table
-    const validDoctors = await knex("users")
+    // Verify all dr_ids exist and are clinicians
+    const validClinicians = await knex("users")
       .select("users.id", "users.name", "users.email", "role.role_type")
       .join("role", "users.id", "role.user_id")
       .whereIn("users.id", dr_ids)
       .where("role.role_type", "clinician")
       .where("users.is_active", true);
 
-    console.log("✅ Valid doctors found:", validDoctors.length);
+    console.log("✅ Valid clinicians found:", validClinicians.length);
     console.log(
-      "   Doctor details:",
-      validDoctors.map((d) => ({ id: d.id, name: d.name, role: d.role_type }))
+      "   Clinician details:",
+      validClinicians.map((d) => ({
+        id: d.id,
+        name: d.name,
+        role: d.role_type,
+      }))
     );
 
-    if (validDoctors.length !== dr_ids.length) {
-      const foundDoctorIds = validDoctors.map((d) => d.id);
-      const missingDoctors = dr_ids.filter(
-        (id) => !foundDoctorIds.includes(id)
+    if (validClinicians.length !== dr_ids.length) {
+      const foundClinicianIds = validClinicians.map((d) => d.id);
+      const missingClinicians = dr_ids.filter(
+        (id) => !foundClinicianIds.includes(id)
       );
       return res.status(400).json({
         ok: false,
-        message: "One or more doctor IDs are invalid or not doctors",
-        missing_doctors: missingDoctors,
-        valid_doctors: foundDoctorIds,
+        message: "One or more clinician IDs are invalid or not clinicians",
+        missing_clinicians: missingClinicians,
+        valid_clinicians: foundClinicianIds,
       });
     }
+
+    // Get patient details for notification
+    const patientDetails = await knex("users")
+      .select("id", "name", "email", "phoneNumber", "organization_id")
+      .where("id", patient_id)
+      .first();
+
+    console.log("👤 Patient details:", patientDetails);
 
     // Start transaction to ensure atomicity
     const result = await knex.transaction(async (trx) => {
@@ -134,52 +146,89 @@ router.post("/test-alert", async (req, res) => {
 
       console.log("📝 Alert inserted with ID:", alertId);
 
-      // Insert assignments for each doctor
-      const assignments = dr_ids.map((doctor_id) => ({
+      // Insert assignments for each clinician - UPDATED WITH READ STATUS
+      const assignments = dr_ids.map((clinician_id) => ({
         alert_id: alertId,
-        doctor_id,
+        doctor_id: clinician_id,
+        read_status: false,
+        read_at: null,
       }));
       await trx("alert_assignments").insert(assignments);
 
-      // Fetch the alert for response/notification
-      const newAlert = await trx("alerts").where("id", alertId).first();
-      return { alertId, newAlert };
+      // Fetch the complete alert with patient details for response/notification
+      const newAlert = await trx("alerts")
+        .select(
+          "alerts.*",
+          "patients.name as patient_name",
+          "patients.email as patient_email",
+          "patients.phoneNumber as patient_phone",
+          "patients.organization_id as patient_organization_id"
+        )
+        .leftJoin("users as patients", "alerts.user_id", "patients.id")
+        .where("alerts.id", alertId)
+        .first();
+
+      return { alertId, newAlert, patientDetails };
     });
 
-    // Send WebSocket notifications to all doctors
+    // Send WebSocket notifications to all clinicians
     const io = getIO();
-    console.log("📡 Sending WebSocket notifications to doctors:", dr_ids);
+    console.log("📡 Sending WebSocket notifications to clinicians:", dr_ids);
     console.log(
       "📊 Currently connected sockets:",
       Array.from(userSockets.entries())
     );
 
     let notificationsSent = 0;
-    dr_ids.forEach((doctor_id) => {
-      const doctorSocketId = userSockets.get(doctor_id.toString());
-      console.log(`   Checking doctor ${doctor_id} - socket:`, doctorSocketId);
 
-      if (doctorSocketId) {
-        io.to(doctorSocketId).emit("new_alert", {
-          alert: result.newAlert,
-          patient_id,
+    // Send notifications to each clinician
+    for (const clinician_id of dr_ids) {
+      const clinicianSocketId = userSockets.get(clinician_id.toString());
+      console.log(
+        `   Checking clinician ${clinician_id} - socket:`,
+        clinicianSocketId
+      );
+
+      if (clinicianSocketId) {
+        // Get updated unread count for this clinician
+        const unreadCount = await knex("alert_assignments")
+          .where("doctor_id", clinician_id)
+          .andWhere("read_status", false)
+          .count("id as count")
+          .first();
+
+        io.to(clinicianSocketId).emit("new_alert", {
+          alert: {
+            ...result.newAlert,
+            read_status: false,
+            assignment_id: clinician_id,
+          },
+          patient: {
+            id: patientDetails.id,
+            name: patientDetails.name,
+            email: patientDetails.email,
+            phoneNumber: patientDetails.phoneNumber,
+            organization_id: patientDetails.organization_id,
+          },
+          unread_count: parseInt(unreadCount?.count) || 0,
           timestamp: new Date(),
         });
-        console.log(`   ✅ Notification sent to doctor ${doctor_id}`);
+        console.log(`   ✅ Notification sent to clinician ${clinician_id}`);
         notificationsSent++;
       } else {
         console.log(
-          `   ❌ Doctor ${doctor_id} not connected - no active socket`
+          `   ❌ Clinician ${clinician_id} not connected - no active socket`
         );
       }
-    });
+    }
 
     res.status(201).json({
       ok: true,
-      message: `Alert created. Notifications sent to ${notificationsSent}/${dr_ids.length} doctors`,
+      message: `Alert created. Notifications sent to ${notificationsSent}/${dr_ids.length} clinicians`,
       alert: result.newAlert,
+      patient: result.patientDetails,
       notifications_sent: notificationsSent,
-      total_doctors: dr_ids.length,
+      total_clinicians: dr_ids.length,
     });
   } catch (error) {
     console.error("❌ Error creating alert:", error);
@@ -188,7 +237,6 @@ router.post("/test-alert", async (req, res) => {
       .json({ ok: false, message: "Server error", error: error.message });
   }
 });
-
 // Original alert route (with auth)
 router.post("/", authRequired, async (req, res) => {
   const { dr_ids, type, desc } = req.body;
@@ -196,7 +244,7 @@ router.post("/", authRequired, async (req, res) => {
 
   console.log("🚨 Alert creation request received:");
   console.log("   Patient ID:", patient_id);
-  console.log("   Doctor IDs:", dr_ids);
+  console.log("   Clinician IDs:", dr_ids);
   console.log("   Alert Type:", type);
   console.log("   Description:", desc);
 
@@ -216,22 +264,30 @@ router.post("/", authRequired, async (req, res) => {
   }
 
   try {
-    // Verify all dr_ids exist and are doctors by checking the role table
-    const validDoctors = await knex("users")
+    // Verify all dr_ids exist and are clinicians
+    const validClinicians = await knex("users")
       .select("users.id", "users.name", "users.email", "role.role_type")
       .join("role", "users.id", "role.user_id")
       .whereIn("users.id", dr_ids)
-      .where("role.role_type", "doctor")
+      .where("role.role_type", "clinician")
       .where("users.is_active", true);
 
-    console.log("✅ Valid doctors found:", validDoctors.length);
+    console.log("✅ Valid clinicians found:", validClinicians.length);
 
-    if (validDoctors.length !== dr_ids.length) {
+    if (validClinicians.length !== dr_ids.length) {
       return res.status(400).json({
         ok: false,
-        message: "One or more doctor IDs are invalid or not doctors",
+        message: "One or more clinician IDs are invalid or not clinicians",
       });
     }
+
+    // Get patient details for notification
+    const patientDetails = await knex("users")
+      .select("id", "name", "email", "phoneNumber", "organization_id")
+      .where("id", patient_id)
+      .first();
+
+    console.log("👤 Patient details:", patientDetails);
 
     // Start transaction to ensure atomicity
     const result = await knex.transaction(async (trx) => {
@@ -244,49 +300,357 @@ router.post("/", authRequired, async (req, res) => {
         })
         .returning("id");
 
-      // Insert assignments for each doctor
-      const assignments = dr_ids.map((doctor_id) => ({
+      // Insert assignments for each clinician - UPDATED WITH READ STATUS
+      const assignments = dr_ids.map((clinician_id) => ({
         alert_id: alertId,
-        doctor_id,
+        doctor_id: clinician_id,
+        read_status: false,
+        read_at: null,
       }));
       await trx("alert_assignments").insert(assignments);
 
-      // Fetch the alert for response/notification
-      const newAlert = await trx("alerts").where("id", alertId).first();
-      return { alertId, newAlert };
+      // Fetch the complete alert with patient details for response/notification
+      const newAlert = await trx("alerts")
+        .select(
+          "alerts.*",
+          "patients.name as patient_name",
+          "patients.email as patient_email",
+          "patients.phoneNumber as patient_phone",
+          "patients.organization_id as patient_organization_id"
+        )
+        .leftJoin("users as patients", "alerts.user_id", "patients.id")
+        .where("alerts.id", alertId)
+        .first();
+
+      return { alertId, newAlert, patientDetails };
     });
 
-    // Send WebSocket notifications to all doctors
+    // Send WebSocket notifications to all clinicians
     const io = getIO();
-    console.log("📡 Sending WebSocket notifications to doctors:", dr_ids);
+    console.log("📡 Sending WebSocket notifications to clinicians:", dr_ids);
 
     let notificationsSent = 0;
-    dr_ids.forEach((doctor_id) => {
-      const doctorSocketId = userSockets.get(doctor_id.toString());
-      if (doctorSocketId) {
-        io.to(doctorSocketId).emit("new_alert", {
-          alert: result.newAlert,
-          patient_id,
+
+    // Send notifications to each clinician
+    for (const clinician_id of dr_ids) {
+      const clinicianSocketId = userSockets.get(clinician_id.toString());
+      if (clinicianSocketId) {
+        // Get updated unread count for this clinician
+        const unreadCount = await knex("alert_assignments")
+          .where("doctor_id", clinician_id)
+          .andWhere("read_status", false)
+          .count("id as count")
+          .first();
+
+        io.to(clinicianSocketId).emit("new_alert", {
+          alert: {
+            ...result.newAlert,
+            read_status: false,
+            assignment_id: clinician_id,
+          },
+          patient: {
+            id: patientDetails.id,
+            name: patientDetails.name,
+            email: patientDetails.email,
+            phoneNumber: patientDetails.phoneNumber,
+            organization_id: patientDetails.organization_id,
+          },
+          unread_count: parseInt(unreadCount?.count) || 0,
           timestamp: new Date(),
         });
-        console.log(`   ✅ Notification sent to doctor ${doctor_id}`);
+        console.log(`   ✅ Notification sent to clinician ${clinician_id}`);
         notificationsSent++;
       } else {
         console.log(
-          `   ❌ Doctor ${doctor_id} not connected; alert saved but not notified in real-time`
+          `   ❌ Clinician ${clinician_id} not connected; alert saved but not notified in real-time`
         );
       }
-    });
+    }
 
     res.status(201).json({
       ok: true,
-      message: `Alert created. Notifications sent to ${notificationsSent}/${dr_ids.length} doctors`,
+      message: `Alert created. Notifications sent to ${notificationsSent}/${dr_ids.length} clinicians`,
       alert: result.newAlert,
+      patient: result.patientDetails,
     });
   } catch (error) {
     console.error("Error creating alert:", error);
     res.status(500).json({ ok: false, message: "Server error" });
   }
 });
+// Get unread alerts count for notification badge
+router.get("/unread-count", authRequired, async (req, res) => {
+  const clinician_id = req.user.id;
 
+  try {
+    // Verify the user is a clinician
+    const clinicianRole = await knex("role")
+      .where("user_id", clinician_id)
+      .andWhere("role_type", "clinician")
+      .first();
+
+    if (!clinicianRole) {
+      return res.status(403).json({
+        ok: false,
+        message: "Access denied. User is not a clinician",
+      });
+    }
+
+    const unreadCount = await knex("alert_assignments")
+      .where("doctor_id", clinician_id)
+      .andWhere("read_status", false)
+      .count("id as count")
+      .first();
+
+    res.json({
+      ok: true,
+      unread_count: parseInt(unreadCount?.count) || 0,
+    });
+  } catch (error) {
+    console.error("Error fetching unread count:", error);
+    res
+      .status(500)
+      .json({ ok: false, message: "Server error", error: error.message });
+  }
+});
+// Get all alerts for a clinician (with read status)
+router.get("/my-alerts", authRequired, async (req, res) => {
+  const clinician_id = req.user.id;
+
+  try {
+    // Verify the user is a clinician
+    const clinicianRole = await knex("role")
+      .where("user_id", clinician_id)
+      .andWhere("role_type", "clinician")
+      .first();
+
+    if (!clinicianRole) {
+      return res.status(403).json({
+        ok: false,
+        message: "Access denied. User is not a clinician",
+      });
+    }
+
+    const alerts = await knex("alert_assignments")
+      .select(
+        "alerts.id",
+        "alerts.user_id as patient_id",
+        "alerts.desc",
+        "alerts.type",
+        "alerts.created_at as alert_created_at",
+        "alerts.updated_at as alert_updated_at",
+        "alert_assignments.read_status",
+        "alert_assignments.read_at",
+        "alert_assignments.created_at as assigned_at",
+        "alert_assignments.id as assignment_id",
+        "patients.name as patient_name",
+        "patients.email as patient_email",
+        "patients.phoneNumber as patient_phone",
+        "patients.organization_id as patient_organization_id"
+      )
+      .join("alerts", "alert_assignments.alert_id", "alerts.id")
+      .join("users as patients", "alerts.user_id", "patients.id")
+      .where("alert_assignments.doctor_id", clinician_id)
+      .orderBy("alerts.created_at", "desc");
+
+    // Count unread alerts
+    const unreadCount = await knex("alert_assignments")
+      .where("doctor_id", clinician_id)
+      .andWhere("read_status", false)
+      .count("id as count")
+      .first();
+
+    res.json({
+      ok: true,
+      alerts,
+      unread_count: parseInt(unreadCount?.count) || 0,
+      total_alerts: alerts.length,
+    });
+  } catch (error) {
+    console.error("Error fetching alerts:", error);
+    res
+      .status(500)
+      .json({ ok: false, message: "Server error", error: error.message });
+  }
+});
+// Get only unread alerts for a clinician
+router.get("/my-alerts/unread", authRequired, async (req, res) => {
+  const clinician_id = req.user.id;
+
+  try {
+    // Verify the user is a clinician
+    const clinicianRole = await knex("role")
+      .where("user_id", clinician_id)
+      .andWhere("role_type", "clinician")
+      .first();
+
+    if (!clinicianRole) {
+      return res.status(403).json({
+        ok: false,
+        message: "Access denied. User is not a clinician",
+      });
+    }
+
+    const unreadAlerts = await knex("alert_assignments")
+      .select(
+        "alerts.id",
+        "alerts.user_id as patient_id",
+        "alerts.desc",
+        "alerts.type",
+        "alerts.created_at as alert_created_at",
+        "alerts.updated_at as alert_updated_at",
+        "alert_assignments.read_status",
+        "alert_assignments.read_at",
+        "alert_assignments.created_at as assigned_at",
+        "alert_assignments.id as assignment_id",
+        "patients.name as patient_name",
+        "patients.email as patient_email",
+        "patients.phoneNumber as patient_phone",
+        "patients.organization_id as patient_organization_id"
+      )
+      .join("alerts", "alert_assignments.alert_id", "alerts.id")
+      .join("users as patients", "alerts.user_id", "patients.id")
+      .where("alert_assignments.doctor_id", clinician_id)
+      .andWhere("alert_assignments.read_status", false)
+      .orderBy("alerts.created_at", "desc");
+
+    res.json({
+      ok: true,
+      alerts: unreadAlerts,
+      count: unreadAlerts.length,
+    });
+  } catch (error) {
+    console.error("Error fetching unread alerts:", error);
+    res
+      .status(500)
+      .json({ ok: false, message: "Server error", error: error.message });
+  }
+});
+// Mark a specific alert as read
+router.patch("/:alert_id/read", authRequired, async (req, res) => {
+  const clinician_id = req.user.id;
+  const { alert_id } = req.params;
+
+  try {
+    // Verify the alert assignment exists and belongs to this clinician
+    const assignment = await knex("alert_assignments")
+      .where("alert_id", alert_id)
+      .andWhere("doctor_id", clinician_id)
+      .first();
+
+    if (!assignment) {
+      return res.status(404).json({
+        ok: false,
+        message: "Alert not found or you don't have permission to access it",
+      });
+    }
+
+    // If already read, return success
+    if (assignment.read_status) {
+      return res.json({
+        ok: true,
+        message: "Alert is already marked as read",
+      });
+    }
+
+    // Mark as read
+    await knex("alert_assignments")
+      .where("alert_id", alert_id)
+      .andWhere("doctor_id", clinician_id)
+      .update({
+        read_status: true,
+        read_at: knex.fn.now(),
+        updated_at: knex.fn.now(),
+      });
+
+    // Get updated unread count
+    const unreadCount = await knex("alert_assignments")
+      .where("doctor_id", clinician_id)
+      .andWhere("read_status", false)
+      .count("id as count")
+      .first();
+
+    // Send WebSocket update for real-time badge update
+    const io = getIO();
+    const clinicianSocketId = userSockets.get(clinician_id.toString());
+    if (clinicianSocketId) {
+      io.to(clinicianSocketId).emit("alert_read", {
+        alert_id: alert_id,
+        unread_count: parseInt(unreadCount?.count) || 0,
+      });
+    }
+
+    res.json({
+      ok: true,
+      message: "Alert marked as read successfully",
+      unread_count: parseInt(unreadCount?.count) || 0,
+    });
+  } catch (error) {
+    console.error("Error marking alert as read:", error);
+    res
+      .status(500)
+      .json({ ok: false, message: "Server error", error: error.message });
+  }
+});
+// Mark all alerts as read for a clinician
+router.patch("/mark-all-read", authRequired, async (req, res) => {
+  const clinician_id = req.user.id;
+
+  try {
+    // Count unread alerts before update
+    const unreadCount = await knex("alert_assignments")
+      .where("doctor_id", clinician_id)
+      .andWhere("read_status", false)
+      .count("id as count")
+      .first();
+
+    const countToUpdate = parseInt(unreadCount?.count) || 0;
+
+    if (countToUpdate === 0) {
+      return res.json({
+        ok: true,
+        message: "No unread alerts to mark as read",
+        updated_count: 0,
+      });
+    }
+
+    // Mark all unread alerts as read
+    const updatedCount = await knex("alert_assignments")
+      .where("doctor_id", clinician_id)
+      .andWhere("read_status", false)
+      .update({
+        read_status: true,
+        read_at: knex.fn.now(),
+        updated_at: knex.fn.now(),
+      });
+
+    // Get updated unread count (should be 0)
+    const newUnreadCount = await knex("alert_assignments")
+      .where("doctor_id", clinician_id)
+      .andWhere("read_status", false)
+      .count("id as count")
+      .first();
+
+    // Send WebSocket update
+    const io = getIO();
+    const clinicianSocketId = userSockets.get(clinician_id.toString());
+    if (clinicianSocketId) {
+      io.to(clinicianSocketId).emit("all_alerts_read", {
+        unread_count: 0,
+      });
+    }
+
+    res.json({
+      ok: true,
+      message: `Successfully marked ${updatedCount} alerts as read`,
+      updated_count: updatedCount,
+      unread_count: 0,
+    });
+  } catch (error) {
+    console.error("Error marking all alerts as read:", error);
+    res
+      .status(500)
+      .json({ ok: false, message: "Server error", error: error.message });
+  }
+});
 module.exports = router;
