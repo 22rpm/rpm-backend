@@ -16,6 +16,8 @@ const swaggerUi = require("swagger-ui-express");
 const settingsRoutes = require("./routes/settings.route");
 const orgRoutes = require("./routes/org.routes");
 const alertRoutes = require("./routes/alert.route"); // Add this
+const drRoutes = require("./routes/doctor.routes");
+const patientRoutes = require("./routes/patient.routes");
 const fs = require("fs");
 const path = require("path");
 
@@ -53,7 +55,9 @@ app.use("/api/dev-data", devDataRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/settings", settingsRoutes);
 app.use("/api/alerts", alertRoutes); // Add this after other routes
+app.use("/api/doctor", drRoutes);
 app.use("/api/org", orgRoutes);
+app.use("/api/patient", patientRoutes);
 // ✅ Load swagger.json
 const swaggerDocument = JSON.parse(
   fs.readFileSync(path.join(__dirname, "docs/swagger.json"), "utf8")

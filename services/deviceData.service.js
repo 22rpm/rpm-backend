@@ -1,26 +1,20 @@
 const db = require("../config/db"); // your MySQL pool
 
-const createDeviceDataService = async (username, devId, bpData) => {
-  // ensure device belongs to user
-  const [devices] = await db.query(
-    "SELECT id FROM devices WHERE id = ? AND username = ?",
-    [devId, username]
-  );
+const createDeviceDataService = async (userId, devId, devType, deviceData) => {
+  // ✅ NO DEVICE VERIFICATION - directly insert data
 
-  if (devices.length === 0) {
-    throw new Error("Device not found or does not belong to this user");
-  }
-
-  // insert reading into dev_data
+  // ✅ INSERT WITH USER_ID AND DEV_TYPE
   const [result] = await db.query(
-    "INSERT INTO dev_data (dev_id, data) VALUES (?, ?)",
-    [devId, JSON.stringify(bpData)]
+    "INSERT INTO dev_data (dev_id, user_id, dev_type, data) VALUES (?, ?, ?, ?)",
+    [devId, userId, devType, JSON.stringify(deviceData)]
   );
 
   return {
     insertId: result.insertId,
     devId,
-    bpData,
+    devType,
+    userId,
+    deviceData,
   };
 };
 
@@ -83,7 +77,6 @@ const saveDeviceDataService = async (user, devId, data) => {
 };
 
 const saveGenericDeviceDataService = async (user, devType, devName, data) => {
-  
   const username = user.email || user.id; // Depends on what’s in the token
 
   // Validate devType
@@ -121,7 +114,13 @@ const saveGenericDeviceDataService = async (user, devType, devName, data) => {
     data,
   };
 };
-const getGenericDeviceDataService = async (user, devType, devName, limit, offset) => {
+const getGenericDeviceDataService = async (
+  user,
+  devType,
+  devName,
+  limit,
+  offset
+) => {
   const username = user.email || user.id; // Depends on what’s in the token
 
   // Validate devType
@@ -169,7 +168,7 @@ const getGenericDeviceDataService = async (user, devType, devName, limit, offset
   );
 
   // Parse JSON data
-  const parsedData = dataRows.map(row => ({
+  const parsedData = dataRows.map((row) => ({
     id: row.id,
     deviceId: row.dev_id,
     data: JSON.parse(row.data),
@@ -187,4 +186,61 @@ const getGenericDeviceDataService = async (user, devType, devName, limit, offset
     hasMore: offset + limit < countResult.total,
   };
 };
-module.exports = { createDeviceDataService, createBPDataService ,saveGenericDeviceDataService,saveDeviceDataService,getGenericDeviceDataService};
+
+const createDeviceService = async (username, name, dev_type) => {
+  const [result] = await db.query(
+    "INSERT INTO devices (username, name, dev_type) VALUES (?, ?, ?)",
+    [username, name, dev_type]
+  );
+
+  return {
+    id: result.insertId,
+    username,
+    name,
+    dev_type,
+  };
+};
+
+const getPatientBPReadingsService = async (patientId) => {
+  // Get BP readings from dev_data table
+  const [readings] = await db.query(
+    `SELECT 
+      id,
+      data,
+      created_at as timestamp,
+      DATE(created_at) as date,
+      TIME(created_at) as time
+     FROM dev_data 
+     WHERE user_id = ? AND dev_type = 'bp'
+     ORDER BY created_at DESC
+     LIMIT 50`, // Limit to last 50 readings
+    [patientId]
+  );
+
+  // Transform data to match frontend structure
+  const formattedReadings = readings.map((reading) => {
+    const data = JSON.parse(reading.data);
+    return {
+      id: reading.id,
+      systolic: data.systolic || 0,
+      diastolic: data.diastolic || 0,
+      bpm: data.pulse || data.heartRate || 0,
+      mean: data.meanPressure || data.map || null,
+      timestamp: reading.timestamp,
+      date: reading.date,
+      time: reading.time,
+    };
+  });
+
+  return formattedReadings;
+};
+
+module.exports = {
+  getPatientBPReadingsService,
+  createDeviceService,
+  createDeviceDataService,
+  createBPDataService,
+  saveGenericDeviceDataService,
+  saveDeviceDataService,
+  getGenericDeviceDataService,
+};
