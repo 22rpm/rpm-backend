@@ -7,7 +7,7 @@ const {
   createBPDataController,
   storeDeviceDataController,
   storeGenericDeviceDataController,
-getDeviceDataController,
+  getDeviceDataController,
   getGenericDeviceDataController,
   createDeviceController,
   getPatientBPReadingsController,
@@ -30,7 +30,11 @@ router.post("/devices/generic", authRequired, storeGenericDeviceDataController);
 
 // GET /api/devices/data - Retrieve generic device data (uses query params: devType, devName, limit, offset)
 router.get("/devices/data", authRequired, getGenericDeviceDataController);
-router.get("/devices/getUserReadingData", authRequired, getDeviceDataController);
+router.get(
+  "/devices/getUserReadingData",
+  authRequired,
+  getDeviceDataController
+);
 
 // TEST ROUTE - No authentication required
 router.post("/test/devices/data", async (req, res) => {
@@ -41,7 +45,7 @@ router.post("/test/devices/data", async (req, res) => {
     if (!userId || !devType || !data) {
       return res.status(400).json({
         success: false,
-        message: "Missing required fields: userId, devType, data"
+        message: "Missing required fields: userId, devType, data",
       });
     }
 
@@ -61,10 +65,9 @@ router.post("/test/devices/data", async (req, res) => {
         userId,
         devId,
         devType,
-        data
-      }
+        data,
+      },
     });
-
   } catch (err) {
     console.error("❌ Error storing test device data:", err);
     res.status(500).json({
@@ -73,9 +76,6 @@ router.post("/test/devices/data", async (req, res) => {
     });
   }
 });
-
-
-
 
 // TEST ROUTES - No authentication required
 
