@@ -11,6 +11,7 @@ const {
   getGenericDeviceDataController,
   createDeviceController,
   getPatientBPReadingsController,
+  getLatestDeviceDataController,
   getPatientLatestBPController,
 } = require("../controllers/devicedata.controller");
 const { authRequired } = require("../middleware/auth");
@@ -35,6 +36,9 @@ router.get(
   authRequired,
   getDeviceDataController
 );
+
+
+router.get("/devices/data/latest", authRequired, getLatestDeviceDataController); // Add this
 
 // TEST ROUTE - No authentication required
 router.post("/test/devices/data", async (req, res) => {

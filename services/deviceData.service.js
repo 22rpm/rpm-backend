@@ -352,8 +352,106 @@ const getDeviceDataService = async (userId, deviceType, days) => {
     throw error;
   }
 };
+
+const getLatestDeviceDataService = async (userId, deviceType) => {
+  const serviceStartTime = Date.now();
+  const serviceId = Math.random().toString(36).substring(2, 10);
+
+  console.log(`🛠️ [SERVICE-${serviceId}] FETCHING LATEST DEVICE DATA`, {
+    userId,
+    deviceType,
+    timestamp: new Date().toISOString(),
+  });
+
+  try {
+    console.log(`🗄️ [SERVICE-${serviceId}] EXECUTING LATEST DATA QUERY`, {
+      query:
+        "SELECT * FROM dev_data WHERE user_id = ? AND dev_type = ? ORDER BY created_at DESC LIMIT 1",
+      params: {
+        userId,
+        deviceType,
+      },
+    });
+
+    const [rows] = await db.query(
+      "SELECT * FROM dev_data WHERE user_id = ? AND dev_type = ? ORDER BY created_at DESC LIMIT 1",
+      [userId, deviceType]
+    );
+
+    const serviceTime = Date.now() - serviceStartTime;
+
+    if (rows.length > 0) {
+      const row = rows[0];
+
+      console.log(`💾 [SERVICE-${serviceId}] LATEST DATA FOUND`, {
+        processingTime: `${serviceTime}ms`,
+        recordId: row.id,
+        createdAt: row.created_at,
+        deviceType: row.dev_type,
+      });
+
+      // Parse JSON data
+      let parsedData;
+      try {
+        parsedData =
+          typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+      } catch (parseError) {
+        console.warn(`⚠️ [SERVICE-${serviceId}] DATA PARSE ERROR`, {
+          rowId: row.id,
+          error: parseError.message,
+        });
+        parsedData = { error: "Failed to parse data" };
+      }
+
+      const formattedData = {
+        id: row.id,
+        devId: row.dev_id,
+        devType: row.dev_type,
+        userId: row.user_id,
+        data: parsedData,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      };
+
+      console.log(`🎯 [SERVICE-${serviceId}] LATEST DATA RETURNED`, {
+        totalTime: `${serviceTime}ms`,
+        hasData: true,
+      });
+
+      return formattedData;
+    } else {
+      console.log(`ℹ️ [SERVICE-${serviceId}] NO DATA FOUND`, {
+        processingTime: `${serviceTime}ms`,
+        userId,
+        deviceType,
+      });
+
+      return null;
+    }
+  } catch (error) {
+    const serviceErrorTime = Date.now() - serviceStartTime;
+
+    console.error(`💥 [SERVICE-${serviceId}] LATEST DATA FETCH ERROR`, {
+      processingTime: `${serviceErrorTime}ms`,
+      error: {
+        message: error.message,
+        code: error.code,
+        errno: error.errno,
+        sqlState: error.sqlState,
+        sqlMessage: error.sqlMessage,
+      },
+      queryParams: {
+        userId,
+        deviceType,
+      },
+    });
+
+    throw error;
+  }
+};
 module.exports = {
   getDeviceDataService,
+  getLatestDeviceDataService,
   getPatientBPReadingsService,
   createDeviceService,
   createDeviceDataService,

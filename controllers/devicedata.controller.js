@@ -7,6 +7,7 @@ const {
   createDeviceService,
   getPatientBPReadingsService,
   getDeviceDataService,
+  getLatestDeviceDataService,
 } = require("../services/deviceData.service");
 
 const createDeviceDataController = async (req, res) => {
@@ -304,7 +305,115 @@ const getDeviceDataController = async (req, res) => {
     );
   }
 };
+
+
+const getLatestDeviceDataController = async (req, res) => {
+  const requestId = Math.random().toString(36).substring(2, 15);
+  const startTime = Date.now();
+
+  console.log(`📥 [${requestId}] GET LATEST DEVICE DATA REQUEST STARTED`, {
+    timestamp: new Date().toISOString(),
+    user: req.user
+      ? { id: req.user.id, username: req.user.username }
+      : "no-user",
+    query: req.query,
+    headers: {
+      "user-agent": req.get("user-agent"),
+    },
+  });
+
+  try {
+    const user = req.user;
+    const { deviceType } = req.query;
+
+    console.log(`🔍 [${requestId}] LATEST DATA PARAMETERS`, {
+      userId: user.id,
+      deviceType,
+      timestamp: new Date().toISOString(),
+    });
+
+    // Validation
+    if (!deviceType) {
+      console.warn(`⚠️ [${requestId}] MISSING DEVICE TYPE FOR LATEST DATA`);
+      return res.status(400).json({
+        success: false,
+        message: "deviceType is required",
+      });
+    }
+
+    console.log(`🚀 [${requestId}] FETCHING LATEST DEVICE DATA`, {
+      userId: user.id,
+      deviceType,
+    });
+
+    const result = await getLatestDeviceDataService(user.id, deviceType);
+
+    const processingTime = Date.now() - startTime;
+
+    if (result) {
+      console.log(`✅ [${requestId}] LATEST DEVICE DATA FETCHED SUCCESSFULLY`, {
+        processingTime: `${processingTime}ms`,
+        userId: user.id,
+        deviceType,
+        recordId: result.id,
+        timestamp: new Date().toISOString(),
+      });
+
+      res.status(200).json({
+        success: true,
+        message: "Latest device data retrieved successfully",
+        data: result,
+      });
+    } else {
+      console.log(`ℹ️ [${requestId}] NO LATEST DATA FOUND`, {
+        processingTime: `${processingTime}ms`,
+        userId: user.id,
+        deviceType,
+      });
+
+      res.status(200).json({
+        success: true,
+        message: "No device data found",
+        data: null,
+      });
+    }
+  } catch (err) {
+    const errorTime = Date.now() - startTime;
+
+    console.error(`❌ [${requestId}] ERROR FETCHING LATEST DEVICE DATA`, {
+      processingTime: `${errorTime}ms`,
+      error: {
+        message: err.message,
+        stack: err.stack,
+        code: err.code,
+        sqlMessage: err.sqlMessage,
+      },
+      timestamp: new Date().toISOString(),
+      query: req.query,
+    });
+
+    if (err.code) {
+      console.error(`🗄️ [${requestId}] DATABASE ERROR DETAILS`, {
+        errorCode: err.code,
+        errno: err.errno,
+        sqlState: err.sqlState,
+        sqlMessage: err.sqlMessage,
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: err.message || "Internal Server Error",
+    });
+  } finally {
+    const totalTime = Date.now() - startTime;
+    console.log(
+      `⏱️ [${requestId}] LATEST DATA REQUEST COMPLETED - Total time: ${totalTime}ms`
+    );
+  }
+};
 module.exports = {
+  getLatestDeviceDataController,
   getDeviceDataController,
   getPatientBPReadingsController,
   createDeviceDataController,
