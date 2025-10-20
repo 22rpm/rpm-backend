@@ -165,15 +165,10 @@ class MessageService {
   }
   async getPatients(doctorId) {
     try {
-      return await db("users")
-        .select(
-          "users.id",
-          "users.name",
-          "users.email",
-          "dev_data.data as health_data"
-        )
-        .leftJoin("role", "users.id", "role.user_id")
-        .leftJoin("dev_data", "users.id", "dev_data.dev_id")
+      // First, get all patients assigned to this doctor
+      const patients = await db("users")
+        .select("users.id", "users.name", "users.email")
+        .innerJoin("role", "users.id", "role.user_id")
         .innerJoin(
           "patient_doctor_assignments",
           "users.id",
@@ -182,8 +177,37 @@ class MessageService {
         .where("role.role_type", "patient")
         .where("patient_doctor_assignments.doctor_id", doctorId)
         .orderBy("users.name");
+
+      // For each patient, get their latest BP reading
+      const patientsWithData = await Promise.all(
+        patients.map(async (patient) => {
+          const latestBP = await db("dev_data")
+            .select("data", "created_at")
+            .where("user_id", patient.id)
+            .where("dev_type", "bp")
+            .orderBy("created_at", "desc")
+            .first();
+
+          // Safely parse data if it's a string, otherwise just return it
+          let latestBPData = null;
+          if (latestBP) {
+            latestBPData =
+              typeof latestBP.data === "string"
+                ? JSON.parse(latestBP.data)
+                : latestBP.data;
+          }
+
+          return {
+            ...patient,
+            latest_bp_data: latestBPData,
+            last_reading_time: latestBP ? latestBP.created_at : null,
+          };
+        })
+      );
+
+      return patientsWithData;
     } catch (error) {
-      console.log(error);
+      console.error("Error in getPatients:", error);
       throw error;
     }
   }

@@ -114,30 +114,54 @@ class MessageController {
       console.log("getPatients called", req.user);
 
       // Get doctor ID from the authenticated user
-      const doctorId = req.user.id; // Assuming req.user contains the logged-in doctor's info
+      const doctorId = req.user.id;
 
       const patients = await messageService.getPatients(doctorId);
 
       // Process health data and add status
       const processedPatients = patients.map((patient) => {
-        let status = "Normal";
-        let heartRate = 72;
-        let lastReading = "No data";
+        let status = "No Data";
+        let heartRate = "--";
+        let lastReading = "No readings yet";
 
-        if (patient.health_data) {
-          const healthData =
-            typeof patient.health_data === "string"
-              ? JSON.parse(patient.health_data)
-              : patient.health_data;
+        if (patient.latest_bp_data) {
+          const bpData = patient.latest_bp_data;
 
-          heartRate = healthData.heartRate || 72;
-          lastReading = healthData.lastReading || "No data";
+          // Extract heart rate (pulse) from BP data
+          heartRate = bpData.pulse || bpData.heartRate || "--";
 
-          // Determine status based on heart rate
-          if (heartRate > 90) {
-            status = "Alert";
-          } else if (heartRate < 50 || heartRate > 100) {
+          // Format last reading time
+          lastReading = patient.last_reading_time
+            ? new Date(patient.last_reading_time).toLocaleDateString("en-US", {
+                month: "short",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+              })
+            : "No readings yet";
+
+          // Determine status based on BP values
+          const systolic = bpData.systolic || 0;
+          const diastolic = bpData.diastolic || 0;
+
+          if (systolic === 0 && diastolic === 0) {
+            status = "No Data";
+          } else if (systolic < 120 && diastolic < 80) {
+            status = "Normal";
+          } else if (systolic <= 139 && diastolic <= 89) {
+            status = "Warning";
+          } else {
             status = "Critical";
+          }
+
+          // If we have pulse data, also consider it for status
+          if (heartRate !== "--") {
+            const pulse = parseInt(heartRate);
+            if (pulse < 50 || pulse > 100) {
+              status = "Critical";
+            } else if (pulse > 90) {
+              status = status === "Normal" ? "Warning" : status;
+            }
           }
         }
 
@@ -146,8 +170,9 @@ class MessageController {
           name: patient.name,
           email: patient.email,
           status,
-          heartRate,
+          heartRate: heartRate === "--" ? "--" : `${heartRate} BPM`,
           lastReading,
+          rawData: patient.latest_bp_data, // optional: include for debugging
         };
       });
 
