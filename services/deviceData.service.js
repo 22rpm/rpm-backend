@@ -1,21 +1,39 @@
 const db = require("../config/db"); // your MySQL pool
 
+// Service
 const createDeviceDataService = async (userId, devId, devType, deviceData) => {
-  // ✅ NO DEVICE VERIFICATION - directly insert data
-
-  // ✅ INSERT WITH USER_ID AND DEV_TYPE
-  const [result] = await db.query(
-    "INSERT INTO dev_data (dev_id, user_id, dev_type, data) VALUES (?, ?, ?, ?)",
-    [devId, userId, devType, JSON.stringify(deviceData)]
-  );
-
-  return {
-    insertId: result.insertId,
+  console.log("🛠️ createDeviceDataService called with:", {
+    userId,
     devId,
     devType,
-    userId,
     deviceData,
-  };
+  });
+
+  try {
+    console.log("💾 Inserting device data into database...");
+
+    const [result] = await db.query(
+      "INSERT INTO dev_data (dev_id, user_id, dev_type, data) VALUES (?, ?, ?, ?)",
+      [devId, userId, devType, JSON.stringify(deviceData)]
+    );
+
+    console.log("✅ Database insert successful. Result:", result);
+
+    const response = {
+      insertId: result.insertId,
+      devId,
+      devType,
+      userId,
+      deviceData,
+    };
+
+    console.log("📤 Returning response from service:", response);
+
+    return response;
+  } catch (error) {
+    console.error("❌ Error in createDeviceDataService:", error);
+    throw error;
+  }
 };
 
 const createBPDataService = async (user, bpData) => {
@@ -213,7 +231,7 @@ const getPatientBPReadingsService = async (patientId) => {
      FROM dev_data 
      WHERE user_id = ? AND dev_type = 'bp'
      ORDER BY created_at DESC
-     LIMIT 50`, // Limit to last 50 readings
+     LIMIT 7`, // Limit to last 50 readings
     [patientId]
   );
 

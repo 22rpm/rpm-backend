@@ -8,13 +8,21 @@ const {
   getPatientBPReadingsService,
 } = require("../services/deviceData.service");
 
+
 const createDeviceDataController = async (req, res) => {
   try {
+    console.log("📥 Incoming request to createDeviceDataController");
+
     const user = req.user; // set by authMiddleware
-    const { devId, devType, data } = req.body; // now from request body
+    const { devId, devType, data } = req.body;
+
+    console.log("👤 Authenticated User:", user);
+    console.log("📦 Request Body:", { devId, devType, data });
 
     // call service - passing user.id instead of username
     const result = await createDeviceDataService(user.id, devId, devType, data);
+
+    console.log("✅ Device data created successfully:", result);
 
     res.status(201).json({
       success: true,
@@ -29,6 +37,7 @@ const createDeviceDataController = async (req, res) => {
     });
   }
 };
+
 
 const createBPDataController = async (req, res) => {
   try {
