@@ -7,7 +7,7 @@ const {
   createBPDataController,
   storeDeviceDataController,
   storeGenericDeviceDataController,
-
+getDeviceDataController,
   getGenericDeviceDataController,
   createDeviceController,
   getPatientBPReadingsController,
@@ -30,6 +30,8 @@ router.post("/devices/generic", authRequired, storeGenericDeviceDataController);
 
 // GET /api/devices/data - Retrieve generic device data (uses query params: devType, devName, limit, offset)
 router.get("/devices/data", authRequired, getGenericDeviceDataController);
+router.get("/devices/getUserReadingData", authRequired, getDeviceDataController);
+
 // TEST ROUTE - No authentication required
 router.post("/test/devices/data", async (req, res) => {
   try {

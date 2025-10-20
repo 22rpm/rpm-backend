@@ -6,8 +6,8 @@ const {
   getGenericDeviceDataService,
   createDeviceService,
   getPatientBPReadingsService,
+  getDeviceDataService,
 } = require("../services/deviceData.service");
-
 
 const createDeviceDataController = async (req, res) => {
   try {
@@ -37,7 +37,6 @@ const createDeviceDataController = async (req, res) => {
     });
   }
 };
-
 
 const createBPDataController = async (req, res) => {
   try {
@@ -177,7 +176,136 @@ const getPatientBPReadingsController = async (req, res) => {
   }
 };
 
+const getDeviceDataController = async (req, res) => {
+  const requestId = Math.random().toString(36).substring(2, 15);
+  const startTime = Date.now();
+
+  console.log(`📥 [${requestId}] GET DEVICE DATA REQUEST STARTED`, {
+    timestamp: new Date().toISOString(),
+    user: req.user
+      ? { id: req.user.id, username: req.user.username }
+      : "no-user",
+    query: req.query,
+    headers: {
+      "user-agent": req.get("user-agent"),
+    },
+  });
+
+  try {
+    const user = req.user;
+    const { deviceType, days } = req.query;
+
+    console.log(`🔍 [${requestId}] FETCH PARAMETERS`, {
+      userId: user.id,
+      deviceType,
+      days,
+      timestamp: new Date().toISOString(),
+    });
+
+    // Validation
+    if (!deviceType) {
+      console.warn(`⚠️ [${requestId}] MISSING DEVICE TYPE`);
+      return res.status(400).json({
+        success: false,
+        message: "deviceType is required",
+      });
+    }
+
+    if (!days) {
+      console.warn(`⚠️ [${requestId}] MISSING DAYS PARAMETER`);
+      return res.status(400).json({
+        success: false,
+        message: "days parameter is required",
+      });
+    }
+
+    const daysInt = parseInt(days);
+    if (isNaN(daysInt) || daysInt < 1) {
+      console.warn(`⚠️ [${requestId}] INVALID DAYS PARAMETER`, {
+        providedDays: days,
+        parsedDays: daysInt,
+      });
+
+      return res.status(400).json({
+        success: false,
+        message: "days must be a positive number",
+      });
+    }
+
+    console.log(`🚀 [${requestId}] FETCHING DEVICE DATA`, {
+      userId: user.id,
+      deviceType,
+      days: daysInt,
+    });
+
+    const result = await getDeviceDataService(user.id, deviceType, daysInt);
+
+    const processingTime = Date.now() - startTime;
+
+    console.log(`✅ [${requestId}] DEVICE DATA FETCHED SUCCESSFULLY`, {
+      processingTime: `${processingTime}ms`,
+      userId: user.id,
+      deviceType,
+      days: daysInt,
+      recordsFound: result.length,
+      timestamp: new Date().toISOString(),
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Device data retrieved successfully for last ${daysInt} days`,
+      data: {
+        records: result,
+        summary: {
+          totalRecords: result.length,
+          period: `${daysInt} days`,
+          deviceType: deviceType,
+          dateRange: {
+            from: new Date(
+              Date.now() - daysInt * 24 * 60 * 60 * 1000
+            ).toISOString(),
+            to: new Date().toISOString(),
+          },
+        },
+      },
+    });
+  } catch (err) {
+    const errorTime = Date.now() - startTime;
+
+    console.error(`❌ [${requestId}] ERROR FETCHING DEVICE DATA`, {
+      processingTime: `${errorTime}ms`,
+      error: {
+        message: err.message,
+        stack: err.stack,
+        code: err.code,
+        sqlMessage: err.sqlMessage,
+      },
+      timestamp: new Date().toISOString(),
+      query: req.query,
+    });
+
+    if (err.code) {
+      console.error(`🗄️ [${requestId}] DATABASE ERROR DETAILS`, {
+        errorCode: err.code,
+        errno: err.errno,
+        sqlState: err.sqlState,
+        sqlMessage: err.sqlMessage,
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: err.message || "Internal Server Error",
+    });
+  } finally {
+    const totalTime = Date.now() - startTime;
+    console.log(
+      `⏱️ [${requestId}] GET REQUEST COMPLETED - Total time: ${totalTime}ms`
+    );
+  }
+};
 module.exports = {
+  getDeviceDataController,
   getPatientBPReadingsController,
   createDeviceDataController,
   createDeviceController,

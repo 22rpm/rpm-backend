@@ -253,7 +253,107 @@ const getPatientBPReadingsService = async (patientId) => {
   return formattedReadings;
 };
 
+const getDeviceDataService = async (userId, deviceType, days) => {
+  const serviceStartTime = Date.now();
+  const serviceId = Math.random().toString(36).substring(2, 10);
+
+  console.log(`🛠️ [SERVICE-${serviceId}] STARTING DATA FETCH`, {
+    userId,
+    deviceType,
+    days,
+    timestamp: new Date().toISOString(),
+  });
+
+  try {
+    // Calculate date range
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+    const startDateString = startDate.toISOString().split("T")[0];
+
+    console.log(`🗄️ [SERVICE-${serviceId}] EXECUTING DATABASE QUERY`, {
+      query:
+        "SELECT * FROM dev_data WHERE user_id = ? AND dev_type = ? AND created_at >= ? ORDER BY created_at DESC",
+      params: {
+        userId,
+        deviceType,
+        startDate: startDateString,
+      },
+    });
+
+    const [rows] = await db.query(
+      "SELECT * FROM dev_data WHERE user_id = ? AND dev_type = ? AND created_at >= ? ORDER BY created_at DESC",
+      [userId, deviceType, startDateString]
+    );
+
+    const serviceTime = Date.now() - serviceStartTime;
+
+    console.log(`💾 [SERVICE-${serviceId}] DATABASE QUERY SUCCESSFUL`, {
+      processingTime: `${serviceTime}ms`,
+      recordsFound: rows.length,
+      userId,
+      deviceType,
+      days,
+    });
+
+    // Parse JSON data and format response
+    const formattedData = rows.map((row) => {
+      let parsedData;
+      try {
+        parsedData =
+          typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+      } catch (parseError) {
+        console.warn(`⚠️ [SERVICE-${serviceId}] DATA PARSE ERROR`, {
+          rowId: row.id,
+          error: parseError.message,
+        });
+        parsedData = { error: "Failed to parse data" };
+      }
+
+      return {
+        id: row.id,
+        devId: row.dev_id,
+        devType: row.dev_type,
+        userId: row.user_id,
+        data: parsedData,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      };
+    });
+
+    console.log(`🎯 [SERVICE-${serviceId}] DATA FETCH COMPLETED`, {
+      totalTime: `${serviceTime}ms`,
+      recordsReturned: formattedData.length,
+      dateRange: {
+        from: startDateString,
+        to: new Date().toISOString().split("T")[0],
+      },
+    });
+
+    return formattedData;
+  } catch (error) {
+    const serviceErrorTime = Date.now() - serviceStartTime;
+
+    console.error(`💥 [SERVICE-${serviceId}] DATA FETCH ERROR`, {
+      processingTime: `${serviceErrorTime}ms`,
+      error: {
+        message: error.message,
+        code: error.code,
+        errno: error.errno,
+        sqlState: error.sqlState,
+        sqlMessage: error.sqlMessage,
+      },
+      queryParams: {
+        userId,
+        deviceType,
+        days,
+      },
+    });
+
+    throw error;
+  }
+};
 module.exports = {
+  getDeviceDataService,
   getPatientBPReadingsService,
   createDeviceService,
   createDeviceDataService,
