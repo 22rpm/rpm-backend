@@ -92,6 +92,65 @@ async function addOrganization(req, res) {
   }
 }
 
+async function createUser({
+  username,
+  name,
+  email,
+  password,
+  phoneNumber,
+  organization_id,
+  is_active,
+}) {
+  try {
+    console.log("Creating user in database:", {
+      username,
+      email,
+      organization_id,
+    });
+
+    // For MySQL, we need to insert and then get the last inserted ID
+    const result = await knex("users").insert({
+      username,
+      name,
+      email,
+      password,
+      phoneNumber: phoneNumber || null, // Use the correct column name
+      organization_id,
+      is_active,
+      created_at: new Date(),
+      updated_at: new Date(),
+    });
+
+    console.log("User insert result:", result);
+
+    // For MySQL, result[0] contains the insert ID
+    const userId = result[0];
+
+    if (!userId) {
+      // If we can't get the ID from insert result, query for the user
+      console.log("Getting user ID by querying with email...");
+      const users = await knex("users")
+        .select("id")
+        .where("email", email)
+        .limit(1);
+
+      if (users.length === 0) {
+        throw new Error("Failed to create user or get user ID");
+      }
+
+      const userId = users[0].id;
+      console.log("User ID retrieved from query:", userId);
+      return userId;
+    }
+
+    console.log("User created successfully with ID:", userId);
+    return userId;
+  } catch (error) {
+    console.error("Error in createUser function:", error);
+    throw error;
+  }
+}
+
 async function editOrganization(req, res) {
   try {
     const { id } = req.params;

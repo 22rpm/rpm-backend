@@ -93,27 +93,39 @@ async function createUser({
       organization_id,
     });
 
-    const result = await knex("users")
-      .insert({
-        username,
-        name,
-        email,
-        password,
-        phone_number: phoneNumber || null, // Fixed: changed phoneNumber to phone_number if that's your column name
-        organization_id,
-        is_active,
-        created_at: new Date(),
-        updated_at: new Date(),
-      })
-      .returning("id");
+    // For MySQL, we need to insert and then get the last inserted ID
+    const result = await knex("users").insert({
+      username,
+      name,
+      email,
+      password,
+      phoneNumber: phoneNumber || null, // Use the correct column name
+      organization_id,
+      is_active,
+      created_at: new Date(),
+      updated_at: new Date(),
+    });
 
-    console.log("User creation result:", result);
+    console.log("User insert result:", result);
 
-    // Handle different return formats from different databases
-    const userId = Array.isArray(result) ? result[0]?.id : result?.id;
+    // For MySQL, result[0] contains the insert ID
+    const userId = result[0];
 
     if (!userId) {
-      throw new Error("Failed to get user ID after creation");
+      // If we can't get the ID from insert result, query for the user
+      console.log("Getting user ID by querying with email...");
+      const users = await knex("users")
+        .select("id")
+        .where("email", email)
+        .limit(1);
+
+      if (users.length === 0) {
+        throw new Error("Failed to create user or get user ID");
+      }
+
+      const userId = users[0].id;
+      console.log("User ID retrieved from query:", userId);
+      return userId;
     }
 
     console.log("User created successfully with ID:", userId);
@@ -185,17 +197,15 @@ async function assignRole({ username, userId, role }) {
       throw new Error("User ID is null or undefined when assigning role");
     }
 
-    const result = await knex("role")
-      .insert({
-        username,
-        user_id: userId,
-        role_type: role,
-        created_at: new Date(),
-        updated_at: new Date(),
-      })
-      .returning("id");
+    const result = await knex("role").insert({
+      username,
+      user_id: userId,
+      role_type: role,
+      created_at: new Date(),
+      updated_at: new Date(),
+    });
 
-    console.log("Role assigned successfully, role ID:", result);
+    console.log("Role assigned successfully, insert ID:", result[0]);
     return result;
   } catch (error) {
     console.error("Error in assignRole function:", error);
