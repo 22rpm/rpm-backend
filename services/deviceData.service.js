@@ -298,7 +298,7 @@ const getDeviceDataService = async (userId, deviceType, days) => {
 
     console.log(`🗄️ [SERVICE-${serviceId}] EXECUTING DATABASE QUERY`, {
       query:
-        "SELECT * FROM dev_data WHERE user_id = ? AND dev_type = ? AND created_at >= ? ORDER BY created_at DESC",
+        "SELECT * FROM dev_data WHERE user_id = ? AND dev_type = ? AND created_at >= ? ORDER BY created_at ASC",
       params: {
         userId,
         deviceType,
@@ -307,7 +307,7 @@ const getDeviceDataService = async (userId, deviceType, days) => {
     });
 
     const [rows] = await db.query(
-      "SELECT * FROM dev_data WHERE user_id = ? AND dev_type = ? AND created_at >= ? ORDER BY created_at DESC",
+      "SELECT * FROM dev_data WHERE user_id = ? AND dev_type = ? AND created_at >= ? ORDER BY created_at ASC",
       [userId, deviceType, startDateString]
     );
 
