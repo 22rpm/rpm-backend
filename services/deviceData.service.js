@@ -10,14 +10,39 @@ const createDeviceDataService = async (userId, devId, devType, deviceData) => {
   });
 
   try {
-    console.log("💾 Inserting device data into database...");
+    // 1. First check if device exists for this user
+    console.log("🔍 Checking if device exists in devices table...");
+
+    const [existingDevice] = await db.query(
+      "SELECT id FROM devices WHERE dev_id = ? AND user_id = ?",
+      [devId, userId]
+    );
+
+    // 2. If device doesn't exist, insert into devices table
+    if (!existingDevice || existingDevice.length === 0) {
+      console.log("📝 Device not found, inserting into devices table...");
+
+      await db.query(
+        "INSERT INTO devices (dev_id, user_id, dev_type) VALUES (?, ?, ?)",
+        [devId, userId, devType]
+      );
+
+      console.log("✅ Device added to devices table");
+    } else {
+      console.log(
+        "ℹ️ Device already exists in devices table, skipping insertion"
+      );
+    }
+
+    // 3. Always insert into dev_data table
+    console.log("💾 Inserting device data into dev_data table...");
 
     const [result] = await db.query(
       "INSERT INTO dev_data (dev_id, user_id, dev_type, data) VALUES (?, ?, ?, ?)",
       [devId, userId, devType, JSON.stringify(deviceData)]
     );
 
-    console.log("✅ Database insert successful. Result:", result);
+    console.log("✅ Device data inserted successfully. Result:", result);
 
     const response = {
       insertId: result.insertId,
@@ -25,6 +50,7 @@ const createDeviceDataService = async (userId, devId, devType, deviceData) => {
       devType,
       userId,
       deviceData,
+      deviceWasNew: !existingDevice || existingDevice.length === 0,
     };
 
     console.log("📤 Returning response from service:", response);
