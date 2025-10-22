@@ -111,4 +111,72 @@ const verifyDoctorPatientAccess = async (doctorId, patientId) => {
   return assignments.length > 0;
 };
 
-module.exports = { getPatientVitalSignsService, verifyDoctorPatientAccess };
+const getPatientDeviceDataService = async (patientId, deviceType, days) => {
+  // Get patient details
+  const [patientDetails] = await db.query(
+    `SELECT id, name, email FROM users WHERE id = ?`,
+    [patientId]
+  );
+
+  if (patientDetails.length === 0) {
+    throw new Error("Patient not found");
+  }
+
+  // Calculate date range
+  const startDate = new Date();
+  startDate.setDate(startDate.getDate() - days);
+  const startDateString = startDate.toISOString().split("T")[0];
+
+  // Get all data for the specified device type and time period, ordered by created_at DESC
+  const [deviceData] = await db.query(
+    `SELECT 
+      id,
+      dev_id,
+      user_id,
+      data,
+      dev_type,
+      created_at,
+      updated_at
+     FROM dev_data 
+     WHERE user_id = ? 
+       AND dev_type = ?
+       AND DATE(created_at) >= ?
+     ORDER BY created_at DESC`,
+    [patientId, deviceType, startDateString]
+  );
+
+  // If no data found
+  if (deviceData.length === 0) {
+    return {
+      patient: patientDetails[0],
+      deviceType,
+      days,
+      totalRecords: 0,
+      data: [],
+      dateRange: {
+        start: startDateString,
+        end: new Date().toISOString().split("T")[0],
+      },
+      message: `No ${deviceType.toUpperCase()} data found for the last ${days} days`,
+    };
+  }
+
+  // Return raw data without any processing
+  return {
+    patient: patientDetails[0],
+    deviceType,
+    days,
+    totalRecords: deviceData.length,
+    data: deviceData,
+    dateRange: {
+      start: startDateString,
+      end: new Date().toISOString().split("T")[0],
+    },
+  };
+};
+
+module.exports = {
+  getPatientVitalSignsService,
+  verifyDoctorPatientAccess,
+  getPatientDeviceDataService,
+};

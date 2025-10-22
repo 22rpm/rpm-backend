@@ -64,7 +64,6 @@ async function login(req, res) {
     }
 
     if (!user) {
-      
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
@@ -599,51 +598,128 @@ async function addDevData(req, res) {
 //   return res.json({ ok: true, message: "Session refreshed" });
 // };
 
+// const refresh = async (req, res) => {
+//   try {
+//     const refreshToken = req.cookies.refresh_token;
+//     console.log("Refresh token request received:", req.cookies);
+//     console.log("Refresh token request received:", refreshToken);
+//     if (!refreshToken)
+//       return res.status(401).json({ message: "No refresh token" });
+
+//     // Verify refresh token
+//     jwt.verify(refreshToken, process.env.JWT_SECRET, async (err, decoded) => {
+//       if (err)
+//         return res.status(403).json({ message: "Invalid refresh token" });
+
+//       // Check if still valid in DB
+//       const [rows] = await pool.query(
+//         "SELECT * FROM users WHERE id = ? AND refresh_token = ?",
+//         [decoded.id, refreshToken]
+//       );
+
+//       if (rows.length === 0) {
+//         return res.status(403).json({ message: "Invalid refresh token" });
+//       }
+
+//       // Generate new access token
+//       const accessToken = jwt.sign(
+//         { id: decoded.id, email: decoded.email },
+//         process.env.JWT_SECRET,
+//         { expiresIn: "15m" }
+//       );
+
+//       res.cookie("accessToken", accessToken, {
+//         httpOnly: true,
+//         sameSite: "strict",
+//         secure: process.env.NODE_ENV === "production",
+//         maxAge: 15 * 60 * 1000,
+//       });
+
+//       res.json({ message: "Access token refreshed" });
+//     });
+//   } catch (err) {
+//     console.error(err);
+//     res.status(500).json({ message: "Server error" });
+//   }
+// };
 const refresh = async (req, res) => {
   try {
     const refreshToken = req.cookies.refresh_token;
-    console.log("Refresh token request received:", req.cookies);
-    console.log("Refresh token request received:", refreshToken);
-    if (!refreshToken)
+    console.log("Refresh token request received");
+
+    if (!refreshToken) {
       return res.status(401).json({ message: "No refresh token" });
+    }
 
     // Verify refresh token
     jwt.verify(refreshToken, process.env.JWT_SECRET, async (err, decoded) => {
-      if (err)
-        return res.status(403).json({ message: "Invalid refresh token" });
-
-      // Check if still valid in DB
-      const [rows] = await pool.query(
-        "SELECT * FROM users WHERE id = ? AND refresh_token = ?",
-        [decoded.id, refreshToken]
-      );
-
-      if (rows.length === 0) {
+      if (err) {
+        console.error("JWT verification error:", err);
         return res.status(403).json({ message: "Invalid refresh token" });
       }
 
-      // Generate new access token
-      const accessToken = jwt.sign(
-        { id: decoded.id, email: decoded.email },
-        process.env.JWT_SECRET,
-        { expiresIn: "15m" }
-      );
+      try {
+        // Check if refresh token exists in user_devices table (correct table)
+        const [deviceRows] = await pool.query(
+          "SELECT ud.*, u.* FROM user_devices ud JOIN users u ON ud.user_id = u.id WHERE ud.refresh_token = ? AND ud.user_id = ?",
+          [refreshToken, decoded.id]
+        );
 
-      res.cookie("accessToken", accessToken, {
-        httpOnly: true,
-        sameSite: "strict",
-        secure: process.env.NODE_ENV === "production",
-        maxAge: 15 * 60 * 1000,
-      });
+        if (deviceRows.length === 0) {
+          return res.status(403).json({ message: "Invalid refresh token" });
+        }
 
-      res.json({ message: "Access token refreshed" });
+        const user = deviceRows[0];
+
+        // Get user role
+        const role = await findRoleByUsername(user.username);
+
+        // Generate new access token with FULL user data (same as login)
+        const accessToken = jwt.sign(
+          {
+            id: user.id,
+            name: user.name,
+            username: user.username,
+            email: user.email,
+            role_type: role,
+            org_id: user.organization_id,
+            phoneNumber: user.phoneNumber,
+          },
+          process.env.JWT_SECRET,
+          { expiresIn: "45m" } // Keep it 45 minutes
+        );
+
+        // Set cookie with CORRECT name "token" (not "accessToken")
+        res.cookie("token", accessToken, {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === "production",
+          sameSite: "strict",
+          maxAge: 45 * 60 * 1000, // 45 minutes
+        });
+
+        console.log("Access token refreshed successfully");
+        res.json({
+          message: "Access token refreshed",
+          user: {
+            id: user.id,
+            name: user.name,
+            email: user.email,
+            username: user.username,
+            role: role,
+            organization_id: user.organization_id,
+            phoneNumber: user.phoneNumber,
+          },
+        });
+      } catch (dbError) {
+        console.error("Database error during token refresh:", dbError);
+        return res.status(500).json({ message: "Server error" });
+      }
     });
   } catch (err) {
-    console.error(err);
+    console.error("Refresh token endpoint error:", err);
     res.status(500).json({ message: "Server error" });
   }
 };
-
 module.exports = {
   login,
   me,
