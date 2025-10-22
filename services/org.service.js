@@ -86,22 +86,43 @@ async function createUser({
   organization_id,
   is_active,
 }) {
-  const [userId] = await knex("users")
-    .insert({
+  try {
+    console.log("Creating user in database:", {
       username,
-      name,
       email,
-      password,
-      phoneNumber: phoneNumber || null,
       organization_id,
-      is_active,
-      created_at: new Date(),
-      updated_at: new Date(),
-    })
-    .returning("id");
-  return userId.id;
-}
+    });
 
+    const result = await knex("users")
+      .insert({
+        username,
+        name,
+        email,
+        password,
+        phone_number: phoneNumber || null, // Fixed: changed phoneNumber to phone_number if that's your column name
+        organization_id,
+        is_active,
+        created_at: new Date(),
+        updated_at: new Date(),
+      })
+      .returning("id");
+
+    console.log("User creation result:", result);
+
+    // Handle different return formats from different databases
+    const userId = Array.isArray(result) ? result[0]?.id : result?.id;
+
+    if (!userId) {
+      throw new Error("Failed to get user ID after creation");
+    }
+
+    console.log("User created successfully with ID:", userId);
+    return userId;
+  } catch (error) {
+    console.error("Error in createUser function:", error);
+    throw error;
+  }
+}
 async function findOrganizationById(id) {
   const parsedId = parseInt(id);
   if (isNaN(parsedId)) {
@@ -157,13 +178,29 @@ async function deleteUser(id) {
 }
 
 async function assignRole({ username, userId, role }) {
-  await knex("role").insert({
-    username,
-    user_id: userId,
-    role_type: role,
-    created_at: new Date(),
-    updated_at: new Date(),
-  });
+  try {
+    console.log("Assigning role in database:", { username, userId, role });
+
+    if (!userId) {
+      throw new Error("User ID is null or undefined when assigning role");
+    }
+
+    const result = await knex("role")
+      .insert({
+        username,
+        user_id: userId,
+        role_type: role,
+        created_at: new Date(),
+        updated_at: new Date(),
+      })
+      .returning("id");
+
+    console.log("Role assigned successfully, role ID:", result);
+    return result;
+  } catch (error) {
+    console.error("Error in assignRole function:", error);
+    throw error;
+  }
 }
 
 async function getAllAdmins() {

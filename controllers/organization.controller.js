@@ -6,25 +6,42 @@ async function addOrganization(req, res) {
     const { name, code, admin } = req.body;
     const { username, name: adminName, email, password, phoneNumber } = admin;
 
+    console.log("Starting organization creation process:", {
+      name,
+      code,
+      adminEmail: email,
+    });
+
+    // Check if organization code already exists
     const existingOrg = await organizationService.findOrganizationByCode(code);
     if (existingOrg) {
+      console.log("Organization code already exists:", code);
       return res
         .status(409)
         .json({ ok: false, message: "Organization code already exists" });
     }
 
+    // Check if admin email already exists
     const existingUser = await organizationService.findUserByEmail(email);
     if (existingUser) {
+      console.log("Admin email already exists:", email);
       return res
         .status(409)
         .json({ ok: false, message: "Admin email already exists" });
     }
 
+    // Hash password
     const hashedPassword = await bcrypt.hash(password, 12);
+    console.log("Password hashed successfully");
+
+    // Create organization
     const organizationId = await organizationService.createOrganization({
       name,
       code,
     });
+    console.log("Organization created with ID:", organizationId);
+
+    // Create admin user
     const userId = await organizationService.createUser({
       username,
       name: adminName,
@@ -34,16 +51,31 @@ async function addOrganization(req, res) {
       organization_id: organizationId,
       is_active: true,
     });
+    console.log("Admin user created with ID:", userId);
 
+    // Assign admin role
+    console.log("Assigning admin role to user:", {
+      username,
+      userId,
+      role: "admin",
+    });
     await organizationService.assignRole({
       username,
       userId,
       role: "admin",
     });
+    console.log("Admin role assigned successfully");
 
+    // Get the saved organization details
     const savedOrg = await organizationService.getOrganizationById(
       organizationId
     );
+
+    console.log(
+      "Organization creation completed successfully for:",
+      savedOrg.name
+    );
+
     return res.status(201).json({
       ok: true,
       message: "Organization created successfully",
