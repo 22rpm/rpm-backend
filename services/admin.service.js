@@ -10,13 +10,29 @@ async function getUserWithRoleAndOrg(userId) {
       u.name, 
       u.phoneNumber, 
       u.organization_id as org_id,
-      r.role_type
+      r.role_type,
+      r.user_id as role_user_id
     FROM users u 
     LEFT JOIN role r ON u.id = r.user_id 
     WHERE u.id = ?
   `;
 
+  console.log("🔍 Executing query for user ID:", userId);
   const [rows] = await pool.execute(query, [userId]);
+
+  console.log("🔍 Query result length:", rows.length);
+  if (rows[0]) {
+    console.log("🔍 User Data:", {
+      id: rows[0].id,
+      username: rows[0].username,
+      org_id: rows[0].org_id,
+      role_type: rows[0].role_type,
+      role_user_id: rows[0].role_user_id,
+    });
+  } else {
+    console.log("❌ No user found with ID:", userId);
+  }
+
   return rows[0] || null;
 }
 
