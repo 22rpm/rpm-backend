@@ -53,7 +53,7 @@ function signMfaChallenge(payload) {
 // controllers/auth.controller.js
 async function login(req, res) {
   try {
-    const { identifier, password, method } = req.body;
+    const { identifier, password, method, login_method } = req.body;
 
     // Determine if identifier is email or username
     let user;
@@ -89,7 +89,7 @@ async function login(req, res) {
       role_type
     );
     // If login method is username, directly authenticate without OTP
-    if (method === "username") {
+    if (method === "username" || login_method === "biometric") {
       // Generate access token - MAKE SURE ROLE IS INCLUDED
       const accessToken = jwt.sign(
         {
