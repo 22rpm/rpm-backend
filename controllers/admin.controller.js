@@ -13,6 +13,7 @@ import bcrypt from "bcrypt";
 export async function getAllUsers(req, res) {
   try {
     const currentUserId = req.user.id;
+    console.log("🔍 Current User ID:", currentUserId);
 
     if (!currentUserId) {
       console.log("Unauthorized access attempt to getAllUsers");
@@ -21,6 +22,7 @@ export async function getAllUsers(req, res) {
 
     // ✅ Fetch complete user data with role from database
     const currentUser = await getUserWithRoleAndOrg(currentUserId);
+    console.log("🔍 Current User Data:", JSON.stringify(currentUser, null, 2));
 
     if (!currentUser) {
       return res.status(403).json({ ok: false, message: "User not found" });
@@ -29,10 +31,17 @@ export async function getAllUsers(req, res) {
     const role_type = currentUser.role_type;
     const org_id = currentUser.org_id;
 
+    console.log("🔍 Role Type:", role_type);
+    console.log("🔍 Org ID:", org_id);
+    console.log("🔍 Role Type === 'admin':", role_type === "admin");
+
     // ✅ Check if user is admin
     if (role_type === "admin") {
+      console.log("✅ User is admin, proceeding...");
+
       // ✅ Org Admin - has org_id
       if (org_id) {
+        console.log("🔍 User is Org Admin, fetching org users...");
         const users = await findOrgUsersWithRoles(org_id);
         return res.status(200).json({
           ok: true,
@@ -42,6 +51,7 @@ export async function getAllUsers(req, res) {
       }
       // ✅ Super Admin - no org_id
       else {
+        console.log("🔍 User is Super Admin, fetching all users...");
         const allUsers = await findAllUsers();
         return res.status(200).json({
           ok: true,
@@ -51,6 +61,7 @@ export async function getAllUsers(req, res) {
       }
     }
 
+    console.log("❌ Access denied - Role check failed");
     return res.status(403).json({
       ok: false,
       message: `Access denied. Admin privileges required. Current role: ${role_type}`,
