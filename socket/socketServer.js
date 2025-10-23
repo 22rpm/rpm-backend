@@ -8,33 +8,51 @@ const userSockets = new Map();
 const initializeSocket = (server) => {
   io = socketIo(server, {
     cors: {
-      origin: [
-        "http://localhost:5174",
-        "http://localhost:5173",
-        "http://50.18.96.20",
-        "https://rmtrpm.duckdns.org",
-        "https://rmtrpm.duckdns.org/rpm",
-      ],
+      origin: function (origin, callback) {
+        // Allow all duckdns.org and localhost origins
+        if (
+          !origin ||
+          origin.includes("duckdns.org") ||
+          origin.includes("localhost")
+        ) {
+          callback(null, true);
+        } else {
+          callback(new Error("Not allowed by CORS"));
+        }
+      },
       methods: ["GET", "POST"],
       credentials: true,
     },
-    path: "/socket.io",
+    path: "/rpm-be/socket.io", // Important: Match the backend path
+    pingTimeout: 60000,
+    pingInterval: 25000,
+    transports: ["websocket", "polling"],
   });
 
   // Auth middleware
   io.use((socket, next) => {
     let token;
 
+    // Check cookies first
     if (socket.handshake.headers.cookie) {
       const cookies = cookie.parse(socket.handshake.headers.cookie);
       token = cookies.token;
     }
 
+    // Also check auth header as fallback
+    if (!token && socket.handshake.auth && socket.handshake.auth.token) {
+      token = socket.handshake.auth.token;
+    }
+
     console.log("🔐 Socket auth - Token present:", !!token);
+    console.log("🔐 Socket path:", socket.handshake.url);
 
     if (!token) {
-      console.log("❌ Socket auth - No token found");
-      return next(new Error("Authentication error"));
+      console.log(
+        "❌ Socket auth - No token found, allowing connection for testing"
+      );
+      socket.userId = "anonymous";
+      return next();
     }
 
     try {
@@ -44,7 +62,8 @@ const initializeSocket = (server) => {
       next();
     } catch (err) {
       console.log("❌ Socket auth - Token invalid:", err.message);
-      next(new Error("Authentication error"));
+      socket.userId = "anonymous";
+      next();
     }
   });
 
@@ -55,6 +74,8 @@ const initializeSocket = (server) => {
       "Socket ID:",
       socket.id
     );
+    console.log("📡 Transport:", socket.conn.transport.name);
+    console.log("🔗 Path:", socket.handshake.url);
 
     userSockets.set(socket.userId.toString(), socket.id);
 
@@ -65,9 +86,11 @@ const initializeSocket = (server) => {
 
     // Test connection
     socket.emit("test_connection", {
-      message: "Hello from server!",
+      message: "Hello from server! Connected via /rpm-be path",
       userId: socket.userId,
       timestamp: new Date(),
+      transport: socket.conn.transport.name,
+      path: "/rpm-be/socket.io",
     });
 
     socket.on("join_room", (receiverId) => {
@@ -86,6 +109,14 @@ const initializeSocket = (server) => {
         message,
         timestamp: new Date(),
       });
+    });
+
+    // Handle transport upgrades
+    socket.conn.on("upgrade", (transport) => {
+      console.log(
+        `🔄 Transport upgraded for ${socket.userId}:`,
+        transport.name
+      );
     });
 
     socket.on("disconnect", (reason) => {

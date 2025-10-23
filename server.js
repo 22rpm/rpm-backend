@@ -30,17 +30,24 @@ app.set("trust proxy", true);
 const allowedOrigins = [
   "http://localhost:5174",
   "http://localhost:5173",
+  "http://localhost:5175",
   "http://50.18.96.20",
   "https://rmtrpm.duckdns.org",
   "https://rmtrpm.duckdns.org/rpm",
+  "http://rmtrpm.duckdns.org",
 ];
 
 const cors = require("cors");
 app.use(
   cors({
     origin: function (origin, callback) {
-      // Allow requests with no origin (like mobile apps or postman)
+      // Allow requests with no origin
       if (!origin) return callback(null, true);
+
+      // Allow all subdomains of duckdns.org
+      if (origin.includes("duckdns.org") || origin.includes("localhost")) {
+        return callback(null, true);
+      }
 
       if (allowedOrigins.indexOf(origin) !== -1) {
         return callback(null, true);
@@ -50,32 +57,48 @@ app.use(
       }
     },
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "Cookie"],
+    allowedHeaders: ["Content-Type", "Authorization", "Cookie", "x-user-id"],
     credentials: true,
   })
 );
 
 app.use(express.urlencoded({ extended: true }));
 
-// API routes
-app.use("/api/messages", messageRoutes);
-app.use("/api/auth", authRoutes);
-app.use("/api/dev-data", devDataRoutes);
-app.use("/api/admin", adminRoutes);
-app.use("/api/settings", settingsRoutes);
-app.use("/api/alerts", alertRoutes);
-app.use("/api/doctor", drRoutes);
-app.use("/api/org", orgRoutes);
-app.use("/api/patient", patientRoutes);
+// API routes - all under /rpm-be
+app.use("/rpm-be/api/messages", messageRoutes);
+app.use("/rpm-be/api/auth", authRoutes);
+app.use("/rpm-be/api/dev-data", devDataRoutes);
+app.use("/rpm-be/api/admin", adminRoutes);
+app.use("/rpm-be/api/settings", settingsRoutes);
+app.use("/rpm-be/api/alerts", alertRoutes);
+app.use("/rpm-be/api/doctor", drRoutes);
+app.use("/rpm-be/api/org", orgRoutes);
+app.use("/rpm-be/api/patient", patientRoutes);
 
 // Health check endpoint
-app.get("/health", (req, res) =>
+app.get("/rpm-be/health", (req, res) =>
   res.json({
     ok: true,
     service: "rpm-api",
     timestamp: new Date().toISOString(),
+    socket: "enabled",
   })
 );
+
+// Socket.io test endpoint
+app.get("/rpm-be/socket-test", (req, res) => {
+  res.json({
+    message: "Socket.io server is running",
+    supportedTransports: ["polling", "websocket"],
+    timestamp: new Date().toISOString(),
+    path: "/rpm-be/socket.io",
+  });
+});
+
+// Root endpoint redirect
+app.get("/", (req, res) => {
+  res.redirect("/rpm-be/health");
+});
 
 // Swagger
 const swaggerDocument = JSON.parse(
@@ -83,11 +106,15 @@ const swaggerDocument = JSON.parse(
 );
 
 if (process.env.NODE_ENV === "development") {
-  app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument));
+  app.use(
+    "/rpm-be/api-docs",
+    swaggerUi.serve,
+    swaggerUi.setup(swaggerDocument)
+  );
   console.log(
     `✅ Swagger docs available at http://localhost:${
       process.env.PORT || 4000
-    }/api-docs`
+    }/rpm-be/api-docs`
   );
 }
 
@@ -96,11 +123,13 @@ app.use((req, res) =>
   res.status(404).json({ ok: false, message: "Not found" })
 );
 
-// Initialize Socket.io
+// Initialize Socket.io with the correct path
 initializeSocket(server);
 
 const port = process.env.PORT || 4000;
 server.listen(port, "0.0.0.0", () => {
   console.log(`🚀 Server started on port ${port}`);
-  console.log(`🌐 WebSocket server available at wss://rmtrpm.duckdns.org`);
+  console.log(`🔌 Socket.io available on path: /rpm-be/socket.io`);
+  console.log(`🌐 Health check: https://rmtrpm.duckdns.org/rpm-be/health`);
+  console.log(`🔧 Socket test: https://rmtrpm.duckdns.org/rpm-be/socket-test`);
 });
