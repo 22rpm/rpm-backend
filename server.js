@@ -29,22 +29,59 @@ app.use(express.json());
 app.use(cookieParser());
 app.set("trust proxy", true);
 
-// CORS example (adjust origins as needed). Cookies need credentials=true on client.
-const allowed = (process.env.CORS_ORIGINS || "")
+// Updated CORS configuration - Enhanced for WebSocket support
+const allowedOrigins = (process.env.CORS_ORIGINS || "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
-if (allowed.length) {
+
+// Add essential origins if not already present
+const essentialOrigins = [
+  "http://localhost:5174",
+  "http://localhost:5173",
+  "http://50.18.96.20",
+  "https://rmtrpm.duckdns.org",
+  "https://rmtrpm.duckdns.org/rpm",
+];
+
+essentialOrigins.forEach((origin) => {
+  if (!allowedOrigins.includes(origin)) {
+    allowedOrigins.push(origin);
+  }
+});
+
+if (allowedOrigins.length) {
   const cors = require("cors");
   app.use(
     cors({
-      origin: (origin, cb) => cb(null, !origin || allowed.includes(origin)),
+      origin: (origin, cb) => {
+        // Allow requests with no origin (like mobile apps or curl requests)
+        if (!origin) return cb(null, true);
+
+        // Check if origin is in allowed list
+        if (allowedOrigins.includes(origin)) {
+          return cb(null, true);
+        }
+
+        // For Socket.IO and same domain variations, be more permissive
+        if (
+          origin.includes("rmtrpm.duckdns.org") ||
+          origin.includes("localhost")
+        ) {
+          return cb(null, true);
+        }
+
+        console.log("❌ CORS blocked origin:", origin);
+        return cb(new Error("Not allowed by CORS"));
+      },
       methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-      allowedHeaders: ["Content-Type", "Authorization"],
+      allowedHeaders: ["Content-Type", "Authorization", "Cookie"],
       credentials: true,
     })
   );
+  console.log("✅ CORS enabled for origins:", allowedOrigins);
 }
+
 app.use(express.urlencoded({ extended: true }));
 
 // app.get('/health', (req, res) => res.json({ ok: true, service: 'rpm-api', ts: new Date().toISOString() }));
@@ -58,6 +95,7 @@ app.use("/api/alerts", alertRoutes); // Add this after other routes
 app.use("/api/doctor", drRoutes);
 app.use("/api/org", orgRoutes);
 app.use("/api/patient", patientRoutes);
+
 // ✅ Load swagger.json
 const swaggerDocument = JSON.parse(
   fs.readFileSync(path.join(__dirname, "docs/swagger.json"), "utf8")

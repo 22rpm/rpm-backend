@@ -10,12 +10,15 @@ const initializeSocket = (server) => {
     cors: {
       origin: [
         "http://localhost:5174",
+        "http://localhost:5173",
         "http://50.18.96.20",
+        "https://rmtrpm.duckdns.org",
         "https://rmtrpm.duckdns.org/rpm",
       ],
       methods: ["GET", "POST"],
       credentials: true,
     },
+    path: "/socket.io", // Add this line
   });
 
   // Auth middleware with detailed logging
