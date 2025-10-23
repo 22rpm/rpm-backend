@@ -8,7 +8,11 @@ const userSockets = new Map(); // Store user_id -> socket_id mapping
 const initializeSocket = (server) => {
   io = socketIo(server, {
     cors: {
-      origin: ["http://localhost:5174", "http://50.18.96.20"],
+      origin: [
+        "http://localhost:5174",
+        "http://50.18.96.20",
+        "https://rmtrpm.duckdns.org/rpm",
+      ],
       methods: ["GET", "POST"],
       credentials: true,
     },
