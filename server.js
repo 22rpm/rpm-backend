@@ -65,15 +65,15 @@ app.use(
 app.use(express.urlencoded({ extended: true }));
 
 // API routes - all under /rpm-be
-app.use("/rpm-be/api/messages", messageRoutes);
-app.use("/rpm-be/api/auth", authRoutes);
-app.use("/rpm-be/api/dev-data", devDataRoutes);
-app.use("/rpm-be/api/admin", adminRoutes);
-app.use("/rpm-be/api/settings", settingsRoutes);
-app.use("/rpm-be/api/alerts", alertRoutes);
-app.use("/rpm-be/api/doctor", drRoutes);
-app.use("/rpm-be/api/org", orgRoutes);
-app.use("/rpm-be/api/patient", patientRoutes);
+app.use("/api/messages", messageRoutes);
+app.use("/api/auth", authRoutes);
+app.use("/api/dev-data", devDataRoutes);
+app.use("/api/admin", adminRoutes);
+app.use("/api/settings", settingsRoutes);
+app.use("/api/alerts", alertRoutes);
+app.use("/api/doctor", drRoutes);
+app.use("/api/org", orgRoutes);
+app.use("/api/patient", patientRoutes);
 
 // Health check endpoint
 app.get("/rpm-be/health", (req, res) =>
