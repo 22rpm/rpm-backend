@@ -3,7 +3,7 @@ const jwt = require("jsonwebtoken");
 const cookie = require("cookie");
 
 let io;
-const userSockets = new Map(); // Store user_id -> socket_id mapping
+const userSockets = new Map();
 
 const initializeSocket = (server) => {
   io = socketIo(server, {
@@ -18,21 +18,19 @@ const initializeSocket = (server) => {
       methods: ["GET", "POST"],
       credentials: true,
     },
-    path: "/socket.io", // Add this line
+    path: "/socket.io",
   });
 
-  // Auth middleware with detailed logging
+  // Auth middleware
   io.use((socket, next) => {
     let token;
 
-    // Parse cookies from handshake headers
     if (socket.handshake.headers.cookie) {
       const cookies = cookie.parse(socket.handshake.headers.cookie);
       token = cookies.token;
     }
 
     console.log("🔐 Socket auth - Token present:", !!token);
-    console.log("🔐 Socket auth - Cookies:", socket.handshake.headers.cookie);
 
     if (!token) {
       console.log("❌ Socket auth - No token found");
@@ -57,20 +55,15 @@ const initializeSocket = (server) => {
       "Socket ID:",
       socket.id
     );
-    console.log("🔍 Socket handshake details:", {
-      headers: socket.handshake.headers,
-      auth: socket.handshake.auth,
-    });
 
     userSockets.set(socket.userId.toString(), socket.id);
 
-    // Log all connected users
     console.log(
       "📊 Currently connected users:",
       Array.from(userSockets.entries())
     );
 
-    // Test: Send a test event to verify the connection
+    // Test connection
     socket.emit("test_connection", {
       message: "Hello from server!",
       userId: socket.userId,
@@ -80,13 +73,13 @@ const initializeSocket = (server) => {
     socket.on("join_room", (receiverId) => {
       const roomId = [socket.userId, receiverId].sort().join("_");
       socket.join(roomId);
+      console.log(`🚪 User ${socket.userId} joined room ${roomId}`);
     });
 
     socket.on("send_message", (data) => {
       const { receiverId, message } = data;
       const roomId = [socket.userId, receiverId].sort().join("_");
 
-      // Emit to room
       io.to(roomId).emit("new_message", {
         senderId: socket.userId,
         receiverId,
