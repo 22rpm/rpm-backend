@@ -8,6 +8,7 @@ const {
   getPatientBPReadingsService,
   getDeviceDataService,
   getLatestDeviceDataService,
+  triggerBPAlert,
 } = require("../services/deviceData.service");
 
 const createDeviceDataController = async (req, res) => {
@@ -25,6 +26,27 @@ const createDeviceDataController = async (req, res) => {
 
     console.log("✅ Device data created successfully:", result);
 
+    // Check if BP data and status is not Normal, then trigger alert
+    if (
+      devType === "bp" &&
+      result.deviceData.bpStatus &&
+      result.deviceData.bpStatus !== "Normal"
+    ) {
+      console.log(`🚨 BP Alert Condition Met: ${result.deviceData.bpStatus}`);
+
+      try {
+        await triggerBPAlert(
+          user.id,
+          result.deviceData.bpStatus,
+          result.deviceData.systolic,
+          result.deviceData.diastolic
+        );
+      } catch (alertError) {
+        console.error("❌ Error triggering BP alert:", alertError);
+        // Don't fail the main request if alert fails
+      }
+    }
+
     res.status(201).json({
       success: true,
       message: "Device data stored successfully",
@@ -38,7 +60,6 @@ const createDeviceDataController = async (req, res) => {
     });
   }
 };
-
 const createBPDataController = async (req, res) => {
   try {
     const user = req.user; // from authRequired → { id, email, role }
@@ -305,7 +326,6 @@ const getDeviceDataController = async (req, res) => {
     );
   }
 };
-
 
 const getLatestDeviceDataController = async (req, res) => {
   const requestId = Math.random().toString(36).substring(2, 15);

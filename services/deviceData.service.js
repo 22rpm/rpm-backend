@@ -1,6 +1,20 @@
 const db = require("../config/db"); // your MySQL pool
+const { getIO, userSockets } = require("../socket/socketServer");
 
 // Service
+
+const calculateBPStatus = (systolic, diastolic) => {
+  const sys = parseInt(systolic);
+  const dia = parseInt(diastolic);
+
+  if (sys < 90 || dia < 60) {
+    return "Low";
+  } else if (sys <= 120 && dia <= 80) {
+    return "High";
+  } else {
+    return "High";
+  }
+};
 const createDeviceDataService = async (userId, devId, devType, deviceData) => {
   console.log("🛠️ createDeviceDataService called with:", {
     userId,
@@ -34,12 +48,29 @@ const createDeviceDataService = async (userId, devId, devType, deviceData) => {
       );
     }
 
-    // 3. Always insert into dev_data table
+    // 3. Calculate BP status for BP devices (simplified)
+    let processedData = { ...deviceData };
+
+    if (devType === "bp" && deviceData.systolic && deviceData.diastolic) {
+      const bpStatus = calculateBPStatus(
+        deviceData.systolic,
+        deviceData.diastolic
+      );
+      processedData = {
+        ...deviceData,
+        bpStatus: bpStatus,
+      };
+      console.log(
+        `📊 Calculated BP Status: ${bpStatus} for BP ${deviceData.systolic}/${deviceData.diastolic}`
+      );
+    }
+
+    // 4. Always insert into dev_data table
     console.log("💾 Inserting device data into dev_data table...");
 
     const [result] = await db.query(
       "INSERT INTO dev_data (dev_id, user_id, dev_type, data) VALUES (?, ?, ?, ?)",
-      [devId, userId, devType, JSON.stringify(deviceData)]
+      [devId, userId, devType, JSON.stringify(processedData)]
     );
 
     console.log("✅ Device data inserted successfully. Result:", result);
@@ -49,7 +80,7 @@ const createDeviceDataService = async (userId, devId, devType, deviceData) => {
       devId,
       devType,
       userId,
-      deviceData,
+      deviceData: processedData,
       deviceWasNew: !existingDevice || existingDevice.length === 0,
     };
 
@@ -475,7 +506,160 @@ const getLatestDeviceDataService = async (userId, deviceType) => {
     throw error;
   }
 };
+
+const triggerBPAlert = async (patientId, bpStatus, systolic, diastolic) => {
+  console.log("🚨 Triggering BP Alert for patient:", patientId);
+
+  try {
+    // 1. Get patient's assigned doctors/clinicians
+    const assignedDoctors = await db("patient_doctors")
+      .select("doctor_id")
+      .where("patient_id", patientId)
+      .andWhere("status", "active");
+
+    if (!assignedDoctors || assignedDoctors.length === 0) {
+      console.log("ℹ️ No assigned doctors found for patient:", patientId);
+      return;
+    }
+
+    const dr_ids = assignedDoctors.map((doc) => doc.doctor_id);
+    console.log("👨‍⚕️ Assigned doctors for alerts:", dr_ids);
+
+    // 2. Map BP status to alert type
+    const alertTypeMap = {
+      Low: "low",
+      High: "high",
+    };
+
+    const alertType = alertTypeMap[bpStatus];
+    if (!alertType) {
+      console.log("ℹ️ No alert needed for Normal BP status");
+      return;
+    }
+
+    // 3. Create alert description
+    const alertDesc = `Blood Pressure ${bpStatus}: ${systolic}/${diastolic} mmHg`;
+
+    // 4. Validate clinicians exist and are active
+    const validClinicians = await db("users")
+      .select("users.id", "users.name", "users.email", "role.role_type")
+      .join("role", "users.id", "role.user_id")
+      .whereIn("users.id", dr_ids)
+      .where("role.role_type", "clinician")
+      .where("users.is_active", true);
+
+    console.log("✅ Valid clinicians found:", validClinicians.length);
+
+    if (validClinicians.length === 0) {
+      console.log("❌ No valid clinicians found for alert");
+      return;
+    }
+
+    const validClinicianIds = validClinicians.map((d) => d.id);
+
+    // 5. Get patient details
+    const patientDetails = await db("users")
+      .select("id", "name", "email", "phoneNumber", "organization_id")
+      .where("id", patientId)
+      .first();
+
+    console.log("👤 Patient details for alert:", patientDetails);
+
+    // 6. Create alert and assignments in transaction
+    const result = await db.transaction(async (trx) => {
+      // Insert alert
+      const [alertId] = await trx("alerts")
+        .insert({
+          user_id: patientId,
+          desc: alertDesc,
+          type: alertType,
+        })
+        .returning("id");
+
+      console.log("📝 Alert inserted with ID:", alertId);
+
+      // Insert assignments for each clinician
+      const assignments = validClinicianIds.map((clinician_id) => ({
+        alert_id: alertId,
+        doctor_id: clinician_id,
+        read_status: false,
+        read_at: null,
+      }));
+
+      await trx("alert_assignments").insert(assignments);
+
+      // Fetch the complete alert with patient details
+      const newAlert = await trx("alerts")
+        .select(
+          "alerts.*",
+          "patients.name as patient_name",
+          "patients.email as patient_email",
+          "patients.phoneNumber as patient_phone",
+          "patients.organization_id as patient_organization_id"
+        )
+        .leftJoin("users as patients", "alerts.user_id", "patients.id")
+        .where("alerts.id", alertId)
+        .first();
+
+      return { alertId, newAlert, patientDetails };
+    });
+
+    // 7. Send WebSocket notifications
+    const io = getIO();
+    console.log(
+      "📡 Sending WebSocket notifications to clinicians:",
+      validClinicianIds
+    );
+
+    let notificationsSent = 0;
+
+    for (const clinician_id of validClinicianIds) {
+      const clinicianSocketId = userSockets.get(clinician_id.toString());
+
+      if (clinicianSocketId) {
+        // Get updated unread count for this clinician
+        const unreadCount = await db("alert_assignments")
+          .where("doctor_id", clinician_id)
+          .andWhere("read_status", false)
+          .count("id as count")
+          .first();
+
+        io.to(clinicianSocketId).emit("new_alert", {
+          alert: {
+            ...result.newAlert,
+            read_status: false,
+            assignment_id: clinician_id,
+          },
+          patient: {
+            id: patientDetails.id,
+            name: patientDetails.name,
+            email: patientDetails.email,
+            phoneNumber: patientDetails.phoneNumber,
+            organization_id: patientDetails.organization_id,
+          },
+          unread_count: parseInt(unreadCount?.count) || 0,
+          timestamp: new Date(),
+        });
+
+        console.log(`   ✅ Notification sent to clinician ${clinician_id}`);
+        notificationsSent++;
+      } else {
+        console.log(
+          `   ❌ Clinician ${clinician_id} not connected - no active socket`
+        );
+      }
+    }
+
+    console.log(
+      `✅ BP Alert created successfully. Notifications sent to ${notificationsSent}/${validClinicianIds.length} clinicians`
+    );
+  } catch (error) {
+    console.error("❌ Error in triggerBPAlert:", error);
+    throw error; // Re-throw to handle in controller
+  }
+};
 module.exports = {
+  triggerBPAlert,
   getDeviceDataService,
   getLatestDeviceDataService,
   getPatientBPReadingsService,
