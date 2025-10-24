@@ -76,7 +76,7 @@ app.use("/api/org", orgRoutes);
 app.use("/api/patient", patientRoutes);
 
 // Health check endpoint
-app.get("/rpm-be/health", (req, res) =>
+app.get("/health", (req, res) =>
   res.json({
     ok: true,
     service: "rpm-api",
@@ -86,7 +86,7 @@ app.get("/rpm-be/health", (req, res) =>
 );
 
 // Socket.io test endpoint
-app.get("/rpm-be/socket-test", (req, res) => {
+app.get("/socket-test", (req, res) => {
   res.json({
     message: "Socket.io server is running",
     supportedTransports: ["polling", "websocket"],
