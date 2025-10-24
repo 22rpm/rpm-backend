@@ -3,6 +3,8 @@ const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const pool = require("../config/db"); // Adjust the path to your database configuration
 const { loginSchema } = require("../validations/auth.validation");
+const db = require("../config/db");
+
 const {
   findUserByEmail,
   findRoleByUsername,
@@ -49,8 +51,152 @@ function signMfaChallenge(payload) {
   });
 }
 
+async function updateUserLastLogin(userId) {
+  try {
+    await db.query("UPDATE users SET last_login = ? WHERE id = ?", [
+      new Date(),
+      userId,
+    ]);
+    console.log(`✅ Last login updated for user ID: ${userId}`);
+  } catch (err) {
+    console.error("❌ Failed to update last login:", err);
+  }
+}
+
 // auth.controller.js
 // controllers/auth.controller.js
+// async function login(req, res) {
+//   try {
+//     const { identifier, password, method, login_method } = req.body;
+
+//     // Determine if identifier is email or username
+//     let user;
+//     if (method === "email") {
+//       user = await findUserByEmail(identifier);
+//     } else {
+//       user = await findUserByUsername(identifier);
+//     }
+
+//     if (!user) {
+//       return res.status(401).json({ message: "Invalid credentials" });
+//     }
+
+//     // ✅ Check password
+//     const validPassword = await bcrypt.compare(password, user.password);
+//     if (!validPassword) {
+//       return res.status(401).json({ message: "Invalid credentials" });
+//     }
+
+//     // Get user role
+//     const role = await findRoleByUsername(user.username);
+//     console.log("Fetched role from database:", role); // 👈 ADD THIS LOG
+
+//     if (!role) {
+//       return res.status(401).json({ message: "User role not found" });
+//     }
+//     const role_type = role;
+//     const org_id = user.organization_id;
+//     console.log(
+//       "user role nd org id in the login  ",
+//       user.organization_id,
+//       role_type
+//     );
+//     // If login method is username, directly authenticate without OTP
+//     if (method === "username" || login_method === "biometric") {
+//       // Generate access token - MAKE SURE ROLE IS INCLUDED
+//       const accessToken = jwt.sign(
+//         {
+//           id: user.id,
+//           name: user.name,
+//           username: user.username,
+//           email: user.email,
+//           role_type: role_type, // ✅ now includes role
+//           org_id: org_id,
+//           phoneNumber: user.phoneNumber,
+//         },
+//         process.env.JWT_SECRET,
+//         { expiresIn: "45m" }
+//       );
+
+//       // Generate refresh token
+//       const refreshToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
+//         expiresIn: "14d",
+//       });
+
+//       const deviceFingerprint =
+//         req.body.device_fingerprint || "unique-browser-hash";
+
+//       console.log("Setting cookies for username login:");
+//       console.log("Access Token present:", !!accessToken);
+//       console.log("Refresh Token present:", !!refreshToken);
+
+//       // Save device session
+//       await saveOrUpdateUserDevice({
+//         userId: user.id,
+//         deviceFingerprint: deviceFingerprint,
+//         ipAddress: req.headers["x-forwarded-for"]?.split(",")[0] || req.ip,
+//         userAgent: req.headers["user-agent"],
+//         refreshToken,
+//         absoluteExpiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+//       });
+
+//       // Set cookies - MAKE SURE THESE ARE SET CORRECTLY
+//       res.cookie("token", accessToken, {
+//         httpOnly: true,
+//         secure: process.env.NODE_ENV === "production",
+//         sameSite: "strict",
+//         maxAge: 45 * 60 * 1000, // 45 minutes
+//       });
+
+//       res.cookie("refresh_token", refreshToken, {
+//         httpOnly: true,
+//         secure: process.env.NODE_ENV === "production",
+//         sameSite: "strict",
+//         maxAge: 14 * 24 * 60 * 60 * 1000, // 14 days
+//       });
+
+//       console.log("Cookies set successfully");
+
+//       return res.status(200).json({
+//         message: "Login successful",
+//         user: {
+//           id: user.id,
+//           email: user.email,
+//           role: role,
+//         },
+//         token: accessToken,
+//       });
+//     }
+
+//     // If login method is email, proceed with OTP flow
+//     if (method === "email") {
+//       // ✅ Generate OTP (6-digit)
+//       const otp = ("" + Math.floor(100000 + Math.random() * 900000)).substring(
+//         0,
+//         6
+//       );
+//       console.log(`Generated OTP for ${identifier}: ${otp}`);
+
+//       // ✅ Store OTP in otp_tokens table via service
+//       await createOtp(user.id, otp, "login");
+
+//       // ✅ Send OTP
+//       if (sendOtpEmail) {
+//         await sendOtpEmail(user.email, otp);
+//       } else {
+//         console.log(`OTP for ${identifier}: ${otp}`);
+//       }
+
+//       return res.status(200).json({
+//         message: "OTP sent, please verify",
+//         requiresOtp: true,
+//       });
+//     }
+//   } catch (err) {
+//     console.error("Login error:", err);
+//     return res.status(500).json({ error: "Server error" });
+//   }
+// }
 async function login(req, res) {
   try {
     const { identifier, password, method, login_method } = req.body;
@@ -73,38 +219,40 @@ async function login(req, res) {
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
-    // Get user role
+    // ✅ Fetch role from DB
     const role = await findRoleByUsername(user.username);
-    console.log("Fetched role from database:", role); // 👈 ADD THIS LOG
+    console.log("Fetched role from database:", role);
 
     if (!role) {
       return res.status(401).json({ message: "User role not found" });
     }
+
     const role_type = role;
     const org_id = user.organization_id;
-    console.log(
-      "user role nd org id in the login  ",
-      user.organization_id,
-      role_type
-    );
-    // If login method is username, directly authenticate without OTP
+
+    console.log("User role and org ID in login:", org_id, role_type);
+
+    // ✅ Handle direct login (username or biometric)
     if (method === "username" || login_method === "biometric") {
-      // Generate access token - MAKE SURE ROLE IS INCLUDED
+      // ✅ Update last_login timestamp
+      await updateUserLastLogin(user.id);
+
+      // ✅ Generate access token
       const accessToken = jwt.sign(
         {
           id: user.id,
           name: user.name,
           username: user.username,
           email: user.email,
-          role_type: role_type, // ✅ now includes role
-          org_id: org_id,
+          role_type,
+          org_id,
           phoneNumber: user.phoneNumber,
         },
         process.env.JWT_SECRET,
         { expiresIn: "45m" }
       );
 
-      // Generate refresh token
+      // ✅ Generate refresh token
       const refreshToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
         expiresIn: "14d",
       });
@@ -112,21 +260,17 @@ async function login(req, res) {
       const deviceFingerprint =
         req.body.device_fingerprint || "unique-browser-hash";
 
-      console.log("Setting cookies for username login:");
-      console.log("Access Token present:", !!accessToken);
-      console.log("Refresh Token present:", !!refreshToken);
-
-      // Save device session
+      // ✅ Save device session
       await saveOrUpdateUserDevice({
         userId: user.id,
-        deviceFingerprint: deviceFingerprint,
+        deviceFingerprint,
         ipAddress: req.headers["x-forwarded-for"]?.split(",")[0] || req.ip,
         userAgent: req.headers["user-agent"],
         refreshToken,
         absoluteExpiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
       });
 
-      // Set cookies - MAKE SURE THESE ARE SET CORRECTLY
+      // ✅ Set secure cookies
       res.cookie("token", accessToken, {
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
@@ -154,19 +298,19 @@ async function login(req, res) {
       });
     }
 
-    // If login method is email, proceed with OTP flow
+    // ✅ If login method is email, proceed with OTP flow
     if (method === "email") {
-      // ✅ Generate OTP (6-digit)
+      // Generate 6-digit OTP
       const otp = ("" + Math.floor(100000 + Math.random() * 900000)).substring(
         0,
         6
       );
       console.log(`Generated OTP for ${identifier}: ${otp}`);
 
-      // ✅ Store OTP in otp_tokens table via service
+      // Store OTP in DB
       await createOtp(user.id, otp, "login");
 
-      // ✅ Send OTP
+      // Send OTP via email
       if (sendOtpEmail) {
         await sendOtpEmail(user.email, otp);
       } else {
@@ -183,7 +327,6 @@ async function login(req, res) {
     return res.status(500).json({ error: "Server error" });
   }
 }
-
 // async function login(req, res) {
 //   try {
 //     const { email, password } = req.body;
