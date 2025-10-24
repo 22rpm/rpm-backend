@@ -327,8 +327,171 @@ const getPatientDeviceDataService = async (
   };
 };
 
+async function getAssignedPatientsService(doctorId, limit = 10, offset = 0) {
+  try {
+    console.log("👨‍⚕️ [getAssignedPatientsService] Starting...");
+    console.log("➡️ Doctor ID:", doctorId);
+    console.log("➡️ Limit:", limit, "Offset:", offset);
+
+    const query = `
+      SELECT 
+        u.id AS patient_id,
+        u.username,
+        u.name,
+        u.email,
+        u.phoneNumber,
+        u.last_login,
+        u.is_active,
+        u.organization_id,
+        u.created_at,       -- ✅ Include this line
+        pda.assigned_by,
+        pda.created_at AS assigned_at
+      FROM patient_doctor_assignments pda
+      INNER JOIN users u 
+        ON u.id = pda.patient_id
+      WHERE 
+        pda.doctor_id = ?
+        AND EXISTS (
+          SELECT 1 FROM role r1
+          WHERE r1.user_id = pda.doctor_id 
+          AND r1.role_type = 'clinician'
+        )
+        AND EXISTS (
+          SELECT 1 FROM role r2
+          WHERE r2.user_id = u.id 
+          AND r2.role_type = 'patient'
+        )
+      ORDER BY u.last_login DESC, u.name ASC
+      LIMIT ? OFFSET ?
+    `;
+
+    console.log("🧩 Executing safer query...");
+    const [patients] = await db.query(query, [doctorId, limit, offset]);
+
+    console.log("✅ Query executed successfully!");
+    console.log("📦 Total patients found:", patients.length);
+    if (patients.length > 0) {
+      console.log("👥 Sample patient data:", patients.slice(0, 2));
+    } else {
+      console.log(
+        "⚠️ No patients found even after fix — check patient IDs in users table."
+      );
+    }
+
+    return patients;
+  } catch (err) {
+    console.error("❌ Error in getAssignedPatientsService:", err);
+    throw new Error("Failed to fetch assigned patients");
+  }
+}
+
+async function searchAssignedPatientsService(doctorId, search) {
+  try {
+    console.log(
+      "🔍 Searching assigned patients for:",
+      doctorId,
+      "Search:",
+      search
+    );
+
+    const query = `
+      SELECT 
+        u.id AS patient_id,
+        u.username,
+        u.name,
+        u.email,
+        u.phoneNumber,
+        u.last_login,
+        u.is_active,
+        u.organization_id,
+        u.created_at,
+        pda.assigned_by,
+        pda.created_at AS assigned_at
+      FROM patient_doctor_assignments pda
+      INNER JOIN users u ON u.id = pda.patient_id
+      WHERE 
+        pda.doctor_id = ?
+        AND (
+          u.name LIKE ? OR
+          u.username LIKE ? OR
+          u.email LIKE ? OR
+          u.phoneNumber LIKE ?
+        )
+        AND EXISTS (
+          SELECT 1 FROM role r1
+          WHERE r1.user_id = pda.doctor_id 
+          AND r1.role_type = 'clinician'
+        )
+        AND EXISTS (
+          SELECT 1 FROM role r2
+          WHERE r2.user_id = u.id 
+          AND r2.role_type = 'patient'
+        )
+      ORDER BY u.name ASC
+      LIMIT 20
+    `;
+
+    const likeQuery = `%${search}%`;
+    const [patients] = await db.query(query, [
+      doctorId,
+      likeQuery,
+      likeQuery,
+      likeQuery,
+      likeQuery,
+    ]);
+
+    console.log("✅ Search results:", patients.length);
+    return patients;
+  } catch (err) {
+    console.error("❌ Error in searchAssignedPatientsService:", err);
+    throw new Error("Failed to search assigned patients");
+  }
+}
+
+const getUserWithLatestBPDataService = async (userId) => {
+  try {
+    // Fetch user details
+    const [userRows] = await db.query(
+      `
+      SELECT 
+        id, username, name, email, phoneNumber, organization_id,
+        is_active, last_login, created_at, updated_at
+      FROM users
+      WHERE id = ?
+      `,
+      [userId]
+    );
+
+    if (userRows.length === 0) return null;
+    const user = userRows[0];
+
+    // Fetch latest BP device data
+    const [bpRows] = await db.query(
+      `
+      SELECT 
+        id, dev_id, user_id, data, created_at, dev_type
+      FROM dev_data
+      WHERE user_id = ? AND dev_type = 'bp'
+      ORDER BY created_at DESC
+      LIMIT 1
+      `,
+      [userId]
+    );
+
+    const bpData = bpRows.length > 0 ? bpRows[0] : null;
+
+    return { user, latestBP: bpData };
+  } catch (err) {
+    console.error("❌ Error in getUserWithLatestBPDataService:", err);
+    throw new Error("Failed to fetch user data with BP info");
+  }
+};
+
 module.exports = {
+  getUserWithLatestBPDataService,
   getPatientVitalSignsService,
+  getAssignedPatientsService,
   verifyDoctorPatientAccess,
   getPatientDeviceDataService,
+  searchAssignedPatientsService,
 };

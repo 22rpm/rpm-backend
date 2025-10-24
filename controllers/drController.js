@@ -1,5 +1,10 @@
 import pool from "../config/db.js";
-import { verifyDoctorPatientAccess } from "../services/doctor.service.js";
+import {
+  verifyDoctorPatientAccess,
+  getAssignedPatientsService,
+  searchAssignedPatientsService,
+  getUserWithLatestBPDataService,
+} from "../services/doctor.service.js";
 import { getPatientVitalSignsService } from "../services/doctor.service.js";
 
 export const getPatientVitalSignsController = async (req, res) => {
@@ -111,6 +116,97 @@ export const getPatientDeviceDataController = async (req, res) => {
     res.status(500).json({
       success: false,
       message: err.message || "Internal Server Error",
+    });
+  }
+};
+
+export const getAssignedPatientsController = async (req, res) => {
+  try {
+    const doctor = req.user;
+    const { page = 1, limit = 5 } = req.query;
+
+    const pageInt = parseInt(page);
+    const limitInt = parseInt(limit);
+    const offset = (pageInt - 1) * limitInt;
+
+    const result = await getAssignedPatientsService(
+      doctor.id,
+      limitInt,
+      offset
+    );
+
+    res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (err) {
+    console.error("❌ Error fetching assigned patients:", err);
+    res.status(500).json({
+      success: false,
+      message: err.message || "Internal Server Error",
+    });
+  }
+};
+
+export const searchAssignedPatientsController = async (req, res) => {
+  try {
+    const doctor = req.user;
+    const { search = "" } = req.query;
+
+    if (!search.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Search term is required",
+      });
+    }
+
+    const result = await searchAssignedPatientsService(
+      doctor.id,
+      search.trim()
+    );
+
+    res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (err) {
+    console.error("❌ Error searching assigned patients:", err);
+    res.status(500).json({
+      success: false,
+      message: err.message || "Internal Server Error",
+    });
+  }
+};
+
+export const getUserWithLatestBPDataController = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: "User ID is required",
+      });
+    }
+
+    const result = await getUserWithLatestBPDataService(userId);
+
+    if (!result) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found or no BP data available",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (err) {
+    console.error("❌ Error fetching user data:", err);
+    res.status(500).json({
+      success: false,
+      message: err.message || "Internal server error",
     });
   }
 };
