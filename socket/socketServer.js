@@ -1,4 +1,3 @@
-// socket/socketServer.js
 const socketIo = require("socket.io");
 const jwt = require("jsonwebtoken");
 const cookie = require("cookie");
@@ -24,7 +23,7 @@ const initializeSocket = (server) => {
       methods: ["GET", "POST"],
       credentials: true,
     },
-    path: "/socket.io", // Important: Nginx handles the /rpm-be prefix
+    path: "/rpm-be/socket.io", // Important: Match the backend path
     pingTimeout: 60000,
     pingInterval: 25000,
     transports: ["websocket", "polling"],
@@ -87,11 +86,11 @@ const initializeSocket = (server) => {
 
     // Test connection
     socket.emit("test_connection", {
-      message: "Hello from server! Connected successfully",
+      message: "Hello from server! Connected via /rpm-be path",
       userId: socket.userId,
       timestamp: new Date(),
       transport: socket.conn.transport.name,
-      path: "/socket.io",
+      path: "/rpm-be/socket.io",
     });
 
     socket.on("join_room", (receiverId) => {

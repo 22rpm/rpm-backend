@@ -65,18 +65,18 @@ app.use(
 app.use(express.urlencoded({ extended: true }));
 
 // API routes - all under /rpm-be
-app.use("/rpm-be/api/messages", messageRoutes);
-app.use("/rpm-be/api/auth", authRoutes);
-app.use("/rpm-be/api/dev-data", devDataRoutes);
-app.use("/rpm-be/api/admin", adminRoutes);
-app.use("/rpm-be/api/settings", settingsRoutes);
-app.use("/rpm-be/api/alerts", alertRoutes);
-app.use("/rpm-be/api/doctor", drRoutes);
-app.use("/rpm-be/api/org", orgRoutes);
-app.use("/rpm-be/api/patient", patientRoutes);
+app.use("/api/messages", messageRoutes);
+app.use("/api/auth", authRoutes);
+app.use("/api/dev-data", devDataRoutes);
+app.use("/api/admin", adminRoutes);
+app.use("/api/settings", settingsRoutes);
+app.use("/api/alerts", alertRoutes);
+app.use("/api/doctor", drRoutes);
+app.use("/api/org", orgRoutes);
+app.use("/api/patient", patientRoutes);
 
 // Health check endpoint
-app.get("/rpm-be/health", (req, res) =>
+app.get("/health", (req, res) =>
   res.json({
     ok: true,
     service: "rpm-api",
@@ -86,12 +86,12 @@ app.get("/rpm-be/health", (req, res) =>
 );
 
 // Socket.io test endpoint
-app.get("/rpm-be/socket-test", (req, res) => {
+app.get("/socket-test", (req, res) => {
   res.json({
     message: "Socket.io server is running",
     supportedTransports: ["polling", "websocket"],
     timestamp: new Date().toISOString(),
-    path: "/socket.io",
+    path: "/rpm-be/socket.io",
   });
 });
 
@@ -129,8 +129,7 @@ initializeSocket(server);
 const port = process.env.PORT || 4000;
 server.listen(port, "0.0.0.0", () => {
   console.log(`🚀 Server started on port ${port}`);
-  console.log(`🔌 Socket.io available on path: /socket.io`);
+  console.log(`🔌 Socket.io available on path: /rpm-be/socket.io`);
   console.log(`🌐 Health check: https://rmtrpm.duckdns.org/rpm-be/health`);
   console.log(`🔧 Socket test: https://rmtrpm.duckdns.org/rpm-be/socket-test`);
-  console.log(`📊 API Base: https://rmtrpm.duckdns.org/rpm-be/api`);
 });
