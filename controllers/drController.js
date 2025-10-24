@@ -37,7 +37,7 @@ export const getPatientDeviceDataController = async (req, res) => {
   try {
     const doctor = req.user;
     const { patientId } = req.params;
-    const { deviceType = "bp", days = 7 } = req.query;
+    const { deviceType = "bp", days = 7, page = 1, limit = 10 } = req.query;
 
     // Validate required parameters
     if (!deviceType) {
@@ -53,6 +53,22 @@ export const getPatientDeviceDataController = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "Days must be a number between 1 and 365",
+      });
+    }
+
+    // Validate pagination parameters
+    const pageInt = parseInt(page);
+    const limitInt = parseInt(limit);
+    if (isNaN(pageInt) || pageInt < 1) {
+      return res.status(400).json({
+        success: false,
+        message: "Page must be a number greater than 0",
+      });
+    }
+    if (isNaN(limitInt) || limitInt < 1 || limitInt > 100) {
+      return res.status(400).json({
+        success: false,
+        message: "Limit must be a number between 1 and 100",
       });
     }
 
@@ -81,7 +97,9 @@ export const getPatientDeviceDataController = async (req, res) => {
     const deviceData = await getPatientDeviceDataService(
       patientId,
       deviceType,
-      daysInt
+      daysInt,
+      pageInt,
+      limitInt
     );
 
     res.status(200).json({
