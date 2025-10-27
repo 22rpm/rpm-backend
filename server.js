@@ -18,6 +18,7 @@ const drRoutes = require("./routes/doctor.routes");
 const patientRoutes = require("./routes/patient.routes");
 const fs = require("fs");
 const path = require("path");
+socketIoInstance = initializeSocket(server);
 
 const app = express();
 const server = http.createServer(app);
@@ -84,32 +85,41 @@ app.get("/health", (req, res) =>
     socket: "enabled",
   })
 );
-app.get("/rpm-be/socket-test", (req, res) => {
+// Add to server.js - BEFORE socket initialization
+app.get("/rpm-be/debug-socket", (req, res) => {
   res.json({
-    message: "Socket.io server is running",
-    supportedTransports: ["polling", "websocket"],
-    timestamp: new Date().toISOString(),
-    path: "/socket.io", // Updated to reflect actual path
-    note: "Socket.IO uses default path /socket.io",
+    socketIoInitialized: !!socketIoInstance,
+    serverTime: new Date().toISOString(),
+    note: socketIoInstance
+      ? "Socket.IO is initialized and running"
+      : "Socket.IO is NOT initialized - check socketServer.js initialization",
+    port: process.env.PORT || 4000,
+    nodeEnv: process.env.NODE_ENV,
   });
 });
-// Socket.io test endpoint
-app.get("/socket-test", (req, res) => {
+
+// Add more debug endpoints to server.js
+app.get("/rpm-be/debug-paths", (req, res) => {
   res.json({
-    message: "Socket.io server is running",
+    endpoints: {
+      health: "/rpm-be/health",
+      socketDebug: "/rpm-be/debug-socket",
+      socketTest: "/rpm-be/socket-test",
+      socketIoDefault: "/socket.io/",
+      socketIoCustom: "/rpm-be/socket.io/",
+    },
+    note: "Test these paths to see which ones work",
+  });
+});
+
+app.get("/rpm-be/socket-test", (req, res) => {
+  res.json({
+    message: "Socket.io server test endpoint",
+    socketInitialized: !!socketIoInstance,
     supportedTransports: ["polling", "websocket"],
     timestamp: new Date().toISOString(),
     path: "/rpm-be/socket.io",
-  });
-});
-// In server.js - Update the socket-test endpoint
-app.get("/rpm-be/socket-test", (req, res) => {
-  res.json({
-    message: "Socket.io server is running",
-    supportedTransports: ["polling", "websocket"],
-    timestamp: new Date().toISOString(),
-    path: "/socket.io", // ✅ CORRECT: This is the actual path
-    note: "Socket.IO uses default path /socket.io (not /rpm-be/socket.io)"
+    note: "This endpoint works, but Socket.IO might have different routing",
   });
 });
 // Root endpoint redirect
