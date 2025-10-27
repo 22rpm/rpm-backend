@@ -102,7 +102,16 @@ app.get("/socket-test", (req, res) => {
     path: "/rpm-be/socket.io",
   });
 });
-
+// In server.js - Update the socket-test endpoint
+app.get("/rpm-be/socket-test", (req, res) => {
+  res.json({
+    message: "Socket.io server is running",
+    supportedTransports: ["polling", "websocket"],
+    timestamp: new Date().toISOString(),
+    path: "/socket.io", // ✅ CORRECT: This is the actual path
+    note: "Socket.IO uses default path /socket.io (not /rpm-be/socket.io)"
+  });
+});
 // Root endpoint redirect
 app.get("/", (req, res) => {
   res.redirect("/rpm-be/health");
