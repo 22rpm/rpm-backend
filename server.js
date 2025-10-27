@@ -18,7 +18,6 @@ const drRoutes = require("./routes/doctor.routes");
 const patientRoutes = require("./routes/patient.routes");
 const fs = require("fs");
 const path = require("path");
-socketIoInstance = initializeSocket(server);
 
 const app = express();
 const server = http.createServer(app);
@@ -85,43 +84,17 @@ app.get("/health", (req, res) =>
     socket: "enabled",
   })
 );
-// Add to server.js - BEFORE socket initialization
-app.get("/rpm-be/debug-socket", (req, res) => {
-  res.json({
-    socketIoInitialized: !!socketIoInstance,
-    serverTime: new Date().toISOString(),
-    note: socketIoInstance
-      ? "Socket.IO is initialized and running"
-      : "Socket.IO is NOT initialized - check socketServer.js initialization",
-    port: process.env.PORT || 4000,
-    nodeEnv: process.env.NODE_ENV,
-  });
-});
 
-// Add more debug endpoints to server.js
-app.get("/rpm-be/debug-paths", (req, res) => {
+// Socket.io test endpoint
+app.get("/socket-test", (req, res) => {
   res.json({
-    endpoints: {
-      health: "/rpm-be/health",
-      socketDebug: "/rpm-be/debug-socket",
-      socketTest: "/rpm-be/socket-test",
-      socketIoDefault: "/socket.io/",
-      socketIoCustom: "/rpm-be/socket.io/",
-    },
-    note: "Test these paths to see which ones work",
-  });
-});
-
-app.get("/rpm-be/socket-test", (req, res) => {
-  res.json({
-    message: "Socket.io server test endpoint",
-    socketInitialized: !!socketIoInstance,
+    message: "Socket.io server is running",
     supportedTransports: ["polling", "websocket"],
     timestamp: new Date().toISOString(),
     path: "/rpm-be/socket.io",
-    note: "This endpoint works, but Socket.IO might have different routing",
   });
 });
+
 // Root endpoint redirect
 app.get("/", (req, res) => {
   res.redirect("/rpm-be/health");
