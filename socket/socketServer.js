@@ -1,4 +1,4 @@
-// socket/socketServer.js - COMPLETE UPDATED CODE
+// socket/socketServer.js - MUST HAVE THIS PATH CONFIG
 const { Server } = require("socket.io");
 const jwt = require("jsonwebtoken");
 const cookie = require("cookie");
@@ -8,7 +8,7 @@ const userSockets = new Map();
 
 const initializeSocket = (server) => {
   io = new Server(server, {
-    // No path configuration - uses default "/socket.io"
+    path: "/rpm-be/socket.io", // ✅ MUST match frontend path
     cors: {
       origin: [
         "https://rmtrpm.duckdns.org",
@@ -40,6 +40,7 @@ const initializeSocket = (server) => {
     }
 
     console.log("🔐 Socket Auth - Token Present:", !!token);
+    console.log("📍 Socket Path:", "/rpm-be/socket.io");
 
     if (!token) {
       console.log("⚠️ No token found, allowing anonymous connection");
@@ -64,6 +65,7 @@ const initializeSocket = (server) => {
       `✅ User Connected → ID: ${socket.userId}, Socket: ${socket.id}`
     );
     console.log("📡 Transport:", socket.conn.transport.name);
+    console.log("📍 Path: /rpm-be/socket.io");
 
     // Store user socket mapping
     userSockets.set(socket.userId.toString(), socket.id);
@@ -76,6 +78,7 @@ const initializeSocket = (server) => {
       socketId: socket.id,
       timestamp: new Date(),
       transport: socket.conn.transport.name,
+      path: "/rpm-be/socket.io",
     });
 
     // Test message handler
