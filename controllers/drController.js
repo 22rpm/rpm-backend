@@ -42,7 +42,14 @@ export const getPatientDeviceDataController = async (req, res) => {
   try {
     const doctor = req.user;
     const { patientId } = req.params;
-    const { deviceType = "bp", days = 7, page = 1, limit = 10 } = req.query;
+    const {
+      deviceType = "bp",
+      days = 7,
+      page = 1,
+      limit = 10,
+      fromDate,
+      toDate,
+    } = req.query;
 
     // Validate required parameters
     if (!deviceType) {
@@ -52,7 +59,7 @@ export const getPatientDeviceDataController = async (req, res) => {
       });
     }
 
-    // Validate days parameter
+    // Validate days parameter (only used in range mode)
     const daysInt = parseInt(days);
     if (isNaN(daysInt) || daysInt < 1 || daysInt > 365) {
       return res.status(400).json({
@@ -75,6 +82,26 @@ export const getPatientDeviceDataController = async (req, res) => {
         success: false,
         message: "Limit must be a number between 1 and 100",
       });
+    }
+
+    // Validate date range if custom dates are provided
+    if (fromDate && toDate) {
+      const from = new Date(fromDate);
+      const to = new Date(toDate);
+
+      if (isNaN(from.getTime()) || isNaN(to.getTime())) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid date format. Use YYYY-MM-DD",
+        });
+      }
+
+      if (from > to) {
+        return res.status(400).json({
+          success: false,
+          message: "From date cannot be after to date",
+        });
+      }
     }
 
     // Verify doctor has access to this patient
@@ -104,7 +131,9 @@ export const getPatientDeviceDataController = async (req, res) => {
       deviceType,
       daysInt,
       pageInt,
-      limitInt
+      limitInt,
+      fromDate,
+      toDate
     );
 
     res.status(200).json({

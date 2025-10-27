@@ -111,13 +111,270 @@ const verifyDoctorPatientAccess = async (doctorId, patientId) => {
   return assignments.length > 0;
 };
 
+const getBPStatus = (systolic, diastolic) => {
+  if (!systolic || !diastolic) return "no-data";
+
+  if (systolic > 180 || diastolic > 120) return "critical";
+  if (systolic > 140 || diastolic > 90) return "warning";
+  if (systolic < 90 || diastolic < 60) return "warning";
+
+  return "normal";
+};
+// Helper function to calculate statistics
+const calculateStatistics = (readings) => {
+  if (readings.length === 0) {
+    return {
+      totalReadings: 0,
+      averageSystolic: 0,
+      averageDiastolic: 0,
+      averagePulse: 0,
+      highestSystolic: 0,
+      lowestSystolic: 0,
+      highestDiastolic: 0,
+      lowestDiastolic: 0,
+    };
+  }
+
+  const systolicReadings = readings.map(r => r.systolic).filter(Boolean);
+  const diastolicReadings = readings.map(r => r.diastolic).filter(Boolean);
+  const pulseReadings = readings.map(r => r.pulse).filter(Boolean);
+
+  return {
+    totalReadings: readings.length,
+    averageSystolic: Math.round(systolicReadings.reduce((sum, val) => sum + val, 0) / systolicReadings.length),
+    averageDiastolic: Math.round(diastolicReadings.reduce((sum, val) => sum + val, 0) / diastolicReadings.length),
+    averagePulse: pulseReadings.length > 0 ? Math.round(pulseReadings.reduce((sum, val) => sum + val, 0) / pulseReadings.length) : 0,
+    highestSystolic: Math.max(...systolicReadings),
+    lowestSystolic: Math.min(...systolicReadings),
+    highestDiastolic: Math.max(...diastolicReadings),
+    lowestDiastolic: Math.min(...diastolicReadings),
+    highestPulse: pulseReadings.length > 0 ? Math.max(...pulseReadings) : 0,
+    lowestPulse: pulseReadings.length > 0 ? Math.min(...pulseReadings) : 0,
+  };
+};
 // Update your getPatientDeviceDataService function
+// const getPatientDeviceDataService = async (
+//   patientId,
+//   deviceType,
+//   days,
+//   page = 1,
+//   limit = 10
+// ) => {
+//   // Get patient details
+//   const [patientDetails] = await db.query(
+//     `SELECT id, name, email FROM users WHERE id = ?`,
+//     [patientId]
+//   );
+
+//   if (patientDetails.length === 0) {
+//     throw new Error("Patient not found");
+//   }
+
+//   // Calculate date range
+//   const startDate = new Date();
+//   startDate.setDate(startDate.getDate() - days);
+//   const startDateString = startDate.toISOString().split("T")[0];
+
+//   // Calculate offset for pagination
+//   const offset = (page - 1) * limit;
+
+//   // Get paginated data
+//   const [deviceData] = await db.query(
+//     `SELECT 
+//       id,
+//       dev_id,
+//       user_id,
+//       data,
+//       dev_type,
+//       created_at,
+//       updated_at
+//      FROM dev_data 
+//      WHERE user_id = ? 
+//        AND dev_type = ?
+//        AND DATE(created_at) >= ?
+//      ORDER BY created_at DESC
+//      LIMIT ? OFFSET ?`,
+//     [patientId, deviceType, startDateString, limit, offset]
+//   );
+
+//   // Get total count for pagination
+//   const [totalCountResult] = await db.query(
+//     `SELECT COUNT(*) as total
+//      FROM dev_data 
+//      WHERE user_id = ? 
+//        AND dev_type = ?
+//        AND DATE(created_at) >= ?`,
+//     [patientId, deviceType, startDateString]
+//   );
+
+//   const totalRecords = totalCountResult[0].total;
+//   const totalPages = Math.ceil(totalRecords / limit);
+
+//   // If no data found
+//   if (deviceData.length === 0) {
+//     return {
+//       patient: patientDetails[0],
+//       deviceType,
+//       days,
+//       totalRecords: 0,
+//       data: [],
+//       dateRange: {
+//         start: startDateString,
+//         end: new Date().toISOString().split("T")[0],
+//       },
+//       pagination: {
+//         currentPage: page,
+//         totalPages: 0,
+//         totalRecords: 0,
+//         hasNext: false,
+//         hasPrev: false,
+//       },
+//       message: `No ${deviceType.toUpperCase()} data found for the last ${days} days`,
+//     };
+//   }
+
+//   // Process BP data to extract systolic, diastolic, pulse from your JSON structure
+//   const processedData = deviceData.map((record) => {
+//     let systolic = null;
+//     let diastolic = null;
+//     let pulse = null;
+//     let mean = null;
+//     let bpStatus = null;
+
+//     try {
+//       const dataObj =
+//         typeof record.data === "string" ? JSON.parse(record.data) : record.data;
+
+//       // Extract data from your JSON structure
+//       systolic = dataObj.systolic || null;
+//       diastolic = dataObj.diastolic || null;
+//       pulse = dataObj.pulse || null;
+//       mean = dataObj.mean || null;
+//       bpStatus = dataObj.bpStatus || null;
+//     } catch (error) {
+//       console.error("Error parsing device data:", error);
+//     }
+
+//     return {
+//       ...record,
+//       systolic,
+//       diastolic,
+//       pulse,
+//       mean,
+//       bpStatus,
+//       formattedBP: systolic && diastolic ? `${systolic}/${diastolic}` : "N/A",
+//       formattedPulse: pulse ? `${pulse} bpm` : "N/A",
+//     };
+//   });
+
+//   // Calculate statistics for the entire date range (not just current page)
+//   const [allDataInRange] = await db.query(
+//     `SELECT data
+//      FROM dev_data 
+//      WHERE user_id = ? 
+//        AND dev_type = ?
+//        AND DATE(created_at) >= ?`,
+//     [patientId, deviceType, startDateString]
+//   );
+
+//   const allReadings = allDataInRange
+//     .map((record) => {
+//       try {
+//         const dataObj =
+//           typeof record.data === "string"
+//             ? JSON.parse(record.data)
+//             : record.data;
+//         return {
+//           systolic: dataObj.systolic || dataObj.SYS,
+//           diastolic: dataObj.diastolic || dataObj.DIA,
+//           pulse: dataObj.pulse,
+//         };
+//       } catch (error) {
+//         return null;
+//       }
+//     })
+//     .filter((reading) => reading && reading.systolic && reading.diastolic);
+
+//   // Calculate statistics
+//   const statistics =
+//     allReadings.length > 0
+//       ? {
+//           totalReadings: allReadings.length,
+//           averageSystolic: Math.round(
+//             allReadings.reduce((sum, reading) => sum + reading.systolic, 0) /
+//               allReadings.length
+//           ),
+//           averageDiastolic: Math.round(
+//             allReadings.reduce((sum, reading) => sum + reading.diastolic, 0) /
+//               allReadings.length
+//           ),
+//           averagePulse: Math.round(
+//             allReadings.reduce(
+//               (sum, reading) => sum + (reading.pulse || 0),
+//               0
+//             ) / allReadings.filter((r) => r.pulse).length
+//           ),
+//           highestSystolic: Math.max(
+//             ...allReadings.map((reading) => reading.systolic)
+//           ),
+//           lowestSystolic: Math.min(
+//             ...allReadings.map((reading) => reading.systolic)
+//           ),
+//           highestDiastolic: Math.max(
+//             ...allReadings.map((reading) => reading.diastolic)
+//           ),
+//           lowestDiastolic: Math.min(
+//             ...allReadings.map((reading) => reading.diastolic)
+//           ),
+//           highestPulse: Math.max(
+//             ...allReadings.map((reading) => reading.pulse || 0)
+//           ),
+//           lowestPulse: Math.min(
+//             ...allReadings.map((reading) => reading.pulse || 0)
+//           ),
+//         }
+//       : {
+//           totalReadings: 0,
+//           averageSystolic: 0,
+//           averageDiastolic: 0,
+//           averagePulse: 0,
+//           highestSystolic: 0,
+//           lowestSystolic: 0,
+//           highestDiastolic: 0,
+//           lowestDiastolic: 0,
+//           highestPulse: 0,
+//           lowestPulse: 0,
+//         };
+
+//   return {
+//     patient: patientDetails[0],
+//     deviceType,
+//     days,
+//     totalRecords,
+//     data: processedData,
+//     statistics,
+//     dateRange: {
+//       start: startDateString,
+//       end: new Date().toISOString().split("T")[0],
+//     },
+//     pagination: {
+//       currentPage: page,
+//       totalPages,
+//       totalRecords,
+//       hasNext: page < totalPages,
+//       hasPrev: page > 1,
+//       limit,
+//     },
+//   };
+// };
 const getPatientDeviceDataService = async (
   patientId,
   deviceType,
   days,
   page = 1,
-  limit = 10
+  limit = 10,
+  fromDate = null,
+  toDate = null
 ) => {
   // Get patient details
   const [patientDetails] = await db.query(
@@ -129,10 +386,27 @@ const getPatientDeviceDataService = async (
     throw new Error("Patient not found");
   }
 
-  // Calculate date range
-  const startDate = new Date();
-  startDate.setDate(startDate.getDate() - days);
-  const startDateString = startDate.toISOString().split("T")[0];
+  // Build date range condition based on input
+  let dateCondition = "";
+  let dateParams = [];
+  let startDateString = "";
+  let endDateString = "";
+
+  if (fromDate && toDate) {
+    // Custom date range mode
+    startDateString = fromDate;
+    endDateString = toDate;
+    dateCondition = "AND DATE(created_at) BETWEEN ? AND ?";
+    dateParams = [fromDate, toDate];
+  } else {
+    // Days range mode (default)
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+    startDateString = startDate.toISOString().split("T")[0];
+    endDateString = new Date().toISOString().split("T")[0];
+    dateCondition = "AND DATE(created_at) >= ?";
+    dateParams = [startDateString];
+  }
 
   // Calculate offset for pagination
   const offset = (page - 1) * limit;
@@ -150,10 +424,10 @@ const getPatientDeviceDataService = async (
      FROM dev_data 
      WHERE user_id = ? 
        AND dev_type = ?
-       AND DATE(created_at) >= ?
+       ${dateCondition}
      ORDER BY created_at DESC
      LIMIT ? OFFSET ?`,
-    [patientId, deviceType, startDateString, limit, offset]
+    [patientId, deviceType, ...dateParams, limit, offset]
   );
 
   // Get total count for pagination
@@ -162,8 +436,8 @@ const getPatientDeviceDataService = async (
      FROM dev_data 
      WHERE user_id = ? 
        AND dev_type = ?
-       AND DATE(created_at) >= ?`,
-    [patientId, deviceType, startDateString]
+       ${dateCondition}`,
+    [patientId, deviceType, ...dateParams]
   );
 
   const totalRecords = totalCountResult[0].total;
@@ -174,21 +448,33 @@ const getPatientDeviceDataService = async (
     return {
       patient: patientDetails[0],
       deviceType,
-      days,
-      totalRecords: 0,
-      data: [],
+      days: fromDate && toDate ? null : days, // Only include days if not custom range
       dateRange: {
         start: startDateString,
-        end: new Date().toISOString().split("T")[0],
+        end: endDateString,
+        mode: fromDate && toDate ? "custom" : "days",
       },
+      totalRecords: 0,
+      data: [],
       pagination: {
         currentPage: page,
         totalPages: 0,
         totalRecords: 0,
         hasNext: false,
         hasPrev: false,
+        limit,
       },
-      message: `No ${deviceType.toUpperCase()} data found for the last ${days} days`,
+      statistics: {
+        totalReadings: 0,
+        averageSystolic: 0,
+        averageDiastolic: 0,
+        averagePulse: 0,
+        highestSystolic: 0,
+        lowestSystolic: 0,
+        highestDiastolic: 0,
+        lowestDiastolic: 0,
+      },
+      message: `No ${deviceType.toUpperCase()} data found for the selected period`,
     };
   }
 
@@ -199,19 +485,31 @@ const getPatientDeviceDataService = async (
     let pulse = null;
     let mean = null;
     let bpStatus = null;
+    let batteryLevel = null;
+    let deviceName = null;
 
     try {
       const dataObj =
         typeof record.data === "string" ? JSON.parse(record.data) : record.data;
 
       // Extract data from your JSON structure
-      systolic = dataObj.systolic || null;
-      diastolic = dataObj.diastolic || null;
-      pulse = dataObj.pulse || null;
+      systolic = dataObj.systolic || dataObj.SYS || null;
+      diastolic = dataObj.diastolic || dataObj.DIA || null;
+      pulse = dataObj.pulse || dataObj.heartRate || null;
       mean = dataObj.mean || null;
       bpStatus = dataObj.bpStatus || null;
+
+      // Extract device info for frontend
+      batteryLevel = dataObj.deviceInfo?.batteryLevel || null;
+      deviceName =
+        dataObj.deviceInfo?.name || record.dev_id || "Unknown Device";
     } catch (error) {
       console.error("Error parsing device data:", error);
+    }
+
+    // Determine BP status if not provided
+    if (!bpStatus && systolic && diastolic) {
+      bpStatus = getBPStatus(systolic, diastolic);
     }
 
     return {
@@ -221,6 +519,8 @@ const getPatientDeviceDataService = async (
       pulse,
       mean,
       bpStatus,
+      batteryLevel,
+      deviceName,
       formattedBP: systolic && diastolic ? `${systolic}/${diastolic}` : "N/A",
       formattedPulse: pulse ? `${pulse} bpm` : "N/A",
     };
@@ -232,8 +532,8 @@ const getPatientDeviceDataService = async (
      FROM dev_data 
      WHERE user_id = ? 
        AND dev_type = ?
-       AND DATE(created_at) >= ?`,
-    [patientId, deviceType, startDateString]
+       ${dateCondition}`,
+    [patientId, deviceType, ...dateParams]
   );
 
   const allReadings = allDataInRange
@@ -246,7 +546,7 @@ const getPatientDeviceDataService = async (
         return {
           systolic: dataObj.systolic || dataObj.SYS,
           diastolic: dataObj.diastolic || dataObj.DIA,
-          pulse: dataObj.pulse,
+          pulse: dataObj.pulse || dataObj.heartRate,
         };
       } catch (error) {
         return null;
@@ -255,66 +555,19 @@ const getPatientDeviceDataService = async (
     .filter((reading) => reading && reading.systolic && reading.diastolic);
 
   // Calculate statistics
-  const statistics =
-    allReadings.length > 0
-      ? {
-          totalReadings: allReadings.length,
-          averageSystolic: Math.round(
-            allReadings.reduce((sum, reading) => sum + reading.systolic, 0) /
-              allReadings.length
-          ),
-          averageDiastolic: Math.round(
-            allReadings.reduce((sum, reading) => sum + reading.diastolic, 0) /
-              allReadings.length
-          ),
-          averagePulse: Math.round(
-            allReadings.reduce(
-              (sum, reading) => sum + (reading.pulse || 0),
-              0
-            ) / allReadings.filter((r) => r.pulse).length
-          ),
-          highestSystolic: Math.max(
-            ...allReadings.map((reading) => reading.systolic)
-          ),
-          lowestSystolic: Math.min(
-            ...allReadings.map((reading) => reading.systolic)
-          ),
-          highestDiastolic: Math.max(
-            ...allReadings.map((reading) => reading.diastolic)
-          ),
-          lowestDiastolic: Math.min(
-            ...allReadings.map((reading) => reading.diastolic)
-          ),
-          highestPulse: Math.max(
-            ...allReadings.map((reading) => reading.pulse || 0)
-          ),
-          lowestPulse: Math.min(
-            ...allReadings.map((reading) => reading.pulse || 0)
-          ),
-        }
-      : {
-          totalReadings: 0,
-          averageSystolic: 0,
-          averageDiastolic: 0,
-          averagePulse: 0,
-          highestSystolic: 0,
-          lowestSystolic: 0,
-          highestDiastolic: 0,
-          lowestDiastolic: 0,
-          highestPulse: 0,
-          lowestPulse: 0,
-        };
+  const statistics = calculateStatistics(allReadings);
 
   return {
     patient: patientDetails[0],
     deviceType,
-    days,
+    days: fromDate && toDate ? null : days, // Only include days if not custom range
     totalRecords,
     data: processedData,
     statistics,
     dateRange: {
       start: startDateString,
-      end: new Date().toISOString().split("T")[0],
+      end: endDateString,
+      mode: fromDate && toDate ? "custom" : "days",
     },
     pagination: {
       currentPage: page,
