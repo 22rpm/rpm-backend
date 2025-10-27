@@ -84,7 +84,15 @@ app.get("/health", (req, res) =>
     socket: "enabled",
   })
 );
-
+app.get("/rpm-be/socket-test", (req, res) => {
+  res.json({
+    message: "Socket.io server is running",
+    supportedTransports: ["polling", "websocket"],
+    timestamp: new Date().toISOString(),
+    path: "/socket.io", // Updated to reflect actual path
+    note: "Socket.IO uses default path /socket.io",
+  });
+});
 // Socket.io test endpoint
 app.get("/socket-test", (req, res) => {
   res.json({

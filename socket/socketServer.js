@@ -1,21 +1,20 @@
+// socket/socketServer.js - COMPLETE UPDATED CODE
 const { Server } = require("socket.io");
 const jwt = require("jsonwebtoken");
 const cookie = require("cookie");
 
 let io;
-const userSockets = new Map(); // userId -> socketId mapping
+const userSockets = new Map();
 
 const initializeSocket = (server) => {
   io = new Server(server, {
-    path: "/rpm-be/socket.io", // Must match frontend & Nginx path
+    // No path configuration - uses default "/socket.io"
     cors: {
       origin: [
+        "https://rmtrpm.duckdns.org",
         "http://localhost:5173",
         "http://localhost:5174",
         "http://localhost:5175",
-        "https://rmtrpm.duckdns.org",
-        "https://rmtrpm.duckdns.org/rpm",
-        "http://rmtrpm.duckdns.org",
       ],
       methods: ["GET", "POST"],
       credentials: true,
@@ -25,7 +24,7 @@ const initializeSocket = (server) => {
     pingInterval: 25000,
   });
 
-  // 🔐 Authentication middleware
+  // Authentication middleware
   io.use((socket, next) => {
     let token;
 
@@ -35,16 +34,15 @@ const initializeSocket = (server) => {
       token = cookies.token;
     }
 
-    // Fallback: check auth object
-    if (!token && socket.handshake.auth && socket.handshake.auth.token) {
+    // Fallback to auth object
+    if (!token && socket.handshake.auth?.token) {
       token = socket.handshake.auth.token;
     }
 
     console.log("🔐 Socket Auth - Token Present:", !!token);
-    console.log("📡 Socket Path:", socket.handshake.url);
 
     if (!token) {
-      console.log("⚠️ No token found, allowing anonymous for testing.");
+      console.log("⚠️ No token found, allowing anonymous connection");
       socket.userId = "anonymous";
       return next();
     }
@@ -61,37 +59,52 @@ const initializeSocket = (server) => {
     }
   });
 
-  // 🧩 Connection Events
   io.on("connection", (socket) => {
     console.log(
       `✅ User Connected → ID: ${socket.userId}, Socket: ${socket.id}`
     );
     console.log("📡 Transport:", socket.conn.transport.name);
-    console.log("🔗 URL Path:", socket.handshake.url);
 
+    // Store user socket mapping
     userSockets.set(socket.userId.toString(), socket.id);
     console.log("📊 Connected Users:", Array.from(userSockets.entries()));
 
-    // Test message
-    socket.emit("test_connection", {
-      message: "Hello from Socket.IO server!",
+    // Send immediate connection confirmation
+    socket.emit("connection_success", {
+      message: "Socket.IO connected successfully!",
       userId: socket.userId,
+      socketId: socket.id,
       timestamp: new Date(),
-      path: "/rpm-be/socket.io",
       transport: socket.conn.transport.name,
     });
 
-    // Join private chat room
-    socket.on("join_room", (receiverId) => {
-      const roomId = [socket.userId, receiverId].sort().join("_");
-      socket.join(roomId);
-      console.log(`🚪 User ${socket.userId} joined room ${roomId}`);
+    // Test message handler
+    socket.on("test_message", (data) => {
+      console.log("📨 Received test message:", data);
+      socket.emit("test_response", {
+        message: "Test response from server",
+        received: data,
+        timestamp: new Date(),
+      });
     });
 
-    // Send message to room
+    // Join room handler
+    socket.on("join_room", (roomId) => {
+      socket.join(roomId);
+      console.log(`🚪 User ${socket.userId} joined room ${roomId}`);
+      socket.emit("room_joined", {
+        roomId,
+        message: `Successfully joined room ${roomId}`,
+        timestamp: new Date(),
+      });
+    });
+
+    // Send message handler
     socket.on("send_message", (data) => {
       const { receiverId, message } = data;
       const roomId = [socket.userId, receiverId].sort().join("_");
+
+      console.log(`📤 User ${socket.userId} sending message to room ${roomId}`);
 
       io.to(roomId).emit("new_message", {
         senderId: socket.userId,
@@ -101,7 +114,7 @@ const initializeSocket = (server) => {
       });
     });
 
-    // Detect transport upgrade (polling → websocket)
+    // Handle transport upgrades
     socket.conn.on("upgrade", (transport) => {
       console.log(
         `🔄 Transport upgraded for ${socket.userId}: ${transport.name}`
@@ -121,14 +134,17 @@ const initializeSocket = (server) => {
   return io;
 };
 
-// Export helpers
 const getIO = () => {
   if (!io) throw new Error("Socket.io not initialized!");
   return io;
 };
 
+const getUserSockets = () => {
+  return userSockets;
+};
+
 module.exports = {
   initializeSocket,
   getIO,
-  userSockets,
+  getUserSockets,
 };
