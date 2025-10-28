@@ -445,10 +445,10 @@ const getPatientDeviceDataService = async (
 
   // If no data found
   if (deviceData.length === 0) {
-    return {
+    const emptyResponse = {
       patient: patientDetails[0],
       deviceType,
-      days: fromDate && toDate ? null : days, // Only include days if not custom range
+      days: fromDate && toDate ? null : days,
       dateRange: {
         start: startDateString,
         end: endDateString,
@@ -464,7 +464,12 @@ const getPatientDeviceDataService = async (
         hasPrev: false,
         limit,
       },
-      statistics: {
+      message: `No ${deviceType.toUpperCase()} data found for the selected period`,
+    };
+
+    // Add device-specific empty statistics
+    if (deviceType === "bp") {
+      emptyResponse.statistics = {
         totalReadings: 0,
         averageSystolic: 0,
         averageDiastolic: 0,
@@ -473,94 +478,52 @@ const getPatientDeviceDataService = async (
         lowestSystolic: 0,
         highestDiastolic: 0,
         lowestDiastolic: 0,
-      },
-      message: `No ${deviceType.toUpperCase()} data found for the selected period`,
-    };
+      };
+    } else if (deviceType === "spo2") {
+      emptyResponse.statistics = {
+        totalReadings: 0,
+        averageSpo2: 0,
+        averagePulse: 0,
+        highestSpo2: 0,
+        lowestSpo2: 0,
+        maxSpo2: 0,
+        minSpo2: 0,
+        maxPulse: 0,
+        minPulse: 0,
+      };
+    }
+
+    return emptyResponse;
   }
 
-  // Process BP data to extract systolic, diastolic, pulse from your JSON structure
-  const processedData = deviceData.map((record) => {
-    let systolic = null;
-    let diastolic = null;
-    let pulse = null;
-    let mean = null;
-    let bpStatus = null;
-    let batteryLevel = null;
-    let deviceName = null;
+  // Process data based on device type
+  let processedData = [];
+  let statistics = {};
 
-    try {
-      const dataObj =
-        typeof record.data === "string" ? JSON.parse(record.data) : record.data;
-
-      // Extract data from your JSON structure
-      systolic = dataObj.systolic || dataObj.SYS || null;
-      diastolic = dataObj.diastolic || dataObj.DIA || null;
-      pulse = dataObj.pulse || dataObj.heartRate || null;
-      mean = dataObj.mean || null;
-      bpStatus = dataObj.bpStatus || null;
-
-      // Extract device info for frontend
-      batteryLevel = dataObj.deviceInfo?.batteryLevel || null;
-      deviceName =
-        dataObj.deviceInfo?.name || record.dev_id || "Unknown Device";
-    } catch (error) {
-      console.error("Error parsing device data:", error);
-    }
-
-    // Determine BP status if not provided
-    if (!bpStatus && systolic && diastolic) {
-      bpStatus = getBPStatus(systolic, diastolic);
-    }
-
-    return {
-      ...record,
-      systolic,
-      diastolic,
-      pulse,
-      mean,
-      bpStatus,
-      batteryLevel,
-      deviceName,
-      formattedBP: systolic && diastolic ? `${systolic}/${diastolic}` : "N/A",
-      formattedPulse: pulse ? `${pulse} bpm` : "N/A",
-    };
-  });
-
-  // Calculate statistics for the entire date range (not just current page)
-  const [allDataInRange] = await db.query(
-    `SELECT data
-     FROM dev_data 
-     WHERE user_id = ? 
-       AND dev_type = ?
-       ${dateCondition}`,
-    [patientId, deviceType, ...dateParams]
-  );
-
-  const allReadings = allDataInRange
-    .map((record) => {
-      try {
-        const dataObj =
-          typeof record.data === "string"
-            ? JSON.parse(record.data)
-            : record.data;
-        return {
-          systolic: dataObj.systolic || dataObj.SYS,
-          diastolic: dataObj.diastolic || dataObj.DIA,
-          pulse: dataObj.pulse || dataObj.heartRate,
-        };
-      } catch (error) {
-        return null;
-      }
-    })
-    .filter((reading) => reading && reading.systolic && reading.diastolic);
-
-  // Calculate statistics
-  const statistics = calculateStatistics(allReadings);
+  if (deviceType === "bp") {
+    processedData = deviceData.map(processBPData);
+    const allReadings = await getAllReadingsInRange(
+      patientId,
+      deviceType,
+      dateCondition,
+      dateParams
+    );
+    statistics = calculateBPStatistics(allReadings);
+  } else if (deviceType === "spo2") {
+    processedData = deviceData.map(processSpO2Data);
+    const allReadings = await getAllReadingsInRange(
+      patientId,
+      deviceType,
+      dateCondition,
+      dateParams
+    );
+    statistics = calculateSpO2Statistics(allReadings);
+  }
 
   return {
     patient: patientDetails[0],
     deviceType,
-    days: fromDate && toDate ? null : days, // Only include days if not custom range
+    days: fromDate && toDate ? null : days,
     totalRecords,
     data: processedData,
     statistics,
@@ -578,6 +541,255 @@ const getPatientDeviceDataService = async (
       limit,
     },
   };
+};
+
+// Helper function to get all readings in date range for statistics
+const getAllReadingsInRange = async (
+  patientId,
+  deviceType,
+  dateCondition,
+  dateParams
+) => {
+  const [allDataInRange] = await db.query(
+    `SELECT data
+     FROM dev_data 
+     WHERE user_id = ? 
+       AND dev_type = ?
+       ${dateCondition}`,
+    [patientId, deviceType, ...dateParams]
+  );
+
+  return allDataInRange
+    .map((record) => {
+      try {
+        return typeof record.data === "string"
+          ? JSON.parse(record.data)
+          : record.data;
+      } catch (error) {
+        console.error("Error parsing device data:", error);
+        return null;
+      }
+    })
+    .filter((data) => data !== null);
+};
+
+// Process BP data
+const processBPData = (record) => {
+  let systolic = null;
+  let diastolic = null;
+  let pulse = null;
+  let mean = null;
+  let bpStatus = null;
+  let batteryLevel = null;
+  let deviceName = null;
+
+  try {
+    const dataObj =
+      typeof record.data === "string" ? JSON.parse(record.data) : record.data;
+
+    // Extract data from BP JSON structure
+    systolic = dataObj.systolic || dataObj.SYS || null;
+    diastolic = dataObj.diastolic || dataObj.DIA || null;
+    pulse = dataObj.pulse || dataObj.heartRate || null;
+    mean = dataObj.mean || null;
+    bpStatus = dataObj.bpStatus || null;
+
+    // Extract device info for frontend
+    batteryLevel = dataObj.deviceInfo?.batteryLevel || null;
+    deviceName = dataObj.deviceInfo?.name || record.dev_id || "Unknown Device";
+  } catch (error) {
+    console.error("Error parsing BP device data:", error);
+  }
+
+  // Determine BP status if not provided
+  if (!bpStatus && systolic && diastolic) {
+    bpStatus = getBPStatus(systolic, diastolic);
+  }
+
+  return {
+    ...record,
+    systolic,
+    diastolic,
+    pulse,
+    mean,
+    bpStatus,
+    batteryLevel,
+    deviceName,
+    formattedBP: systolic && diastolic ? `${systolic}/${diastolic}` : "N/A",
+    formattedPulse: pulse ? `${pulse} bpm` : "N/A",
+  };
+};
+
+// Process SpO2 data
+const processSpO2Data = (record) => {
+  let spo2 = null;
+  let pulse = null;
+  let pi = null;
+  let maxSpo2 = null;
+  let minSpo2 = null;
+  let maxPulse = null;
+  let minPulse = null;
+  let duration = null;
+  let batteryLevel = null;
+  let deviceName = null;
+
+  try {
+    const dataObj =
+      typeof record.data === "string" ? JSON.parse(record.data) : record.data;
+
+    // Extract data from SpO2 JSON structure
+    spo2 = dataObj.spo2 || null;
+    pulse = dataObj.pulse || null;
+    pi = dataObj.pi || null;
+    maxSpo2 = dataObj.maxSpo2 || null;
+    minSpo2 = dataObj.minSpo2 || null;
+    maxPulse = dataObj.maxPulse || null;
+    minPulse = dataObj.minPulse || null;
+    duration = dataObj.duration || null;
+
+    // Extract device info for frontend
+    batteryLevel = dataObj.deviceInfo?.batteryLevel || null;
+    deviceName = dataObj.deviceInfo?.name || record.dev_id || "Unknown Device";
+  } catch (error) {
+    console.error("Error parsing SpO2 device data:", error);
+  }
+
+  // Determine SpO2 status
+  const spo2Status = getSpO2Status(spo2);
+
+  return {
+    ...record,
+    spo2,
+    pulse,
+    pi,
+    maxSpo2,
+    minSpo2,
+    maxPulse,
+    minPulse,
+    duration,
+    spo2Status,
+    batteryLevel,
+    deviceName,
+    formattedSpO2: spo2 ? `${spo2}%` : "N/A",
+    formattedPulse: pulse ? `${Math.round(pulse)} bpm` : "N/A",
+    formattedPI: pi !== null && pi !== undefined ? pi.toString() : "N/A",
+  };
+};
+
+// Calculate BP statistics
+const calculateBPStatistics = (readings) => {
+  const validReadings = readings.filter(
+    (reading) => reading && reading.systolic && reading.diastolic
+  );
+
+  if (validReadings.length === 0) {
+    return {
+      totalReadings: 0,
+      averageSystolic: 0,
+      averageDiastolic: 0,
+      averagePulse: 0,
+      highestSystolic: 0,
+      lowestSystolic: 0,
+      highestDiastolic: 0,
+      lowestDiastolic: 0,
+    };
+  }
+
+  const systolicValues = validReadings.map((r) => parseInt(r.systolic));
+  const diastolicValues = validReadings.map((r) => parseInt(r.diastolic));
+  const pulseValues = validReadings
+    .map((r) => parseInt(r.pulse || 0))
+    .filter((p) => p > 0);
+
+  return {
+    totalReadings: validReadings.length,
+    averageSystolic: Math.round(
+      systolicValues.reduce((a, b) => a + b, 0) / systolicValues.length
+    ),
+    averageDiastolic: Math.round(
+      diastolicValues.reduce((a, b) => a + b, 0) / diastolicValues.length
+    ),
+    averagePulse:
+      pulseValues.length > 0
+        ? Math.round(
+            pulseValues.reduce((a, b) => a + b, 0) / pulseValues.length
+          )
+        : 0,
+    highestSystolic: Math.max(...systolicValues),
+    lowestSystolic: Math.min(...systolicValues),
+    highestDiastolic: Math.max(...diastolicValues),
+    lowestDiastolic: Math.min(...diastolicValues),
+  };
+};
+
+// Calculate SpO2 statistics
+const calculateSpO2Statistics = (readings) => {
+  const validReadings = readings.filter((reading) => reading && reading.spo2);
+
+  if (validReadings.length === 0) {
+    return {
+      totalReadings: 0,
+      averageSpo2: 0,
+      averagePulse: 0,
+      highestSpo2: 0,
+      lowestSpo2: 0,
+      maxSpo2: 0,
+      minSpo2: 0,
+      maxPulse: 0,
+      minPulse: 0,
+    };
+  }
+
+  const spo2Values = validReadings.map((r) => parseFloat(r.spo2));
+  const pulseValues = validReadings
+    .map((r) => parseFloat(r.pulse || 0))
+    .filter((p) => p > 0);
+  const maxSpo2Values = validReadings.map((r) =>
+    parseFloat(r.maxSpo2 || r.spo2)
+  );
+  const minSpo2Values = validReadings.map((r) =>
+    parseFloat(r.minSpo2 || r.spo2)
+  );
+  const maxPulseValues = validReadings
+    .map((r) => parseFloat(r.maxPulse || r.pulse || 0))
+    .filter((p) => p > 0);
+  const minPulseValues = validReadings
+    .map((r) => parseFloat(r.minPulse || r.pulse || 0))
+    .filter((p) => p > 0);
+
+  return {
+    totalReadings: validReadings.length,
+    averageSpo2: parseFloat(
+      (spo2Values.reduce((a, b) => a + b, 0) / spo2Values.length).toFixed(1)
+    ),
+    averagePulse:
+      pulseValues.length > 0
+        ? Math.round(
+            pulseValues.reduce((a, b) => a + b, 0) / pulseValues.length
+          )
+        : 0,
+    highestSpo2: parseFloat(Math.max(...spo2Values).toFixed(1)),
+    lowestSpo2: parseFloat(Math.min(...spo2Values).toFixed(1)),
+    maxSpo2:
+      maxSpo2Values.length > 0
+        ? parseFloat(Math.max(...maxSpo2Values).toFixed(1))
+        : 0,
+    minSpo2:
+      minSpo2Values.length > 0
+        ? parseFloat(Math.min(...minSpo2Values).toFixed(1))
+        : 0,
+    maxPulse: maxPulseValues.length > 0 ? Math.max(...maxPulseValues) : 0,
+    minPulse: minPulseValues.length > 0 ? Math.min(...minPulseValues) : 0,
+  };
+};
+
+// Helper function to determine SpO2 status
+const getSpO2Status = (spo2) => {
+  if (!spo2) return "no-data";
+  const spo2Value = parseFloat(spo2);
+  if (spo2Value < 90) return "critical";
+  if (spo2Value < 95) return "warning";
+  return "normal";
 };
 
 async function getAssignedPatientsService(doctorId, limit = 10, offset = 0) {

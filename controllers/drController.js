@@ -51,11 +51,29 @@ export const getPatientDeviceDataController = async (req, res) => {
       toDate,
     } = req.query;
 
+    console.log("📱 Device data request:", {
+      patientId,
+      deviceType,
+      days,
+      page,
+      limit,
+      fromDate,
+      toDate,
+    });
+
     // Validate required parameters
     if (!deviceType) {
       return res.status(400).json({
         success: false,
         message: "Device type is required",
+      });
+    }
+
+    // Validate device type
+    if (!["bp", "spo2"].includes(deviceType)) {
+      return res.status(400).json({
+        success: false,
+        message: "Device type must be either 'bp' or 'spo2'",
       });
     }
 
@@ -110,19 +128,6 @@ export const getPatientDeviceDataController = async (req, res) => {
       return res.status(403).json({
         success: false,
         message: "Access denied to patient data",
-      });
-    }
-
-    // Only BP is implemented for now
-    if (deviceType !== "bp") {
-      return res.status(200).json({
-        success: true,
-        data: {
-          message: `${deviceType.toUpperCase()} data processing is under development`,
-          deviceType,
-          days: daysInt,
-          status: "under_development",
-        },
       });
     }
 
