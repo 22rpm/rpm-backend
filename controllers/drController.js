@@ -3,7 +3,7 @@ import {
   verifyDoctorPatientAccess,
   getAssignedPatientsService,
   searchAssignedPatientsService,
-  getUserWithLatestBPDataService,
+  getUserWithLatestDeviceDataService,
 } from "../services/doctor.service.js";
 import { getPatientVitalSignsService } from "../services/doctor.service.js";
 
@@ -207,7 +207,7 @@ export const searchAssignedPatientsController = async (req, res) => {
   }
 };
 
-export const getUserWithLatestBPDataController = async (req, res) => {
+export const getUserWithLatestDeviceDataController = async (req, res) => {
   try {
     const { userId } = req.params;
 
@@ -218,12 +218,12 @@ export const getUserWithLatestBPDataController = async (req, res) => {
       });
     }
 
-    const result = await getUserWithLatestBPDataService(userId);
+    const result = await getUserWithLatestDeviceDataService(userId);
 
     if (!result) {
       return res.status(404).json({
         success: false,
-        message: "User not found or no BP data available",
+        message: "User not found",
       });
     }
 

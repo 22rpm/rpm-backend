@@ -701,7 +701,7 @@ async function searchAssignedPatientsService(doctorId, search) {
   }
 }
 
-const getUserWithLatestBPDataService = async (userId) => {
+const getUserWithLatestDeviceDataService = async (userId) => {
   try {
     // Fetch user details
     const [userRows] = await db.query(
@@ -731,17 +731,35 @@ const getUserWithLatestBPDataService = async (userId) => {
       [userId]
     );
 
-    const bpData = bpRows.length > 0 ? bpRows[0] : null;
+    // Fetch latest SpO2 device data
+    const [spo2Rows] = await db.query(
+      `
+      SELECT 
+        id, dev_id, user_id, data, created_at, dev_type
+      FROM dev_data
+      WHERE user_id = ? AND dev_type = 'spo2'
+      ORDER BY created_at DESC
+      LIMIT 1
+      `,
+      [userId]
+    );
 
-    return { user, latestBP: bpData };
+    const bpData = bpRows.length > 0 ? bpRows[0] : null;
+    const spo2Data = spo2Rows.length > 0 ? spo2Rows[0] : null;
+
+    return {
+      user,
+      latestBP: bpData,
+      latestSpO2: spo2Data,
+    };
   } catch (err) {
-    console.error("❌ Error in getUserWithLatestBPDataService:", err);
-    throw new Error("Failed to fetch user data with BP info");
+    console.error("❌ Error in getUserWithLatestDeviceDataService:", err);
+    throw new Error("Failed to fetch user data with device info");
   }
 };
 
 module.exports = {
-  getUserWithLatestBPDataService,
+  getUserWithLatestDeviceDataService,
   getPatientVitalSignsService,
   getAssignedPatientsService,
   verifyDoctorPatientAccess,

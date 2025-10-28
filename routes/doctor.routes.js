@@ -6,7 +6,7 @@ const {
   getPatientDeviceDataController,
   getAssignedPatientsController,
   searchAssignedPatientsController,
-  getUserWithLatestBPDataController,
+  getUserWithLatestDeviceDataController,
 } = require("../controllers/drController.js");
 router.get(
   "/patients/:patientId/vital-signs",
@@ -20,6 +20,10 @@ router.get(
 );
 router.get("/assigned", authRequired, getAssignedPatientsController);
 router.get("/search-patients", authRequired, searchAssignedPatientsController);
-router.get("/getSpecificPatientData/:userId", authRequired, getUserWithLatestBPDataController);
+router.get(
+  "/getSpecificPatientData/:userId",
+  authRequired,
+  getUserWithLatestDeviceDataController
+);
 
 module.exports = router;
