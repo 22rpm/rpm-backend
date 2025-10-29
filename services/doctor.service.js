@@ -135,15 +135,27 @@ const calculateStatistics = (readings) => {
     };
   }
 
-  const systolicReadings = readings.map(r => r.systolic).filter(Boolean);
-  const diastolicReadings = readings.map(r => r.diastolic).filter(Boolean);
-  const pulseReadings = readings.map(r => r.pulse).filter(Boolean);
+  const systolicReadings = readings.map((r) => r.systolic).filter(Boolean);
+  const diastolicReadings = readings.map((r) => r.diastolic).filter(Boolean);
+  const pulseReadings = readings.map((r) => r.pulse).filter(Boolean);
 
   return {
     totalReadings: readings.length,
-    averageSystolic: Math.round(systolicReadings.reduce((sum, val) => sum + val, 0) / systolicReadings.length),
-    averageDiastolic: Math.round(diastolicReadings.reduce((sum, val) => sum + val, 0) / diastolicReadings.length),
-    averagePulse: pulseReadings.length > 0 ? Math.round(pulseReadings.reduce((sum, val) => sum + val, 0) / pulseReadings.length) : 0,
+    averageSystolic: Math.round(
+      systolicReadings.reduce((sum, val) => sum + val, 0) /
+        systolicReadings.length
+    ),
+    averageDiastolic: Math.round(
+      diastolicReadings.reduce((sum, val) => sum + val, 0) /
+        diastolicReadings.length
+    ),
+    averagePulse:
+      pulseReadings.length > 0
+        ? Math.round(
+            pulseReadings.reduce((sum, val) => sum + val, 0) /
+              pulseReadings.length
+          )
+        : 0,
     highestSystolic: Math.max(...systolicReadings),
     lowestSystolic: Math.min(...systolicReadings),
     highestDiastolic: Math.max(...diastolicReadings),
@@ -180,7 +192,7 @@ const calculateStatistics = (readings) => {
 
 //   // Get paginated data
 //   const [deviceData] = await db.query(
-//     `SELECT 
+//     `SELECT
 //       id,
 //       dev_id,
 //       user_id,
@@ -188,8 +200,8 @@ const calculateStatistics = (readings) => {
 //       dev_type,
 //       created_at,
 //       updated_at
-//      FROM dev_data 
-//      WHERE user_id = ? 
+//      FROM dev_data
+//      WHERE user_id = ?
 //        AND dev_type = ?
 //        AND DATE(created_at) >= ?
 //      ORDER BY created_at DESC
@@ -200,8 +212,8 @@ const calculateStatistics = (readings) => {
 //   // Get total count for pagination
 //   const [totalCountResult] = await db.query(
 //     `SELECT COUNT(*) as total
-//      FROM dev_data 
-//      WHERE user_id = ? 
+//      FROM dev_data
+//      WHERE user_id = ?
 //        AND dev_type = ?
 //        AND DATE(created_at) >= ?`,
 //     [patientId, deviceType, startDateString]
@@ -270,8 +282,8 @@ const calculateStatistics = (readings) => {
 //   // Calculate statistics for the entire date range (not just current page)
 //   const [allDataInRange] = await db.query(
 //     `SELECT data
-//      FROM dev_data 
-//      WHERE user_id = ? 
+//      FROM dev_data
+//      WHERE user_id = ?
 //        AND dev_type = ?
 //        AND DATE(created_at) >= ?`,
 //     [patientId, deviceType, startDateString]
@@ -391,6 +403,7 @@ const getPatientDeviceDataService = async (
   let dateParams = [];
   let startDateString = "";
   let endDateString = "";
+  let dateRangeMode = "";
 
   if (fromDate && toDate) {
     // Custom date range mode
@@ -398,15 +411,47 @@ const getPatientDeviceDataService = async (
     endDateString = toDate;
     dateCondition = "AND DATE(created_at) BETWEEN ? AND ?";
     dateParams = [fromDate, toDate];
+    dateRangeMode = "custom";
   } else {
     // Days range mode (default)
+    const endDate = new Date();
     const startDate = new Date();
-    startDate.setDate(startDate.getDate() - days);
-    startDateString = startDate.toISOString().split("T")[0];
-    endDateString = new Date().toISOString().split("T")[0];
-    dateCondition = "AND DATE(created_at) >= ?";
-    dateParams = [startDateString];
+
+    if (days === 1) {
+      // Today only - get data for the current day only
+      startDateString = endDate.toISOString().split("T")[0];
+      endDateString = endDate.toISOString().split("T")[0];
+      dateCondition = "AND DATE(created_at) = ?";
+      dateParams = [startDateString];
+      dateRangeMode = "today";
+    } else if (days === 0) {
+      // All time - no date filter
+      startDateString = "";
+      endDateString = "";
+      dateCondition = "";
+      dateParams = [];
+      dateRangeMode = "all";
+    } else {
+      // Last N days (including today)
+      startDate.setDate(startDate.getDate() - (days - 1));
+      startDateString = startDate.toISOString().split("T")[0];
+      endDateString = endDate.toISOString().split("T")[0];
+      dateCondition = "AND DATE(created_at) BETWEEN ? AND ?";
+      dateParams = [startDateString, endDateString];
+      dateRangeMode = "days";
+    }
   }
+
+  console.log("📅 Date Range Calculation:", {
+    days,
+    fromDate,
+    toDate,
+    startDateString,
+    endDateString,
+    dateCondition,
+    dateParams,
+    dateRangeMode,
+  });
 
   // Calculate offset for pagination
   const offset = (page - 1) * limit;
@@ -452,7 +497,7 @@ const getPatientDeviceDataService = async (
       dateRange: {
         start: startDateString,
         end: endDateString,
-        mode: fromDate && toDate ? "custom" : "days",
+        mode: dateRangeMode,
       },
       totalRecords: 0,
       data: [],
@@ -530,7 +575,7 @@ const getPatientDeviceDataService = async (
     dateRange: {
       start: startDateString,
       end: endDateString,
-      mode: fromDate && toDate ? "custom" : "days",
+      mode: dateRangeMode,
     },
     pagination: {
       currentPage: page,

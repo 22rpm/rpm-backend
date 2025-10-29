@@ -79,10 +79,10 @@ export const getPatientDeviceDataController = async (req, res) => {
 
     // Validate days parameter (only used in range mode)
     const daysInt = parseInt(days);
-    if (isNaN(daysInt) || daysInt < 1 || daysInt > 365) {
+    if (isNaN(daysInt) || daysInt < 0 || daysInt > 365) {
       return res.status(400).json({
         success: false,
-        message: "Days must be a number between 1 and 365",
+        message: "Days must be a number between 0 and 365",
       });
     }
 
@@ -153,6 +153,7 @@ export const getPatientDeviceDataController = async (req, res) => {
     });
   }
 };
+
 
 export const getAssignedPatientsController = async (req, res) => {
   try {
