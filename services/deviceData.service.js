@@ -10,7 +10,7 @@ const calculateBPStatus = (systolic, diastolic) => {
   if (sys < 90 || dia < 60) {
     return "Low";
   } else if (sys <= 120 && dia <= 80) {
-    return "High";
+    return "Normal";
   } else {
     return "High";
   }
