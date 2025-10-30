@@ -270,20 +270,25 @@ async function getOrganizationsAdmins(organizationId) {
       throw new Error("Organization not found");
     }
 
-    // Fetch admins for the organization
-    const admins = await knex("users")
-      .where({ organization_id: organizationId })
+    // Fetch users with admin role for the organization
+    const admins = await knex("users as u")
+      .join("role as r", "u.id", "r.user_id")
+      .where({
+        "u.organization_id": organizationId,
+        "r.role_type": "admin", // Adjust this if your role_type values are different
+      })
       .select(
-        "id",
-        "name",
-        "email",
-        "organization_id",
-        "created_at",
-        "updated_at",
-        "is_active",
-        "phoneNumber"
+        "u.id",
+        "u.name",
+        "u.email",
+        "u.organization_id",
+        "u.created_at",
+        "u.updated_at",
+        "u.is_active",
+        "u.phoneNumber",
+        "r.role_type"
       )
-      .orderBy("created_at", "desc");
+      .orderBy("u.created_at", "desc");
 
     return admins;
   } catch (error) {

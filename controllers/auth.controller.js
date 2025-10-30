@@ -1,7 +1,7 @@
 // controllers/auth.controller.js
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
-const pool = require("../config/db"); // Adjust the path to your database configuration
+// const pool = require("../config/db"); // Adjust the path to your database configuration
 const { loginSchema } = require("../validations/auth.validation");
 const db = require("../config/db");
 
@@ -373,11 +373,11 @@ async function login(req, res) {
 async function me(req, res) {
   try {
     const userId = req.user.id; // From JWT token via authRequired middleware
-    const [rows] = await pool.execute(
+    const [rows] = await db.execute(
       "SELECT id, name, username, email, organization_id, phoneNumber FROM users WHERE id = ?",
       [userId]
     );
-    const [role] = await pool.execute(
+    const [role] = await db.execute(
       "SELECT role_type FROM role WHERE user_id = ? ORDER BY id DESC LIMIT 1",
       [userId]
     );
@@ -804,7 +804,7 @@ const refresh = async (req, res) => {
 
       try {
         // Check if refresh token exists in user_devices table (correct table)
-        const [deviceRows] = await pool.query(
+        const [deviceRows] = await db.query(
           "SELECT ud.*, u.* FROM user_devices ud JOIN users u ON ud.user_id = u.id WHERE ud.refresh_token = ? AND ud.user_id = ?",
           [refreshToken, decoded.id]
         );
