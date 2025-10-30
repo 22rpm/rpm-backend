@@ -1192,8 +1192,9 @@ const triggerBPAlert = async (patientId, bpStatus, systolic, diastolic) => {
 
   try {
     // 1. Get patient's assigned doctors/clinicians - FIXED
+    // ✅ NEW CODE (using correct table name)
     const [assignedDoctors] = await db.query(
-      "SELECT doctor_id FROM patient_doctors WHERE patient_id = ? AND status = 'active'",
+      "SELECT doctor_id FROM patient_doctor_assignments WHERE patient_id = ?",
       [patientId]
     );
 
