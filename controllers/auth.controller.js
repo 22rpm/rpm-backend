@@ -273,8 +273,9 @@ async function login(req, res) {
       // ✅ Set secure cookies
       res.cookie("token", accessToken, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "strict",
+        // secure: process.env.NODE_ENV === "production",
+        secure: false,
+        sameSite: "lax",
         maxAge: 45 * 60 * 1000, // 45 minutes
       });
 
@@ -835,8 +836,9 @@ const refresh = async (req, res) => {
         // Set cookie with CORRECT name "token" (not "accessToken")
         res.cookie("token", accessToken, {
           httpOnly: true,
-          secure: process.env.NODE_ENV === "production",
-          sameSite: "strict",
+          // secure: process.env.NODE_ENV === "production",
+          secure: false,
+          sameSite: "lax",
           maxAge: 45 * 60 * 1000, // 45 minutes
         });
 
