@@ -564,14 +564,10 @@ const verifyOtpController = async (req, res) => {
 
     const role = await findRoleByUsername(user.username);
     console.log("user role ", role);
-
     // 2. Verify OTP via service
     const valid = await verifyOtp(user.id, otp, "login");
     if (!valid)
       return res.status(400).json({ error: "Invalid or expired OTP" });
-
-    // ✅ ADD THIS: Update last login timestamp
-    await updateUserLastLogin(user.id);
 
     // 3. Generate short-lived Access Token (include role in payload)
     const accessToken = jwt.sign(
@@ -582,13 +578,46 @@ const verifyOtpController = async (req, res) => {
         email: user.email,
         role: user.role,
         phoneNumber: user.phoneNumber,
-      },
+      }, // 👈 include role
       process.env.JWT_SECRET,
       { expiresIn: "45m" }
     );
 
-    // ... rest of your existing code ...
+    // 4. Generate Refresh Token
+    const refreshToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
+      expiresIn: "14d",
+    });
+    // const refreshToken = crypto.randomBytes(64).toString("hex");
 
+    // 5. Persist/rotate refresh token & session
+    await saveOrUpdateUserDevice({
+      userId: user.id,
+      deviceFingerprint: device_fingerprint,
+      ipAddress: req.headers["x-forwarded-for"]?.split(",")[0] || req.ip,
+      userAgent: req.headers["user-agent"],
+      refreshToken,
+      absoluteExpiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000), // 14 days
+    });
+
+    // 6. Set cookies
+    res.cookie("token", accessToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      // sameSite: none,
+      maxAge: 45 * 60 * 1000,
+      // maxAge: 1 * 60 * 1000, // for testing auth
+    });
+
+    res.cookie("refresh_token", refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      // sameSite: none,
+      maxAge: 14 * 24 * 60 * 60 * 1000, // 14 days
+    });
+    console.log("hello user", user);
+    // 7. Respond with role so frontend knows dashboard to show
     return res.status(200).json({
       message: "OTP verified successfully",
       user: {
@@ -602,7 +631,6 @@ const verifyOtpController = async (req, res) => {
     return res.status(500).json({ error: "Server error" });
   }
 };
-
 async function addDevData(req, res) {
   try {
     const jsonData = req.body; // data from frontend (assumed JSON)
