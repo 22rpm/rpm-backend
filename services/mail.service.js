@@ -11,6 +11,8 @@ const transporter = nodemailer.createTransport({
 });
 
 async function sendOtpEmail(to, otp) {
+  console.log("OTP is", otp);
+
   await transporter.sendMail({
     from: `"TwentyTwo RPM" <${process.env.GMAIL_USER}>`,
     to,
@@ -22,11 +24,6 @@ async function sendOtpEmail(to, otp) {
 }
 
 module.exports = { sendOtpEmail };
-
-
-
-
-
 
 // services/mail.service.js
 // const nodemailer = require("nodemailer");

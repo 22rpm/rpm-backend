@@ -273,16 +273,15 @@ async function login(req, res) {
       // ✅ Set secure cookies
       res.cookie("token", accessToken, {
         httpOnly: true,
-        // secure: process.env.NODE_ENV === "production",
-        secure: false,
-        sameSite: "lax",
+        secure: true, // PRODUCTION: true for HTTPS
+        sameSite: "none", // PRODUCTION: none for cross-site
         maxAge: 45 * 60 * 1000, // 45 minutes
       });
 
       res.cookie("refresh_token", refreshToken, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "strict",
+        secure: true, // PRODUCTION: true for HTTPS
+        sameSite: "none", // PRODUCTION: none for cross-site
         maxAge: 14 * 24 * 60 * 60 * 1000, // 14 days
       });
 
@@ -603,18 +602,15 @@ const verifyOtpController = async (req, res) => {
     // 6. Set cookies
     res.cookie("token", accessToken, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
-      // sameSite: none,
-      maxAge: 45 * 60 * 1000,
-      // maxAge: 1 * 60 * 1000, // for testing auth
+      secure: true, // PRODUCTION: true for HTTPS
+      sameSite: "none", // PRODUCTION: none for cross-site
+      maxAge: 45 * 60 * 1000, // 45 minutes
     });
 
     res.cookie("refresh_token", refreshToken, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
-      // sameSite: none,
+      secure: true, // PRODUCTION: true for HTTPS
+      sameSite: "none", // PRODUCTION: none for cross-site
       maxAge: 14 * 24 * 60 * 60 * 1000, // 14 days
     });
     console.log("hello user", user);
@@ -786,6 +782,85 @@ async function addDevData(req, res) {
 //     res.status(500).json({ message: "Server error" });
 //   }
 // };
+// const refresh = async (req, res) => {
+//   try {
+//     const refreshToken = req.cookies.refresh_token;
+//     console.log("Refresh token request received");
+
+//     if (!refreshToken) {
+//       return res.status(401).json({ message: "No refresh token" });
+//     }
+
+//     // Verify refresh token
+//     jwt.verify(refreshToken, process.env.JWT_SECRET, async (err, decoded) => {
+//       if (err) {
+//         console.error("JWT verification error:", err);
+//         return res.status(403).json({ message: "Invalid refresh token" });
+//       }
+
+//       try {
+//         // Check if refresh token exists in user_devices table (correct table)
+//         const [deviceRows] = await db.query(
+//           "SELECT ud.*, u.* FROM user_devices ud JOIN users u ON ud.user_id = u.id WHERE ud.refresh_token = ? AND ud.user_id = ?",
+//           [refreshToken, decoded.id]
+//         );
+
+//         if (deviceRows.length === 0) {
+//           return res.status(403).json({ message: "Invalid refresh token" });
+//         }
+
+//         const user = deviceRows[0];
+
+//         // Get user role
+//         const role = await findRoleByUsername(user.username);
+
+//         // Generate new access token with FULL user data (same as login)
+//         const accessToken = jwt.sign(
+//           {
+//             id: user.id,
+//             name: user.name,
+//             username: user.username,
+//             email: user.email,
+//             role_type: role,
+//             org_id: user.organization_id,
+//             phoneNumber: user.phoneNumber,
+//           },
+//           process.env.JWT_SECRET,
+//           { expiresIn: "45m" } // Keep it 45 minutes
+//         );
+
+//         // Set cookie with CORRECT name "token" (not "accessToken")
+//         res.cookie("token", accessToken, {
+//           httpOnly: true,
+//           // secure: process.env.NODE_ENV === "production",
+//           secure: false,
+//           sameSite: "lax",
+//           maxAge: 45 * 60 * 1000, // 45 minutes
+//         });
+
+//         console.log("Access token refreshed successfully");
+//         res.json({
+//           message: "Access token refreshed",
+//           user: {
+//             id: user.id,
+//             name: user.name,
+//             email: user.email,
+//             username: user.username,
+//             role: role,
+//             organization_id: user.organization_id,
+//             phoneNumber: user.phoneNumber,
+//           },
+//         });
+//       } catch (dbError) {
+//         console.error("Database error during token refresh:", dbError);
+//         return res.status(500).json({ message: "Server error" });
+//       }
+//     });
+//   } catch (err) {
+//     console.error("Refresh token endpoint error:", err);
+//     res.status(500).json({ message: "Server error" });
+//   }
+// };
 const refresh = async (req, res) => {
   try {
     const refreshToken = req.cookies.refresh_token;
@@ -795,7 +870,6 @@ const refresh = async (req, res) => {
       return res.status(401).json({ message: "No refresh token" });
     }
 
-    // Verify refresh token
     jwt.verify(refreshToken, process.env.JWT_SECRET, async (err, decoded) => {
       if (err) {
         console.error("JWT verification error:", err);
@@ -803,7 +877,6 @@ const refresh = async (req, res) => {
       }
 
       try {
-        // Check if refresh token exists in user_devices table (correct table)
         const [deviceRows] = await db.query(
           "SELECT ud.*, u.* FROM user_devices ud JOIN users u ON ud.user_id = u.id WHERE ud.refresh_token = ? AND ud.user_id = ?",
           [refreshToken, decoded.id]
@@ -815,10 +888,13 @@ const refresh = async (req, res) => {
 
         const user = deviceRows[0];
 
-        // Get user role
+        // Check if refresh token is expired
+        if (new Date() > new Date(user.absoluteExpiresAt)) {
+          return res.status(403).json({ message: "Refresh token expired" });
+        }
+
         const role = await findRoleByUsername(user.username);
 
-        // Generate new access token with FULL user data (same as login)
         const accessToken = jwt.sign(
           {
             id: user.id,
@@ -830,15 +906,14 @@ const refresh = async (req, res) => {
             phoneNumber: user.phoneNumber,
           },
           process.env.JWT_SECRET,
-          { expiresIn: "45m" } // Keep it 45 minutes
+          { expiresIn: "45m" } // PRODUCTION: 45 minutes
         );
 
-        // Set cookie with CORRECT name "token" (not "accessToken")
+        // PRODUCTION cookie settings
         res.cookie("token", accessToken, {
           httpOnly: true,
-          // secure: process.env.NODE_ENV === "production",
-          secure: false,
-          sameSite: "lax",
+          secure: true, // PRODUCTION: true for HTTPS
+          sameSite: "none", // PRODUCTION: none for cross-site
           maxAge: 45 * 60 * 1000, // 45 minutes
         });
 
