@@ -570,6 +570,7 @@ const verifyOtpController = async (req, res) => {
       return res.status(400).json({ error: "Invalid or expired OTP" });
 
     // 3. Generate short-lived Access Token (include role in payload)
+    await updateUserLastLogin(user.id);
     const accessToken = jwt.sign(
       {
         id: user.id,
