@@ -1,4 +1,3 @@
-// socket/socketServer.js - FIXED VERSION
 const { Server } = require("socket.io");
 const jwt = require("jsonwebtoken");
 const cookie = require("cookie");
@@ -48,7 +47,7 @@ const initializeSocket = (server) => {
 
     try {
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      socket.userId = decoded.id; // This should be the user ID
+      socket.userId = decoded.id;
       console.log("✅ Authenticated Socket User:", decoded.id);
       next();
     } catch (err) {
@@ -68,6 +67,13 @@ const initializeSocket = (server) => {
     // ✅ FIX: Store the mapping properly
     if (socket.userId && socket.userId !== "anonymous") {
       userSockets.set(socket.userId.toString(), socket.id);
+
+      // 🔥 CRITICAL: Join user's personal room for alerts
+      socket.join(`user_${socket.userId}`);
+      console.log(
+        `🚪 User ${socket.userId} joined room: user_${socket.userId}`
+      );
+
       console.log("📊 Stored in userSockets:", {
         userId: socket.userId,
         socketId: socket.id,
@@ -134,5 +140,5 @@ const getIO = () => {
 module.exports = {
   initializeSocket,
   getIO,
-  userSockets, // This exports the actual Map reference
+  userSockets,
 };

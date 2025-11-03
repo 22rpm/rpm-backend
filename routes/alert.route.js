@@ -86,14 +86,6 @@ router.post("/test-alert", async (req, res) => {
 
     console.log("🔍 DEBUG: Role table entries found:", roleCheck);
 
-    // DEBUG: Check users table
-    console.log("🔍 DEBUG: Checking users table for IDs:", dr_ids);
-    const usersCheck = await knex("users")
-      .select("id", "name", "is_active")
-      .whereIn("id", dr_ids);
-
-    console.log("🔍 DEBUG: Users found:", usersCheck);
-
     // Verify all dr_ids exist and are clinicians
     const validClinicians = await knex("users")
       .select("users.id", "users.name", "users.email", "role.role_type")
@@ -136,17 +128,15 @@ router.post("/test-alert", async (req, res) => {
     // Start transaction to ensure atomicity
     const result = await knex.transaction(async (trx) => {
       // Insert alert
-      const [alertId] = await trx("alerts")
-        .insert({
-          user_id: patient_id,
-          desc: desc || `Health alert with severity: ${type}`,
-          type,
-        })
-        .returning("id");
+      const [alertId] = await trx("alerts").insert({
+        user_id: patient_id,
+        desc: desc || `Health alert with severity: ${type}`,
+        type,
+      });
 
       console.log("📝 Alert inserted with ID:", alertId);
 
-      // Insert assignments for each clinician - UPDATED WITH READ STATUS
+      // Insert assignments for each clinician
       const assignments = dr_ids.map((clinician_id) => ({
         alert_id: alertId,
         doctor_id: clinician_id,
@@ -197,7 +187,8 @@ router.post("/test-alert", async (req, res) => {
           .count("id as count")
           .first();
 
-        io.to(clinicianSocketId).emit("new_alert", {
+        // 🔥 CRITICAL: Emit to user's personal room
+        io.to(`user_${clinician_id}`).emit("new_alert", {
           alert: {
             ...result.newAlert,
             read_status: false,
@@ -213,11 +204,24 @@ router.post("/test-alert", async (req, res) => {
           unread_count: parseInt(unreadCount?.count) || 0,
           timestamp: new Date(),
         });
-        console.log(`   ✅ Notification sent to clinician ${clinician_id}`);
+
+        console.log(
+          `   ✅ Notification sent to clinician ${clinician_id} in room user_${clinician_id}`
+        );
         notificationsSent++;
       } else {
         console.log(
           `   ❌ Clinician ${clinician_id} not connected - no active socket`
+        );
+
+        // Debug: Check all connected sockets
+        const allSockets = await io.fetchSockets();
+        console.log(
+          `   🔍 All connected socket IDs:`,
+          allSockets.map((s) => ({
+            id: s.id,
+            userId: s.userId,
+          }))
         );
       }
     }
@@ -229,12 +233,15 @@ router.post("/test-alert", async (req, res) => {
       patient: result.patientDetails,
       notifications_sent: notificationsSent,
       total_clinicians: dr_ids.length,
+      connected_users: Array.from(userSockets.entries()),
     });
   } catch (error) {
     console.error("❌ Error creating alert:", error);
-    res
-      .status(500)
-      .json({ ok: false, message: "Server error", error: error.message });
+    res.status(500).json({
+      ok: false,
+      message: "Server error",
+      error: error.message,
+    });
   }
 });
 // Original alert route (with auth)
