@@ -1,10 +1,11 @@
-// socket/socketServer.js - ENHANCED VERSION
+// socket/socketServer.js - COMPLETE FIXED VERSION
 const { Server } = require("socket.io");
 const jwt = require("jsonwebtoken");
 const cookie = require("cookie");
 
 let io;
-const userSockets = new Map();
+const userSockets = new Map(); // userId -> socketId
+const socketUsers = new Map(); // socketId -> userId (reverse mapping)
 
 const initializeSocket = (server) => {
   io = new Server(server, {
@@ -23,57 +24,58 @@ const initializeSocket = (server) => {
     pingInterval: 25000,
   });
 
+  console.log("🔄 Socket.IO server initializing...");
+
   // Enhanced Authentication middleware
-  io.use(async (socket, next) => {
-    console.log("🔐 Socket connection attempt:", {
-      headers: socket.handshake.headers,
-      query: socket.handshake.query,
-      auth: socket.handshake.auth,
-    });
+  io.use((socket, next) => {
+    console.log("🔐 New socket connection attempt");
 
-    let token;
+    let token = null;
+    let userIdFromQuery = null;
 
-    // Try to get token from cookies
+    // 1. Try to get from query parameters (frontend sends this)
+    if (socket.handshake.query.userId) {
+      userIdFromQuery = socket.handshake.query.userId;
+      console.log(`🔍 User ID from query: ${userIdFromQuery}`);
+    }
+
+    // 2. Try to get token from cookies
     if (socket.handshake.headers.cookie) {
       const cookies = cookie.parse(socket.handshake.headers.cookie);
       token = cookies.token;
-      console.log("🔐 Token from cookies:", token ? "Present" : "Missing");
+      console.log(`🔍 Token from cookies: ${token ? "Present" : "Missing"}`);
     }
 
-    // Fallback: check query parameters from frontend
-    if (!token && socket.handshake.query) {
+    // 3. Fallback to query token
+    if (!token && socket.handshake.query.token) {
       token = socket.handshake.query.token;
-      console.log("🔐 Token from query:", token ? "Present" : "Missing");
+      console.log(`🔍 Token from query: ${token ? "Present" : "Missing"}`);
     }
 
-    // Fallback: check auth object
-    if (!token && socket.handshake.auth) {
-      token = socket.handshake.auth.token;
-      console.log("🔐 Token from auth:", token ? "Present" : "Missing");
+    // If we have a token, verify it
+    if (token) {
+      try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        socket.userId = decoded.id;
+        console.log(`✅ Authenticated via JWT: User ${decoded.id}`);
+      } catch (err) {
+        console.log(`❌ JWT invalid: ${err.message}`);
+        // Fall back to query userId
+        socket.userId = userIdFromQuery || "anonymous";
+      }
+    } else {
+      // No token, use query userId or anonymous
+      socket.userId = userIdFromQuery || "anonymous";
+      console.log(`ℹ️ No token, using userId: ${socket.userId}`);
     }
 
-    if (!token) {
-      console.log("⚠️ No token found, allowing anonymous connection");
-      socket.userId = "anonymous";
-      return next();
-    }
-
-    try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      socket.userId = decoded.id;
-      console.log("✅ Authenticated Socket User:", decoded.id);
-      next();
-    } catch (err) {
-      console.log("❌ Invalid Token:", err.message);
-      socket.userId = "anonymous";
-      next();
-    }
+    next();
   });
 
-  // Enhanced Connection Events
+  // Connection Events
   io.on("connection", (socket) => {
     console.log("=".repeat(50));
-    console.log(`✅ NEW SOCKET CONNECTION`);
+    console.log(`✅ SOCKET CONNECTED SUCCESSFULLY`);
     console.log(`   User ID: ${socket.userId}`);
     console.log(`   Socket ID: ${socket.id}`);
     console.log(`   Transport: ${socket.conn.transport.name}`);
@@ -81,77 +83,107 @@ const initializeSocket = (server) => {
 
     // ✅ CRITICAL: Store user mapping
     if (socket.userId && socket.userId !== "anonymous") {
-      userSockets.set(socket.userId.toString(), socket.id);
+      const userIdStr = socket.userId.toString();
+
+      // Remove any existing connection for this user
+      if (userSockets.has(userIdStr)) {
+        const oldSocketId = userSockets.get(userIdStr);
+        userSockets.delete(userIdStr);
+        socketUsers.delete(oldSocketId);
+        console.log(`🔄 Removed previous connection for user ${userIdStr}`);
+      }
+
+      // Store new connection
+      userSockets.set(userIdStr, socket.id);
+      socketUsers.set(socket.id, userIdStr);
 
       // Join user's personal room
-      socket.join(`user_${socket.userId}`);
+      socket.join(`user_${userIdStr}`);
+      socket.join(`all_clinicians`); // Join general room for all clinicians
 
       console.log(
-        `🚪 User ${socket.userId} joined room: user_${socket.userId}`
+        `🚪 User ${userIdStr} joined rooms: user_${userIdStr}, all_clinicians`
       );
-      console.log("📊 Current userSockets:", Array.from(userSockets.entries()));
+      console.log(
+        "📊 Current connected users:",
+        Array.from(userSockets.entries())
+      );
     }
 
-    // Send immediate test message
-    socket.emit("test_connection", {
-      message: "Hello from Socket.IO server!",
+    // Send welcome message
+    socket.emit("welcome", {
+      message: "Connected to RPM Socket Server",
       userId: socket.userId,
       socketId: socket.id,
       timestamp: new Date(),
     });
 
-    // Test message handler
+    socket.emit("test_connection", {
+      message: "Test connection successful!",
+      userId: socket.userId,
+      timestamp: new Date(),
+    });
+
+    // Test endpoint
     socket.on("test_message", (data) => {
-      console.log("📨 Received test message from client:", data);
+      console.log("📨 Test message received:", data);
       socket.emit("test_response", {
-        message: "Test response from server!",
-        received: data,
+        message: "Server received your test message!",
+        original: data,
         timestamp: new Date(),
       });
     });
 
-    // Debug endpoint to check connection status
+    // Connection check
     socket.on("check_connection", () => {
-      console.log("🔍 Connection check requested by:", socket.userId);
-      socket.emit("connection_status", {
+      const response = {
         userId: socket.userId,
         socketId: socket.id,
         connectedUsers: Array.from(userSockets.entries()),
         totalConnections: userSockets.size,
-      });
+        yourRooms: Array.from(socket.rooms),
+      };
+      console.log("🔍 Connection check:", response);
+      socket.emit("connection_status", response);
     });
 
     // Handle disconnect
     socket.on("disconnect", (reason) => {
       console.log(
-        `❌ User Disconnected → ID: ${socket.userId}, Reason: ${reason}`
+        `❌ DISCONNECT: User ${socket.userId}, Socket ${socket.id}, Reason: ${reason}`
       );
 
       if (socket.userId && socket.userId !== "anonymous") {
         userSockets.delete(socket.userId.toString());
       }
+      socketUsers.delete(socket.id);
 
-      console.log("📊 Remaining Users:", Array.from(userSockets.entries()));
+      console.log("📊 Remaining users:", Array.from(userSockets.entries()));
     });
 
-    // Log any errors
+    // Error handling
     socket.on("error", (error) => {
       console.error("💥 Socket error:", error);
     });
   });
 
-  console.log("✅ Socket.IO initialized with enhanced debugging");
+  console.log("✅ Socket.IO server initialized successfully");
+  console.log("📡 Waiting for connections...");
+
   return io;
 };
 
-// Helper function to get connected users
+// Helper functions
 const getConnectedUsers = () => {
   return Array.from(userSockets.entries());
 };
 
-// Helper function to check if user is connected
 const isUserConnected = (userId) => {
   return userSockets.has(userId.toString());
+};
+
+const getUserSocketId = (userId) => {
+  return userSockets.get(userId.toString());
 };
 
 const getIO = () => {
@@ -165,4 +197,5 @@ module.exports = {
   userSockets,
   getConnectedUsers,
   isUserConnected,
+  getUserSocketId,
 };
