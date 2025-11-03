@@ -1,4 +1,4 @@
-// socket/socketServer.js - CORRECTED FOR LOCALHOST:3000
+// socket/socketServer.js - FIXED VERSION
 const { Server } = require("socket.io");
 const jwt = require("jsonwebtoken");
 const cookie = require("cookie");
@@ -8,8 +8,6 @@ const userSockets = new Map();
 
 const initializeSocket = (server) => {
   io = new Server(server, {
-    // REMOVE path or set to default
-    // path: "/socket.io", // This is default, so you can remove it completely
     cors: {
       origin: [
         "http://localhost:5173",
@@ -25,7 +23,7 @@ const initializeSocket = (server) => {
     pingInterval: 25000,
   });
 
-  // Authentication middleware
+  // Authentication middleware - FIXED
   io.use((socket, next) => {
     let token;
 
@@ -35,8 +33,8 @@ const initializeSocket = (server) => {
       token = cookies.token;
     }
 
-    // Fallback: check query parameters
-    if (!token && socket.handshake.query.token) {
+    // Fallback: check auth object from frontend query
+    if (!token && socket.handshake.query) {
       token = socket.handshake.query.token;
     }
 
@@ -50,7 +48,7 @@ const initializeSocket = (server) => {
 
     try {
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      socket.userId = decoded.id;
+      socket.userId = decoded.id; // This should be the user ID
       console.log("✅ Authenticated Socket User:", decoded.id);
       next();
     } catch (err) {
@@ -60,19 +58,27 @@ const initializeSocket = (server) => {
     }
   });
 
-  // Connection Events
+  // Connection Events - FIXED USER MAPPING
   io.on("connection", (socket) => {
     console.log(
       `✅ User Connected → ID: ${socket.userId}, Socket: ${socket.id}`
     );
     console.log("📡 Transport:", socket.conn.transport.name);
 
-    userSockets.set(socket.userId.toString(), socket.id);
-    console.log("📊 Connected Users:", Array.from(userSockets.entries()));
+    // ✅ FIX: Store the mapping properly
+    if (socket.userId && socket.userId !== "anonymous") {
+      userSockets.set(socket.userId.toString(), socket.id);
+      console.log("📊 Stored in userSockets:", {
+        userId: socket.userId,
+        socketId: socket.id,
+      });
+    }
+
+    console.log("📊 All connected users:", Array.from(userSockets.entries()));
 
     // Send immediate test message
     socket.emit("test_connection", {
-      message: "Hello from Socket.IO server on localhost:3000!",
+      message: "Hello from Socket.IO server!",
       userId: socket.userId,
       timestamp: new Date(),
       transport: socket.conn.transport.name,
@@ -88,40 +94,29 @@ const initializeSocket = (server) => {
       });
     });
 
-    // Join private chat room
-    socket.on("join_room", (receiverId) => {
-      const roomId = [socket.userId, receiverId].sort().join("_");
-      socket.join(roomId);
-      console.log(`🚪 User ${socket.userId} joined room ${roomId}`);
-
-      socket.emit("room_joined", {
-        roomId,
-        message: "Successfully joined room",
-        timestamp: new Date(),
+    // Debug: List all connected users
+    socket.on("get_connected_users", () => {
+      console.log(
+        "📊 Current connected users:",
+        Array.from(userSockets.entries())
+      );
+      socket.emit("connected_users_list", {
+        users: Array.from(userSockets.entries()),
+        total: userSockets.size,
       });
     });
 
-    // Send message to room
-    socket.on("send_message", (data) => {
-      const { receiverId, message } = data;
-      const roomId = [socket.userId, receiverId].sort().join("_");
-
-      console.log(`📤 Sending message to room ${roomId}:`, message);
-
-      io.to(roomId).emit("new_message", {
-        senderId: socket.userId,
-        receiverId,
-        message,
-        timestamp: new Date(),
-      });
-    });
-
-    // Handle disconnect
+    // Handle disconnect - FIXED
     socket.on("disconnect", (reason) => {
       console.log(
         `❌ User Disconnected → ID: ${socket.userId}, Reason: ${reason}`
       );
-      userSockets.delete(socket.userId.toString());
+
+      // ✅ FIX: Remove from userSockets properly
+      if (socket.userId && socket.userId !== "anonymous") {
+        userSockets.delete(socket.userId.toString());
+      }
+
       console.log("📊 Remaining Users:", Array.from(userSockets.entries()));
     });
   });
@@ -135,8 +130,9 @@ const getIO = () => {
   return io;
 };
 
+// ✅ FIX: Export userSockets properly
 module.exports = {
   initializeSocket,
   getIO,
-  userSockets,
+  userSockets, // This exports the actual Map reference
 };
