@@ -1,4 +1,4 @@
-// socket/socketServer.js - COMPLETE FIXED VERSION
+// socket/socketServer.js - FINAL VERSION
 const { Server } = require("socket.io");
 const jwt = require("jsonwebtoken");
 const cookie = require("cookie");
@@ -15,10 +15,12 @@ const initializeSocket = (server) => {
         "http://localhost:5174",
         "http://localhost:5175",
         "http://localhost:3000",
+        "https://rmtrpm.duckdns.org", // ✅ allow your production domain
       ],
       methods: ["GET", "POST"],
       credentials: true,
     },
+    path: "/rpm-be/socket.io/", // ✅ must match frontend path
     transports: ["websocket", "polling"],
     pingTimeout: 60000,
     pingInterval: 25000,
@@ -26,33 +28,33 @@ const initializeSocket = (server) => {
 
   console.log("🔄 Socket.IO server initializing...");
 
-  // Enhanced Authentication middleware
+  // 🔐 Authentication middleware
   io.use((socket, next) => {
     console.log("🔐 New socket connection attempt");
 
     let token = null;
     let userIdFromQuery = null;
 
-    // 1. Try to get from query parameters (frontend sends this)
+    // Get from query
     if (socket.handshake.query.userId) {
       userIdFromQuery = socket.handshake.query.userId;
       console.log(`🔍 User ID from query: ${userIdFromQuery}`);
     }
 
-    // 2. Try to get token from cookies
+    // Get token from cookies
     if (socket.handshake.headers.cookie) {
       const cookies = cookie.parse(socket.handshake.headers.cookie);
       token = cookies.token;
       console.log(`🔍 Token from cookies: ${token ? "Present" : "Missing"}`);
     }
 
-    // 3. Fallback to query token
+    // Fallback to query token
     if (!token && socket.handshake.query.token) {
       token = socket.handshake.query.token;
       console.log(`🔍 Token from query: ${token ? "Present" : "Missing"}`);
     }
 
-    // If we have a token, verify it
+    // Verify JWT
     if (token) {
       try {
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
@@ -60,11 +62,9 @@ const initializeSocket = (server) => {
         console.log(`✅ Authenticated via JWT: User ${decoded.id}`);
       } catch (err) {
         console.log(`❌ JWT invalid: ${err.message}`);
-        // Fall back to query userId
         socket.userId = userIdFromQuery || "anonymous";
       }
     } else {
-      // No token, use query userId or anonymous
       socket.userId = userIdFromQuery || "anonymous";
       console.log(`ℹ️ No token, using userId: ${socket.userId}`);
     }
@@ -72,20 +72,19 @@ const initializeSocket = (server) => {
     next();
   });
 
-  // Connection Events
+  // 🔌 Handle connections
   io.on("connection", (socket) => {
     console.log("=".repeat(50));
-    console.log(`✅ SOCKET CONNECTED SUCCESSFULLY`);
+    console.log(`✅ SOCKET CONNECTED`);
     console.log(`   User ID: ${socket.userId}`);
     console.log(`   Socket ID: ${socket.id}`);
     console.log(`   Transport: ${socket.conn.transport.name}`);
     console.log("=".repeat(50));
 
-    // ✅ CRITICAL: Store user mapping
     if (socket.userId && socket.userId !== "anonymous") {
       const userIdStr = socket.userId.toString();
 
-      // Remove any existing connection for this user
+      // Remove previous session if user reconnects
       if (userSockets.has(userIdStr)) {
         const oldSocketId = userSockets.get(userIdStr);
         userSockets.delete(userIdStr);
@@ -93,24 +92,21 @@ const initializeSocket = (server) => {
         console.log(`🔄 Removed previous connection for user ${userIdStr}`);
       }
 
-      // Store new connection
+      // Store new session
       userSockets.set(userIdStr, socket.id);
       socketUsers.set(socket.id, userIdStr);
 
-      // Join user's personal room
+      // Join rooms
       socket.join(`user_${userIdStr}`);
-      socket.join(`all_clinicians`); // Join general room for all clinicians
+      socket.join(`all_clinicians`);
 
       console.log(
         `🚪 User ${userIdStr} joined rooms: user_${userIdStr}, all_clinicians`
       );
-      console.log(
-        "📊 Current connected users:",
-        Array.from(userSockets.entries())
-      );
+      console.log("📊 Connected users:", Array.from(userSockets.entries()));
     }
 
-    // Send welcome message
+    // Welcome message
     socket.emit("welcome", {
       message: "Connected to RPM Socket Server",
       userId: socket.userId,
@@ -118,23 +114,16 @@ const initializeSocket = (server) => {
       timestamp: new Date(),
     });
 
-    socket.emit("test_connection", {
-      message: "Test connection successful!",
-      userId: socket.userId,
-      timestamp: new Date(),
-    });
-
-    // Test endpoint
+    // 🔧 Test events
     socket.on("test_message", (data) => {
       console.log("📨 Test message received:", data);
       socket.emit("test_response", {
-        message: "Server received your test message!",
+        message: "Server received your message!",
         original: data,
         timestamp: new Date(),
       });
     });
 
-    // Connection check
     socket.on("check_connection", () => {
       const response = {
         userId: socket.userId,
@@ -147,10 +136,10 @@ const initializeSocket = (server) => {
       socket.emit("connection_status", response);
     });
 
-    // Handle disconnect
+    // Disconnect
     socket.on("disconnect", (reason) => {
       console.log(
-        `❌ DISCONNECT: User ${socket.userId}, Socket ${socket.id}, Reason: ${reason}`
+        `❌ DISCONNECTED: User ${socket.userId}, Socket ${socket.id}, Reason: ${reason}`
       );
 
       if (socket.userId && socket.userId !== "anonymous") {
@@ -167,25 +156,16 @@ const initializeSocket = (server) => {
     });
   });
 
-  console.log("✅ Socket.IO server initialized successfully");
+  console.log("✅ Socket.IO initialized on path /rpm-be/socket.io/");
   console.log("📡 Waiting for connections...");
 
   return io;
 };
 
-// Helper functions
-const getConnectedUsers = () => {
-  return Array.from(userSockets.entries());
-};
-
-const isUserConnected = (userId) => {
-  return userSockets.has(userId.toString());
-};
-
-const getUserSocketId = (userId) => {
-  return userSockets.get(userId.toString());
-};
-
+// 🔧 Utility functions
+const getConnectedUsers = () => Array.from(userSockets.entries());
+const isUserConnected = (userId) => userSockets.has(userId.toString());
+const getUserSocketId = (userId) => userSockets.get(userId.toString());
 const getIO = () => {
   if (!io) throw new Error("Socket.io not initialized!");
   return io;
