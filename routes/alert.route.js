@@ -2,7 +2,12 @@ const express = require("express");
 const jwt = require("jsonwebtoken");
 const knex = require("../config/knex");
 const { authRequired } = require("../middleware/auth");
-const { getIO, userSockets } = require("../socket/socketServer");
+const {
+  getIO,
+  userSockets,
+  getConnectedUsers,
+  isUserConnected,
+} = require("../socket/socketServer");
 
 const router = express.Router();
 
@@ -22,32 +27,116 @@ router.get("/debug-connected-users", (req, res) => {
 });
 
 // Test endpoint to send direct notification
-router.post("/test-notification", async (req, res) => {
-  const { doctor_id, message } = req.body;
+// In your alert route file
 
-  console.log("🧪 TEST: Sending direct notification to doctor:", doctor_id);
-  console.log("📊 Currently connected:", Array.from(userSockets.entries()));
+router.post("/test-alert", async (req, res) => {
+  const { dr_ids, type, desc, patient_id = 15 } = req.body;
 
-  const io = getIO();
-  const doctorSocketId = userSockets.get(doctor_id.toString());
+  console.log("=".repeat(60));
+  console.log("🚨 TEST ALERT CREATION REQUEST");
+  console.log("=".repeat(60));
+  console.log("   Patient ID:", patient_id);
+  console.log("   Doctor IDs:", dr_ids);
+  console.log("   Alert Type:", type);
+  console.log("   Description:", desc);
 
-  if (doctorSocketId) {
-    io.to(doctorSocketId).emit("test_notification", {
-      message: message || "Test notification from server!",
-      timestamp: new Date(),
-      doctor_id: doctor_id,
-    });
+  try {
+    // Get all connected users BEFORE processing
+    const connectedUsersBefore = getConnectedUsers();
+    console.log("📊 Connected users BEFORE alert:", connectedUsersBefore);
 
-    res.json({
+    // ... your existing validation and alert creation code ...
+
+    // Send WebSocket notifications to all clinicians
+    const io = getIO();
+    
+    console.log("📡 Sending WebSocket notifications to clinicians:", dr_ids);
+    
+    let notificationsSent = 0;
+
+    // Send notifications to each clinician
+    for (const clinician_id of dr_ids) {
+      const clinicianSocketId = userSockets.get(clinician_id.toString());
+      const isConnected = isUserConnected(clinician_id);
+      
+      console.log(`   👨‍⚕️ Clinician ${clinician_id}:`, {
+        socketId: clinicianSocketId,
+        isConnected: isConnected,
+        inUserSockets: userSockets.has(clinician_id.toString())
+      });
+
+      if (clinicianSocketId && isConnected) {
+        // Get updated unread count for this clinician
+        const unreadCount = await knex("alert_assignments")
+          .where("doctor_id", clinician_id)
+          .andWhere("read_status", false)
+          .count("id as count")
+          .first();
+
+        // Create alert data
+        const alertData = {
+          alert: {
+            ...result.newAlert,
+            read_status: false,
+            assignment_id: clinician_id,
+          },
+          patient: patientDetails,
+          unread_count: parseInt(unreadCount?.count) || 0,
+          timestamp: new Date(),
+        };
+
+        // 🔥 TRY MULTIPLE METHODS TO SEND ALERT
+
+        // Method 1: Send to user room
+        io.to(`user_${clinician_id}`).emit("new_alert", alertData);
+        console.log(`   ✅ Method 1: Sent to room user_${clinician_id}`);
+
+        // Method 2: Send to specific socket
+        io.to(clinicianSocketId).emit("new_alert", alertData);
+        console.log(`   ✅ Method 2: Sent to socket ${clinicianSocketId}`);
+
+        // Method 3: Broadcast to all (for testing)
+        io.emit("new_alert_broadcast", {
+          ...alertData,
+          broadcast: true,
+          targetUser: clinician_id
+        });
+        console.log(`   ✅ Method 3: Broadcast to all`);
+
+        notificationsSent++;
+      } else {
+        console.log(`   ❌ Clinician ${clinician_id} not connected`);
+        
+        // Debug: Get all sockets
+        const allSockets = await io.fetchSockets();
+        console.log(`   🔍 All connected sockets:`, allSockets.map(s => ({
+          id: s.id,
+          userId: s.userId,
+          rooms: Array.from(s.rooms)
+        })));
+      }
+    }
+
+    // Get connected users AFTER processing
+    const connectedUsersAfter = getConnectedUsers();
+    console.log("📊 Connected users AFTER alert:", connectedUsersAfter);
+
+    res.status(201).json({
       ok: true,
-      message: `Test notification sent to doctor ${doctor_id}`,
-      socket_id: doctorSocketId,
+      message: `Alert created. Notifications sent to ${notificationsSent}/${dr_ids.length} clinicians`,
+      alert: result.newAlert,
+      patient: result.patientDetails,
+      notifications_sent: notificationsSent,
+      total_clinicians: dr_ids.length,
+      connected_users_before: connectedUsersBefore,
+      connected_users_after: connectedUsersAfter
     });
-  } else {
-    res.status(404).json({
-      ok: false,
-      message: `Doctor ${doctor_id} not connected`,
-      connected_users: Array.from(userSockets.keys()),
+  } catch (error) {
+    console.error("❌ Error creating alert:", error);
+    res.status(500).json({ 
+      ok: false, 
+      message: "Server error", 
+      error: error.message 
     });
   }
 });
