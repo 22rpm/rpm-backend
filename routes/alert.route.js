@@ -98,16 +98,18 @@ router.post("/test-alert", async (req, res) => {
 
       console.log("📝 Alert inserted with ID:", alertId);
 
-      // Insert assignments
+      // ✅ FIXED: Use correct column names for alert_assignments
       const assignments = dr_ids.map((clinician_id) => ({
         alert_id: alertId,
         doctor_id: clinician_id,
         read_status: false,
         read_at: null,
-        assigned_at: new Date(),
+        created_at: new Date(), // ✅ Use created_at instead of assigned_at
+        updated_at: new Date(), // ✅ Add updated_at
       }));
 
       await trx("alert_assignments").insert(assignments);
+      console.log("✅ Alert assignments created for clinicians:", dr_ids);
 
       // Fetch complete alert details
       const newAlert = await trx("alerts")
@@ -221,6 +223,7 @@ router.post("/test-alert", async (req, res) => {
       ok: false,
       message: "Server error creating alert",
       error: error.message,
+      stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
     });
   }
 });
