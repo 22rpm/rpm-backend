@@ -30,7 +30,6 @@ router.get("/debug-connected-users", (req, res) => {
 
 // TEMPORARY TEST ROUTE - Remove this after testing
 // routes/alert.route.js - COMPLETE FIXED VERSION
-
 router.post("/test-alert", async (req, res) => {
   const { dr_ids, type, desc, patient_id = 21 } = req.body;
 
@@ -225,6 +224,212 @@ router.post("/test-alert", async (req, res) => {
     });
   }
 });
+
+// New endpoint to check socket connections
+router.get("/connection-status", (req, res) => {
+  const connectedUsers = getConnectedUsers();
+
+  res.json({
+    ok: true,
+    connected_users: connectedUsers,
+    total_connections: connectedUsers.length,
+    timestamp: new Date().toISOString(),
+  });
+});
+// router.post("/test-alert", async (req, res) => {
+//   const { dr_ids, type, desc, patient_id = 21 } = req.body;
+
+//   console.log("=".repeat(60));
+//   console.log("🚨 TEST ALERT CREATION REQUEST");
+//   console.log("=".repeat(60));
+//   console.log("   Patient ID:", patient_id);
+//   console.log("   Doctor IDs:", dr_ids);
+//   console.log("   Alert Type:", type);
+//   console.log("   Description:", desc);
+
+//   // Validate input
+//   if (!dr_ids || !Array.isArray(dr_ids) || dr_ids.length === 0 || !type) {
+//     return res.status(400).json({
+//       ok: false,
+//       message: "Invalid request: dr_ids (non-empty array) and type required",
+//     });
+//   }
+
+//   try {
+//     // Get connection status BEFORE processing
+//     const connectedUsersBefore = getConnectedUsers();
+//     console.log("📊 Connected users BEFORE alert:", connectedUsersBefore);
+
+//     // Verify clinicians exist and are active
+//     const validClinicians = await knex("users")
+//       .select("users.id", "users.name", "users.email", "role.role_type")
+//       .join("role", "users.id", "role.user_id")
+//       .whereIn("users.id", dr_ids)
+//       .where("role.role_type", "clinician")
+//       .where("users.is_active", true);
+
+//     console.log("✅ Valid clinicians found:", validClinicians.length);
+
+//     if (validClinicians.length === 0) {
+//       return res.status(400).json({
+//         ok: false,
+//         message: "No valid clinicians found from the provided IDs",
+//       });
+//     }
+
+//     // Get patient details
+//     const patientDetails = await knex("users")
+//       .select("id", "name", "email", "phoneNumber", "organization_id")
+//       .where("id", patient_id)
+//       .first();
+
+//     if (!patientDetails) {
+//       return res.status(400).json({
+//         ok: false,
+//         message: "Patient not found",
+//       });
+//     }
+
+//     console.log("👤 Patient details:", patientDetails);
+
+//     // Start transaction
+//     const transactionResult = await knex.transaction(async (trx) => {
+//       // Insert alert
+//       const [alertId] = await trx("alerts").insert({
+//         user_id: patient_id,
+//         desc: desc || `Health alert with severity: ${type}`,
+//         type: type,
+//         created_at: new Date(),
+//       });
+
+//       console.log("📝 Alert inserted with ID:", alertId);
+
+//       // Insert assignments
+//       const assignments = dr_ids.map((clinician_id) => ({
+//         alert_id: alertId,
+//         doctor_id: clinician_id,
+//         read_status: false,
+//         read_at: null,
+//         assigned_at: new Date(),
+//       }));
+
+//       await trx("alert_assignments").insert(assignments);
+
+//       // Fetch complete alert details
+//       const newAlert = await trx("alerts")
+//         .select(
+//           "alerts.*",
+//           "patients.name as patient_name",
+//           "patients.email as patient_email",
+//           "patients.phoneNumber as patient_phone",
+//           "patients.organization_id as patient_organization_id"
+//         )
+//         .leftJoin("users as patients", "alerts.user_id", "patients.id")
+//         .where("alerts.id", alertId)
+//         .first();
+
+//       return { alertId, newAlert, patientDetails };
+//     });
+
+//     // Send WebSocket notifications
+//     const io = getIO();
+//     console.log("📡 Sending WebSocket notifications to clinicians:", dr_ids);
+
+//     let notificationsSent = 0;
+//     const notificationResults = [];
+
+//     for (const clinician_id of dr_ids) {
+//       const clinicianSocketId = getUserSocketId(clinician_id);
+//       const isConnected = isUserConnected(clinician_id);
+
+//       console.log(`   👨‍⚕️ Clinician ${clinician_id}:`, {
+//         socketId: clinicianSocketId,
+//         isConnected: isConnected,
+//         inUserSockets: userSockets.has(clinician_id.toString()),
+//       });
+
+//       // Get unread count
+//       const unreadCount = await knex("alert_assignments")
+//         .where("doctor_id", clinician_id)
+//         .andWhere("read_status", false)
+//         .count("id as count")
+//         .first();
+
+//       const alertData = {
+//         alert: {
+//           ...transactionResult.newAlert,
+//           read_status: false,
+//           assignment_id: clinician_id,
+//         },
+//         patient: patientDetails,
+//         unread_count: parseInt(unreadCount?.count) || 0,
+//         timestamp: new Date(),
+//         server_time: new Date().toISOString(),
+//       };
+
+//       let sent = false;
+
+//       // Try multiple methods to send alert
+//       if (isConnected && clinicianSocketId) {
+//         // Method 1: Send to user's personal room
+//         io.to(`user_${clinician_id}`).emit("new_alert", alertData);
+//         console.log(`   ✅ Method 1: Sent to room user_${clinician_id}`);
+//         sent = true;
+
+//         // Method 2: Send to specific socket
+//         io.to(clinicianSocketId).emit("new_alert", alertData);
+//         console.log(`   ✅ Method 2: Sent to socket ${clinicianSocketId}`);
+//       }
+
+//       // Method 3: Broadcast to all clinicians room (fallback)
+//       io.to("all_clinicians").emit("new_alert_broadcast", {
+//         ...alertData,
+//         broadcast: true,
+//         intended_for: clinician_id,
+//       });
+//       console.log(`   ✅ Method 3: Broadcast to all_clinicians room`);
+
+//       if (sent) {
+//         notificationsSent++;
+//       }
+
+//       notificationResults.push({
+//         clinician_id,
+//         connected: isConnected,
+//         socket_id: clinicianSocketId,
+//         notification_sent: sent,
+//       });
+//     }
+
+//     // Get connection status AFTER processing
+//     const connectedUsersAfter = getConnectedUsers();
+//     console.log("📊 Connected users AFTER alert:", connectedUsersAfter);
+
+//     res.status(201).json({
+//       ok: true,
+//       message: `Alert created successfully. Notifications sent to ${notificationsSent}/${dr_ids.length} clinicians`,
+//       alert: transactionResult.newAlert,
+//       patient: patientDetails,
+//       notifications: {
+//         sent: notificationsSent,
+//         total: dr_ids.length,
+//         details: notificationResults,
+//       },
+//       connection_info: {
+//         before: connectedUsersBefore,
+//         after: connectedUsersAfter,
+//         total_connections: connectedUsersAfter.length,
+//       },
+//     });
+//   } catch (error) {
+//     console.error("❌ Error creating alert:", error);
+//     res.status(500).json({
+//       ok: false,
+//       message: "Server error creating alert",
+//       error: error.message,
+//     });
+//   }
+// });
 
 // New endpoint to check socket connections
 router.get("/connection-status", (req, res) => {
