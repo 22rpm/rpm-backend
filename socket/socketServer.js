@@ -1,176 +1,176 @@
-// socket/socketServer.js - FINAL VERSION
 const { Server } = require("socket.io");
 const jwt = require("jsonwebtoken");
 const cookie = require("cookie");
 
 let io;
-const userSockets = new Map(); // userId -> socketId
-const socketUsers = new Map(); // socketId -> userId (reverse mapping)
+const userSockets = new Map();
+
+// Add these helper functions
+const getConnectedUsers = () => {
+  return Array.from(userSockets.entries()).map(([userId, socketId]) => ({
+    userId,
+    socketId,
+  }));
+};
+
+const isUserConnected = (userId) => {
+  return userSockets.has(userId.toString());
+};
+
+const getUserSocketId = (userId) => {
+  return userSockets.get(userId.toString());
+};
 
 const initializeSocket = (server) => {
   io = new Server(server, {
+    path: "/rpm-be/socket.io", // ✅ Make sure this matches
+
     cors: {
       origin: [
         "http://localhost:5173",
         "http://localhost:5174",
         "http://localhost:5175",
         "http://localhost:3000",
-        "https://rmtrpm.duckdns.org", // ✅ allow your production domain
       ],
       methods: ["GET", "POST"],
       credentials: true,
     },
-    path: "/rpm-be/socket.io/", // ✅ must match frontend path
     transports: ["websocket", "polling"],
     pingTimeout: 60000,
     pingInterval: 25000,
   });
 
-  console.log("🔄 Socket.IO server initializing...");
-
-  // 🔐 Authentication middleware
+  // Authentication middleware
   io.use((socket, next) => {
-    console.log("🔐 New socket connection attempt");
+    let token;
 
-    let token = null;
-    let userIdFromQuery = null;
-
-    // Get from query
-    if (socket.handshake.query.userId) {
-      userIdFromQuery = socket.handshake.query.userId;
-      console.log(`🔍 User ID from query: ${userIdFromQuery}`);
-    }
-
-    // Get token from cookies
+    // Try to get token from cookies
     if (socket.handshake.headers.cookie) {
       const cookies = cookie.parse(socket.handshake.headers.cookie);
       token = cookies.token;
-      console.log(`🔍 Token from cookies: ${token ? "Present" : "Missing"}`);
     }
 
-    // Fallback to query token
+    // Fallback: check query parameters
     if (!token && socket.handshake.query.token) {
       token = socket.handshake.query.token;
-      console.log(`🔍 Token from query: ${token ? "Present" : "Missing"}`);
     }
 
-    // Verify JWT
-    if (token) {
-      try {
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        socket.userId = decoded.id;
-        console.log(`✅ Authenticated via JWT: User ${decoded.id}`);
-      } catch (err) {
-        console.log(`❌ JWT invalid: ${err.message}`);
-        socket.userId = userIdFromQuery || "anonymous";
-      }
-    } else {
-      socket.userId = userIdFromQuery || "anonymous";
-      console.log(`ℹ️ No token, using userId: ${socket.userId}`);
+    console.log("🔐 Socket Auth - Token Present:", !!token);
+
+    if (!token) {
+      console.log("⚠️ No token found, allowing anonymous for testing.");
+      socket.userId = "anonymous";
+      return next();
     }
 
-    next();
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      socket.userId = decoded.id;
+      console.log("✅ Authenticated Socket User:", decoded.id);
+      next();
+    } catch (err) {
+      console.log("❌ Invalid Token:", err.message);
+      socket.userId = "anonymous";
+      next();
+    }
   });
 
-  // 🔌 Handle connections
+  // Connection Events
   io.on("connection", (socket) => {
-    console.log("=".repeat(50));
-    console.log(`✅ SOCKET CONNECTED`);
-    console.log(`   User ID: ${socket.userId}`);
-    console.log(`   Socket ID: ${socket.id}`);
-    console.log(`   Transport: ${socket.conn.transport.name}`);
-    console.log("=".repeat(50));
+    console.log(
+      `✅ User Connected → ID: ${socket.userId}, Socket: ${socket.id}`
+    );
+    console.log("📡 Transport:", socket.conn.transport.name);
 
-    if (socket.userId && socket.userId !== "anonymous") {
-      const userIdStr = socket.userId.toString();
+    // Store user socket mapping
+    userSockets.set(socket.userId.toString(), socket.id);
 
-      // Remove previous session if user reconnects
-      if (userSockets.has(userIdStr)) {
-        const oldSocketId = userSockets.get(userIdStr);
-        userSockets.delete(userIdStr);
-        socketUsers.delete(oldSocketId);
-        console.log(`🔄 Removed previous connection for user ${userIdStr}`);
-      }
+    // Join user to their personal room
+    socket.join(`user_${socket.userId}`);
 
-      // Store new session
-      userSockets.set(userIdStr, socket.id);
-      socketUsers.set(socket.id, userIdStr);
-
-      // Join rooms
-      socket.join(`user_${userIdStr}`);
-      socket.join(`all_clinicians`);
-
-      console.log(
-        `🚪 User ${userIdStr} joined rooms: user_${userIdStr}, all_clinicians`
-      );
-      console.log("📊 Connected users:", Array.from(userSockets.entries()));
+    // Join all clinicians to a common room (if user is clinician)
+    if (socket.userId !== "anonymous") {
+      socket.join("all_clinicians");
     }
 
-    // Welcome message
-    socket.emit("welcome", {
-      message: "Connected to RPM Socket Server",
+    console.log("📊 Connected Users:", getConnectedUsers());
+
+    // Send immediate test message
+    socket.emit("test_connection", {
+      message: "Hello from Socket.IO server on localhost:3000!",
       userId: socket.userId,
-      socketId: socket.id,
       timestamp: new Date(),
+      transport: socket.conn.transport.name,
     });
 
-    // 🔧 Test events
-    socket.on("test_message", (data) => {
-      console.log("📨 Test message received:", data);
-      socket.emit("test_response", {
-        message: "Server received your message!",
-        original: data,
+    // Connection status handler
+    socket.on("check_connection", () => {
+      socket.emit("connection_status", {
+        status: "connected",
+        userId: socket.userId,
+        socketId: socket.id,
         timestamp: new Date(),
       });
     });
 
-    socket.on("check_connection", () => {
-      const response = {
-        userId: socket.userId,
-        socketId: socket.id,
-        connectedUsers: Array.from(userSockets.entries()),
-        totalConnections: userSockets.size,
-        yourRooms: Array.from(socket.rooms),
-      };
-      console.log("🔍 Connection check:", response);
-      socket.emit("connection_status", response);
+    // Test message handler
+    socket.on("test_message", (data) => {
+      console.log("📨 Received test message:", data);
+      socket.emit("test_response", {
+        message: "Test response from server!",
+        received: data,
+        timestamp: new Date(),
+      });
     });
 
-    // Disconnect
+    // Join private chat room
+    socket.on("join_room", (receiverId) => {
+      const roomId = [socket.userId, receiverId].sort().join("_");
+      socket.join(roomId);
+      console.log(`🚪 User ${socket.userId} joined room ${roomId}`);
+
+      socket.emit("room_joined", {
+        roomId,
+        message: "Successfully joined room",
+        timestamp: new Date(),
+      });
+    });
+
+    // Send message to room
+    socket.on("send_message", (data) => {
+      const { receiverId, message } = data;
+      const roomId = [socket.userId, receiverId].sort().join("_");
+
+      console.log(`📤 Sending message to room ${roomId}:`, message);
+
+      io.to(roomId).emit("new_message", {
+        senderId: socket.userId,
+        receiverId,
+        message,
+        timestamp: new Date(),
+      });
+    });
+
+    // Handle disconnect
     socket.on("disconnect", (reason) => {
       console.log(
-        `❌ DISCONNECTED: User ${socket.userId}, Socket ${socket.id}, Reason: ${reason}`
+        `❌ User Disconnected → ID: ${socket.userId}, Reason: ${reason}`
       );
-
-      if (socket.userId && socket.userId !== "anonymous") {
-        userSockets.delete(socket.userId.toString());
-      }
-      socketUsers.delete(socket.id);
-
-      console.log("📊 Remaining users:", Array.from(userSockets.entries()));
-    });
-
-    // Error handling
-    socket.on("error", (error) => {
-      console.error("💥 Socket error:", error);
+      userSockets.delete(socket.userId.toString());
+      console.log("📊 Remaining Users:", getConnectedUsers());
     });
   });
 
-  console.log("✅ Socket.IO initialized on path /rpm-be/socket.io/");
-  console.log("📡 Waiting for connections...");
-
+  console.log("✅ Socket.IO initialized on localhost:3000");
   return io;
 };
 
-// 🔧 Utility functions
-const getConnectedUsers = () => Array.from(userSockets.entries());
-const isUserConnected = (userId) => userSockets.has(userId.toString());
-const getUserSocketId = (userId) => userSockets.get(userId.toString());
 const getIO = () => {
   if (!io) throw new Error("Socket.io not initialized!");
   return io;
 };
 
+// Export all helper functions
 module.exports = {
   initializeSocket,
   getIO,

@@ -85,13 +85,18 @@ app.get("/health", (req, res) =>
   })
 );
 
-// Socket.io test endpoint
-app.get("/socket-test", (req, res) => {
+// Add to your server.js
+app.get("/rpm-be/socket-debug", (req, res) => {
+  const io = getIO();
+  const connectedSockets = io.engine.clientsCount;
+  
   res.json({
-    message: "Socket.io server is running",
-    supportedTransports: ["polling", "websocket"],
-    timestamp: new Date().toISOString(),
+    ok: true,
+    message: "Socket.IO server debug info",
+    connected_clients: connectedSockets,
     path: "/rpm-be/socket.io",
+    transports: ["websocket", "polling"],
+    timestamp: new Date().toISOString(),
   });
 });
 
