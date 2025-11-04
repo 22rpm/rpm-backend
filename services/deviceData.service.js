@@ -1263,9 +1263,9 @@ const triggerBPAlert = async (patient_id, bpStatus, systolic, diastolic) => {
     await connection.beginTransaction();
 
     try {
-      // Insert alert
+      // FIX: Use backticks around 'desc' since it's a reserved keyword
       const [alertResult] = await connection.query(
-        "INSERT INTO alerts (user_id, desc, type, created_at) VALUES (?, ?, ?, ?)",
+        "INSERT INTO alerts (user_id, `desc`, type, created_at) VALUES (?, ?, ?, ?)",
         [patient_id, alertDesc, alertType, new Date()]
       );
 
