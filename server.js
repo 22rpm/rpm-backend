@@ -1,10 +1,151 @@
-// server.js
+// // server.js
+// require("dotenv").config();
+
+// const express = require("express");
+// const http = require("http");
+// const cookieParser = require("cookie-parser");
+// const { initializeSocket } = require("./socket/socketServer");
+
+// const devDataRoutes = require("./routes/deviceData.routes");
+// const authRoutes = require("./routes/auth.routes");
+// const messageRoutes = require("./routes/messageRoutes");
+// const adminRoutes = require("./routes/admin.routes");
+// const swaggerUi = require("swagger-ui-express");
+// const settingsRoutes = require("./routes/settings.route");
+// const orgRoutes = require("./routes/org.routes");
+// const alertRoutes = require("./routes/alert.route");
+// const drRoutes = require("./routes/doctor.routes");
+// const patientRoutes = require("./routes/patient.routes");
+// const fs = require("fs");
+// const path = require("path");
+
+// const app = express();
+// const server = http.createServer(app);
+
+// app.use(express.json());
+// app.use(cookieParser());
+// app.set("trust proxy", true);
+
+// // Enhanced CORS configuration
+// const allowedOrigins = [
+//   "http://localhost:5174",
+//   "http://localhost:5173",
+//   "http://localhost:5175",
+//   "http://50.18.96.20",
+//   "https://rmtrpm.duckdns.org",
+//   "https://rmtrpm.duckdns.org/rpm",
+//   "http://rmtrpm.duckdns.org",
+// ];
+
+// const cors = require("cors");
+// app.use(
+//   cors({
+//     origin: function (origin, callback) {
+//       // Allow requests with no origin
+//       if (!origin) return callback(null, true);
+
+//       // Allow all subdomains of duckdns.org
+//       if (origin.includes("duckdns.org") || origin.includes("localhost")) {
+//         return callback(null, true);
+//       }
+
+//       if (allowedOrigins.indexOf(origin) !== -1) {
+//         return callback(null, true);
+//       } else {
+//         console.log("🔒 CORS blocked origin:", origin);
+//         return callback(new Error("Not allowed by CORS"));
+//       }
+//     },
+//     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+//     allowedHeaders: ["Content-Type", "Authorization", "Cookie", "x-user-id"],
+//     credentials: true,
+//   })
+// );
+
+// app.use(express.urlencoded({ extended: true }));
+
+// // API routes - all under /rpm-be
+// app.use("/api/messages", messageRoutes);
+// app.use("/api/auth", authRoutes);
+// app.use("/api/dev-data", devDataRoutes);
+// app.use("/api/admin", adminRoutes);
+// app.use("/api/settings", settingsRoutes);
+// app.use("/api/alerts", alertRoutes);
+// app.use("/api/doctor", drRoutes);
+// app.use("/api/org", orgRoutes);
+// app.use("/api/patient", patientRoutes);
+
+// // Health check endpoint
+// app.get("/health", (req, res) =>
+//   res.json({
+//     ok: true,
+//     service: "rpm-api",
+//     timestamp: new Date().toISOString(),
+//     socket: "enabled",
+//   })
+// );
+
+// // Add to your server.js
+// app.get("/rpm-be/socket-debug", (req, res) => {
+//   const io = getIO();
+//   const connectedSockets = io.engine.clientsCount;
+
+//   res.json({
+//     ok: true,
+//     message: "Socket.IO server debug info",
+//     connected_clients: connectedSockets,
+//     path: "/rpm-be/socket.io",
+//     transports: ["websocket", "polling"],
+//     timestamp: new Date().toISOString(),
+//   });
+// });
+
+// // Root endpoint redirect
+// app.get("/", (req, res) => {
+//   res.redirect("/rpm-be/health");
+// });
+
+// // Swagger
+// const swaggerDocument = JSON.parse(
+//   fs.readFileSync(path.join(__dirname, "docs/swagger.json"), "utf8")
+// );
+
+// if (process.env.NODE_ENV === "development") {
+//   app.use(
+//     "/rpm-be/api-docs",
+//     swaggerUi.serve,
+//     swaggerUi.setup(swaggerDocument)
+//   );
+//   console.log(
+//     `✅ Swagger docs available at http://localhost:${
+//       process.env.PORT || 4000
+//     }/rpm-be/api-docs`
+//   );
+// }
+
+// // 404 handler
+// app.use((req, res) =>
+//   res.status(404).json({ ok: false, message: "Not found" })
+// );
+
+// // Initialize Socket.io with the correct path
+// initializeSocket(server);
+
+// const port = process.env.PORT || 4000;
+// server.listen(port, "0.0.0.0", () => {
+//   console.log(`🚀 Server started on port ${port}`);
+//   console.log(`🔌 Socket.io available on path: /rpm-be/socket.io`);
+//   console.log(`🌐 Health check: https://rmtrpm.duckdns.org/rpm-be/health`);
+//   console.log(`🔧 Socket test: https://rmtrpm.duckdns.org/rpm-be/socket-test`);
+// });
+
+// server.js - COMPLETE UPDATED VERSION
 require("dotenv").config();
 
 const express = require("express");
 const http = require("http");
 const cookieParser = require("cookie-parser");
-const { initializeSocket } = require("./socket/socketServer");
+const { initializeSocket, getIO } = require("./socket/socketServer");
 
 const devDataRoutes = require("./routes/deviceData.routes");
 const authRoutes = require("./routes/auth.routes");
@@ -44,7 +185,7 @@ app.use(
       // Allow requests with no origin
       if (!origin) return callback(null, true);
 
-      // Allow all subdomains of duckdns.org
+      // Allow all subdomains of duckdns.org and localhost
       if (origin.includes("duckdns.org") || origin.includes("localhost")) {
         return callback(null, true);
       }
@@ -82,11 +223,12 @@ app.get("/health", (req, res) =>
     service: "rpm-api",
     timestamp: new Date().toISOString(),
     socket: "enabled",
+    environment: process.env.NODE_ENV,
   })
 );
 
-// Add to your server.js
-app.get("/rpm-be/socket-debug", (req, res) => {
+// Socket debug endpoints
+app.get("/socket-debug", (req, res) => {
   const io = getIO();
   const connectedSockets = io.engine.clientsCount;
 
@@ -94,32 +236,45 @@ app.get("/rpm-be/socket-debug", (req, res) => {
     ok: true,
     message: "Socket.IO server debug info",
     connected_clients: connectedSockets,
-    path: "/rpm-be/socket.io",
+    path:
+      process.env.NODE_ENV === "production"
+        ? "/rpm-be/socket.io"
+        : "/socket.io",
     transports: ["websocket", "polling"],
     timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV,
+  });
+});
+
+// Test nginx proxy
+app.get("/nginx-test", (req, res) => {
+  res.json({
+    ok: true,
+    message: "Nginx proxy is working correctly",
+    originalUrl: req.originalUrl,
+    baseUrl: req.baseUrl,
+    path: req.path,
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV,
   });
 });
 
 // Root endpoint redirect
 app.get("/", (req, res) => {
-  res.redirect("/rpm-be/health");
+  res.redirect("/health");
 });
 
 // Swagger
-const swaggerDocument = JSON.parse(
-  fs.readFileSync(path.join(__dirname, "docs/swagger.json"), "utf8")
-);
-
 if (process.env.NODE_ENV === "development") {
-  app.use(
-    "/rpm-be/api-docs",
-    swaggerUi.serve,
-    swaggerUi.setup(swaggerDocument)
+  const swaggerDocument = JSON.parse(
+    fs.readFileSync(path.join(__dirname, "docs/swagger.json"), "utf8")
   );
+
+  app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument));
   console.log(
     `✅ Swagger docs available at http://localhost:${
       process.env.PORT || 4000
-    }/rpm-be/api-docs`
+    }/api-docs`
   );
 }
 
@@ -128,13 +283,19 @@ app.use((req, res) =>
   res.status(404).json({ ok: false, message: "Not found" })
 );
 
-// Initialize Socket.io with the correct path
+// Initialize Socket.io
 initializeSocket(server);
 
 const port = process.env.PORT || 4000;
 server.listen(port, "0.0.0.0", () => {
   console.log(`🚀 Server started on port ${port}`);
-  console.log(`🔌 Socket.io available on path: /rpm-be/socket.io`);
-  console.log(`🌐 Health check: https://rmtrpm.duckdns.org/rpm-be/health`);
-  console.log(`🔧 Socket test: https://rmtrpm.duckdns.org/rpm-be/socket-test`);
+  console.log(`🌐 Environment: ${process.env.NODE_ENV}`);
+  console.log(
+    `🔌 Socket path: ${
+      process.env.NODE_ENV === "production" ? "/rpm-be/socket.io" : "/socket.io"
+    }`
+  );
+  console.log(`🏥 Health check: http://localhost:${port}/health`);
+  console.log(`🔧 Socket debug: http://localhost:${port}/socket-debug`);
+  console.log(`🔧 Nginx test: http://localhost:${port}/nginx-test`);
 });
