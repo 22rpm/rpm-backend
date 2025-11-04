@@ -1,10 +1,10 @@
-// server.js
+// server.js - UPDATED
 require("dotenv").config();
 
 const express = require("express");
 const http = require("http");
 const cookieParser = require("cookie-parser");
-const { initializeSocket } = require("./socket/socketServer");
+const { initializeSocket, getIO } = require("./socket/socketServer"); // ✅ ADD getIO import
 
 const devDataRoutes = require("./routes/deviceData.routes");
 const authRoutes = require("./routes/auth.routes");
@@ -65,38 +65,87 @@ app.use(
 app.use(express.urlencoded({ extended: true }));
 
 // API routes - all under /rpm-be
-app.use("/api/messages", messageRoutes);
-app.use("/api/auth", authRoutes);
-app.use("/api/dev-data", devDataRoutes);
-app.use("/api/admin", adminRoutes);
-app.use("/api/settings", settingsRoutes);
-app.use("/api/alerts", alertRoutes);
-app.use("/api/doctor", drRoutes);
-app.use("/api/org", orgRoutes);
-app.use("/api/patient", patientRoutes);
+app.use("/rpm-be/api/messages", messageRoutes); // ✅ Add /rpm-be prefix
+app.use("/rpm-be/api/auth", authRoutes);
+app.use("/rpm-be/api/dev-data", devDataRoutes);
+app.use("/rpm-be/api/admin", adminRoutes);
+app.use("/rpm-be/api/settings", settingsRoutes);
+app.use("/rpm-be/api/alerts", alertRoutes);
+app.use("/rpm-be/api/doctor", drRoutes);
+app.use("/rpm-be/api/org", orgRoutes);
+app.use("/rpm-be/api/patient", patientRoutes);
 
+// ✅ ADD THESE ROUTES BEFORE THE 404 HANDLER
 // Health check endpoint
-app.get("/health", (req, res) =>
-  res.json({
-    ok: true,
-    service: "rpm-api",
-    timestamp: new Date().toISOString(),
-    socket: "enabled",
-  })
-);
+app.get("/rpm-be/health", (req, res) => {
+  try {
+    const io = getIO();
+    res.json({
+      ok: true,
+      service: "rpm-api",
+      timestamp: new Date().toISOString(),
+      socket: "enabled",
+      connected_clients: io.engine.clientsCount,
+    });
+  } catch (error) {
+    res.json({
+      ok: true,
+      service: "rpm-api",
+      timestamp: new Date().toISOString(),
+      socket: "initializing",
+      error: error.message,
+    });
+  }
+});
 
-// Add to your server.js
+// Socket.io test endpoint
+app.get("/rpm-be/socket-test", (req, res) => {
+  res.json({
+    message: "Socket.IO server is running",
+    supportedTransports: ["polling", "websocket"],
+    timestamp: new Date().toISOString(),
+    path: "/rpm-be/socket.io",
+  });
+});
+
+// Socket debug endpoint
 app.get("/rpm-be/socket-debug", (req, res) => {
-  const io = getIO();
-  const connectedSockets = io.engine.clientsCount;
-  
+  try {
+    const io = getIO();
+    const connectedSockets = io.engine.clientsCount;
+
+    res.json({
+      ok: true,
+      message: "Socket.IO server debug info",
+      connected_clients: connectedSockets,
+      path: "/rpm-be/socket.io",
+      transports: ["websocket", "polling"],
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      message: "Socket.IO not initialized",
+      error: error.message,
+    });
+  }
+});
+
+// Server info endpoint
+app.get("/rpm-be/server-info", (req, res) => {
   res.json({
     ok: true,
-    message: "Socket.IO server debug info",
-    connected_clients: connectedSockets,
-    path: "/rpm-be/socket.io",
-    transports: ["websocket", "polling"],
-    timestamp: new Date().toISOString(),
+    server: {
+      environment: process.env.NODE_ENV,
+      port: process.env.PORT || 4000,
+      node_version: process.version,
+      platform: process.platform,
+    },
+    socket: {
+      path: "/rpm-be/socket.io",
+      cors_enabled: true,
+      transports: ["websocket", "polling"],
+    },
   });
 });
 
@@ -123,10 +172,16 @@ if (process.env.NODE_ENV === "development") {
   );
 }
 
-// 404 handler
-app.use((req, res) =>
-  res.status(404).json({ ok: false, message: "Not found" })
-);
+// 404 handler - MUST BE LAST
+app.use((req, res) => {
+  console.log(`❌ 404 - Route not found: ${req.method} ${req.path}`);
+  res.status(404).json({
+    ok: false,
+    message: "Not found",
+    path: req.path,
+    method: req.method,
+  });
+});
 
 // Initialize Socket.io with the correct path
 initializeSocket(server);
@@ -137,4 +192,7 @@ server.listen(port, "0.0.0.0", () => {
   console.log(`🔌 Socket.io available on path: /rpm-be/socket.io`);
   console.log(`🌐 Health check: https://rmtrpm.duckdns.org/rpm-be/health`);
   console.log(`🔧 Socket test: https://rmtrpm.duckdns.org/rpm-be/socket-test`);
+  console.log(
+    `🐛 Socket debug: https://rmtrpm.duckdns.org/rpm-be/socket-debug`
+  );
 });
