@@ -672,7 +672,13 @@
 // };
 
 const db = require("../config/db"); // your MySQL pool
-const { getIO, userSockets } = require("../socket/socketServer");
+const {
+  getIO,
+  userSockets,
+  getConnectedUsers,
+  isUserConnected,
+  getUserSocketId,
+} = require("../socket/socketServer");
 
 // Service
 
@@ -683,7 +689,7 @@ const calculateBPStatus = (systolic, diastolic) => {
   if (sys < 90 || dia < 60) {
     return "Low";
   } else if (sys <= 139 && dia <= 89) {
-    return "Normal";
+    return "High";
   } else {
     return "High";
   }
