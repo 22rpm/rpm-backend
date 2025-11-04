@@ -1204,12 +1204,12 @@ const triggerBPAlert = async (patient_id, bpStatus, systolic, diastolic) => {
 
     // 1. Get the doctors assigned to this patient
     const [assignedDoctors] = await connection.query(
-      "SELECT doctor_id FROM patient_doctor_assignments WHERE patient_id = ? AND is_active = true",
+      "SELECT doctor_id FROM patient_doctor_assignments WHERE patient_id = ?",
       [patient_id]
     );
 
     if (!assignedDoctors || assignedDoctors.length === 0) {
-      console.log("⚠️ No active doctors assigned to patient:", patient_id);
+      console.log("⚠️ No doctors assigned to patient:", patient_id);
       return { ok: false, message: "No doctors assigned to this patient" };
     }
 
