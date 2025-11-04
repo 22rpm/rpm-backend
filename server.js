@@ -246,19 +246,19 @@ app.get("/socket-debug", (req, res) => {
   });
 });
 
-// Test nginx proxy
-app.get("/nginx-test", (req, res) => {
+// Add to your server.js
+app.get("/rpm-be/test-socket", (req, res) => {
+  console.log("✅ Test endpoint hit - Backend is running");
+  console.log("🍪 Cookies:", req.headers.cookie);
+  console.log("📋 Headers:", req.headers);
+  
   res.json({
-    ok: true,
-    message: "Nginx proxy is working correctly",
-    originalUrl: req.originalUrl,
-    baseUrl: req.baseUrl,
-    path: req.path,
-    timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV,
+    status: "running",
+    message: "Backend server is operational",
+    cookies: req.headers.cookie ? "Present" : "Missing",
+    timestamp: new Date().toISOString()
   });
 });
-
 // Root endpoint redirect
 app.get("/", (req, res) => {
   res.redirect("/health");
