@@ -1199,7 +1199,7 @@ const triggerBPAlert = async (patient_id, bpStatus, systolic, diastolic) => {
 
   try {
     // 1. Get the doctors assigned to this patient
-    const assignedDoctors = await knex("patient_doctor_assignments")
+    const assignedDoctors = await db("patient_doctor_assignments")
       .select("doctor_id")
       .where("patient_id", patient_id)
       .where("is_active", true);
@@ -1224,7 +1224,7 @@ const triggerBPAlert = async (patient_id, bpStatus, systolic, diastolic) => {
     console.log("📊 Connected users BEFORE alert:", connectedUsersBefore);
 
     // Verify doctors exist and are active
-    const validDoctors = await knex("users")
+    const validDoctors = await db("users")
       .select("users.id", "users.name", "users.email", "role.role_type")
       .join("role", "users.id", "role.user_id")
       .whereIn("users.id", doctor_ids)
@@ -1239,7 +1239,7 @@ const triggerBPAlert = async (patient_id, bpStatus, systolic, diastolic) => {
     }
 
     // Get patient details
-    const patientDetails = await knex("users")
+    const patientDetails = await db("users")
       .select("id", "name", "email", "phoneNumber", "organization_id")
       .where("id", patient_id)
       .first();
@@ -1252,7 +1252,7 @@ const triggerBPAlert = async (patient_id, bpStatus, systolic, diastolic) => {
     console.log("👤 Patient details:", patientDetails.name);
 
     // Start transaction
-    const transactionResult = await knex.transaction(async (trx) => {
+    const transactionResult = await db.transaction(async (trx) => {
       // Insert alert
       const [alertId] = await trx("alerts").insert({
         user_id: patient_id,
@@ -1309,7 +1309,7 @@ const triggerBPAlert = async (patient_id, bpStatus, systolic, diastolic) => {
       });
 
       // Get unread count
-      const unreadCount = await knex("alert_assignments")
+      const unreadCount = await db("alert_assignments")
         .where("doctor_id", doctor_id)
         .andWhere("read_status", false)
         .count("id as count")
