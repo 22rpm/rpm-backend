@@ -1366,8 +1366,37 @@ const triggerBPAlert = async (patientId, bpStatus, systolic, diastolic) => {
     throw error;
   }
 };
+const getDevicesUsedService = async (patientId) => {
+  // Query devices table directly - get unique devices per user (group by dev_id to avoid duplicates)
+  const [devicesRows] = await db.query(
+    `SELECT dev_id, dev_type, 
+            MIN(created_at) as first_seen,
+            MAX(updated_at) as last_seen
+     FROM devices 
+     WHERE user_id = ?
+     GROUP BY dev_id, dev_type
+     ORDER BY last_seen DESC`,
+    [patientId]
+  );
+
+  if (devicesRows && devicesRows.length > 0) {
+    // Map to shape frontend expects - use dev_type as device name
+    return devicesRows.map((d) => ({
+      id: d.dev_id,
+      name: d.dev_type || `Device ${d.dev_id}`, // dev_type is the device name
+      type: d.dev_type || "device",
+      devId: d.dev_id,
+      firstSeen: d.first_seen,
+      lastSeen: d.last_seen,
+    }));
+  }
+
+  // Return empty array if no devices found
+  return [];
+};
 
 module.exports = {
+  getDevicesUsedService,
   triggerBPAlert,
   getDeviceDataService,
   getLatestDeviceDataService,

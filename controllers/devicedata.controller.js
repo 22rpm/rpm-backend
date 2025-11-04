@@ -9,6 +9,7 @@ const {
   getDeviceDataService,
   getLatestDeviceDataService,
   triggerBPAlert,
+  getDevicesUsedService,
 } = require("../services/deviceData.service");
 
 const createDeviceDataController = async (req, res) => {
@@ -432,8 +433,35 @@ const getLatestDeviceDataController = async (req, res) => {
     );
   }
 };
+
+const getDevicesUsedController = async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    if (!userId) {
+      return res
+        .status(400)
+        .json({ success: false, message: "userId is required" });
+    }
+
+    const devices = await getDevicesUsedService(userId);
+
+    return res.status(200).json({
+      success: true,
+      message: "Devices retrieved successfully",
+      data: devices,
+    });
+  } catch (err) {
+    console.error("❌ getDevicesUsedController error:", err);
+    return res.status(500).json({
+      success: false,
+      message: err.message || "Internal Server Error",
+    });
+  }
+};
+
 module.exports = {
   getLatestDeviceDataController,
+  getDevicesUsedController,
   getDeviceDataController,
   getPatientBPReadingsController,
   createDeviceDataController,

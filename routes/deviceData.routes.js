@@ -13,6 +13,7 @@ const {
   getPatientBPReadingsController,
   getLatestDeviceDataController,
   getPatientLatestBPController,
+  getDevicesUsedController,
 } = require("../controllers/devicedata.controller");
 const { authRequired } = require("../middleware/auth");
 
@@ -36,7 +37,7 @@ router.get(
   authRequired,
   getDeviceDataController
 );
-
+router.get("/devices-used/:userId", authRequired, getDevicesUsedController);
 
 router.get("/devices/data/latest", authRequired, getLatestDeviceDataController); // Add this
 
