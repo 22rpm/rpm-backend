@@ -682,12 +682,8 @@ const calculateBPStatus = (systolic, diastolic) => {
 
   if (sys < 90 || dia < 60) {
     return "Low";
-  } else if (sys <= 120 && dia <= 80) {
-    return "Normal";
-  } else if (sys <= 129 && dia <= 84) {
-    return "Normal";
   } else if (sys <= 139 && dia <= 89) {
-    return "High-Normal";
+    return "Normal";
   } else {
     return "High";
   }
@@ -1187,180 +1183,196 @@ const getLatestDeviceDataService = async (userId, deviceType) => {
   }
 };
 
-const triggerBPAlert = async (patientId, bpStatus, systolic, diastolic) => {
-  console.log("🚨 Triggering BP Alert for patient:", patientId);
+const triggerBPAlert = async (patient_id, bpStatus, systolic, diastolic) => {
+  console.log("=".repeat(60));
+  console.log("🩺 BP ALERT TRIGGERED");
+  console.log("=".repeat(60));
+  console.log("   Patient ID:", patient_id);
+  console.log("   BP Status:", bpStatus);
+  console.log("   Reading:", `${systolic}/${diastolic}`);
 
   try {
-    // 1. Get patient's assigned doctors/clinicians - FIXED
-    // ✅ NEW CODE (using correct table name)
-    const [assignedDoctors] = await db.query(
-      "SELECT doctor_id FROM patient_doctor_assignments WHERE patient_id = ?",
-      [patientId]
-    );
+    // 1. Get the doctors assigned to this patient
+    const assignedDoctors = await knex("patient_doctor_assignments")
+      .select("doctor_id")
+      .where("patient_id", patient_id)
+      .where("is_active", true);
 
     if (!assignedDoctors || assignedDoctors.length === 0) {
-      console.log("ℹ️ No assigned doctors found for patient:", patientId);
-      return;
+      console.log("⚠️ No active doctors assigned to patient:", patient_id);
+      return { ok: false, message: "No doctors assigned to this patient" };
     }
 
-    const dr_ids = assignedDoctors.map((doc) => doc.doctor_id);
-    console.log("👨‍⚕️ Assigned doctors for alerts:", dr_ids);
-
-    // 2. Map BP status to alert type
-    const alertTypeMap = {
-      Low: "low",
-      High: "high",
-    };
-
-    const alertType = alertTypeMap[bpStatus];
-    if (!alertType) {
-      console.log("ℹ️ No alert needed for Normal BP status");
-      return;
-    }
-
-    // 3. Create alert description
-    const alertDesc = `Blood Pressure ${bpStatus}: ${systolic}/${diastolic} mmHg`;
-
-    // 4. Validate clinicians exist and are active - FIXED
-    // Create placeholders for the IN clause
-    const placeholders = dr_ids.map(() => "?").join(",");
-    const [validClinicians] = await db.query(
-      `SELECT users.id, users.name, users.email, role.role_type 
-       FROM users 
-       JOIN role ON users.id = role.user_id 
-       WHERE users.id IN (${placeholders}) 
-       AND role.role_type = 'clinician' 
-       AND users.is_active = true`,
-      dr_ids
+    const doctor_ids = assignedDoctors.map(
+      (assignment) => assignment.doctor_id
     );
 
-    console.log("✅ Valid clinicians found:", validClinicians.length);
+    console.log("   Assigned Doctor IDs:", doctor_ids);
 
-    if (validClinicians.length === 0) {
-      console.log("❌ No valid clinicians found for alert");
-      return;
+    // 2. Prepare alert details
+    const alertType = `BP_${bpStatus.toUpperCase()}`;
+    const alertDesc = `Blood Pressure Alert: ${bpStatus} (${systolic}/${diastolic} mmHg)`;
+
+    // 3. Get connection status
+    const connectedUsersBefore = getConnectedUsers();
+    console.log("📊 Connected users BEFORE alert:", connectedUsersBefore);
+
+    // Verify doctors exist and are active
+    const validDoctors = await knex("users")
+      .select("users.id", "users.name", "users.email", "role.role_type")
+      .join("role", "users.id", "role.user_id")
+      .whereIn("users.id", doctor_ids)
+      .whereIn("role.role_type", ["clinician", "doctor"])
+      .where("users.is_active", true);
+
+    console.log("✅ Valid doctors found:", validDoctors.length);
+
+    if (validDoctors.length === 0) {
+      console.log("❌ No valid doctors found");
+      return { ok: false, message: "No valid doctors found" };
     }
 
-    const validClinicianIds = validClinicians.map((d) => d.id);
+    // Get patient details
+    const patientDetails = await knex("users")
+      .select("id", "name", "email", "phoneNumber", "organization_id")
+      .where("id", patient_id)
+      .first();
 
-    // 5. Get patient details - FIXED
-    const [patientDetailsRows] = await db.query(
-      "SELECT id, name, email, phoneNumber, organization_id FROM users WHERE id = ?",
-      [patientId]
-    );
-
-    if (!patientDetailsRows || patientDetailsRows.length === 0) {
-      console.log("❌ Patient not found:", patientId);
-      return;
+    if (!patientDetails) {
+      console.log("❌ Patient not found");
+      return { ok: false, message: "Patient not found" };
     }
 
-    const patientDetails = patientDetailsRows[0];
+    console.log("👤 Patient details:", patientDetails.name);
 
-    console.log("👤 Patient details for alert:", patientDetails);
-
-    // 6. Create alert and assignments - FIXED (using transaction with connection)
-    const connection = await db.getConnection();
-
-    try {
-      await connection.beginTransaction();
-
+    // Start transaction
+    const transactionResult = await knex.transaction(async (trx) => {
       // Insert alert
-      const [alertResult] = await connection.query(
-        "INSERT INTO alerts (user_id, `desc`, type) VALUES (?, ?, ?)",
-        [patientId, alertDesc, alertType]
-      );
+      const [alertId] = await trx("alerts").insert({
+        user_id: patient_id,
+        desc: alertDesc,
+        type: alertType,
+        created_at: new Date(),
+      });
 
-      const alertId = alertResult.insertId;
       console.log("📝 Alert inserted with ID:", alertId);
 
-      // Insert assignments for each clinician
-      const assignmentValues = validClinicianIds.map((clinician_id) => [
-        alertId,
-        clinician_id,
-        false, // read_status
-        null, // read_at
-      ]);
+      // Create alert assignments
+      const assignments = doctor_ids.map((doctor_id) => ({
+        alert_id: alertId,
+        doctor_id: doctor_id,
+        read_status: false,
+        read_at: null,
+        created_at: new Date(),
+        updated_at: new Date(),
+      }));
 
-      if (assignmentValues.length > 0) {
-        await connection.query(
-          "INSERT INTO alert_assignments (alert_id, doctor_id, read_status, read_at) VALUES ?",
-          [assignmentValues]
-        );
+      await trx("alert_assignments").insert(assignments);
+      console.log("✅ Alert assignments created for doctors:", doctor_ids);
+
+      // Fetch complete alert details
+      const newAlert = await trx("alerts")
+        .select(
+          "alerts.*",
+          "patients.name as patient_name",
+          "patients.email as patient_email",
+          "patients.phoneNumber as patient_phone",
+          "patients.organization_id as patient_organization_id"
+        )
+        .leftJoin("users as patients", "alerts.user_id", "patients.id")
+        .where("alerts.id", alertId)
+        .first();
+
+      return { alertId, newAlert, patientDetails };
+    });
+
+    // Send WebSocket notifications
+    const io = getIO();
+    console.log("📡 Sending WebSocket notifications to doctors:", doctor_ids);
+
+    let notificationsSent = 0;
+    const notificationResults = [];
+
+    for (const doctor_id of doctor_ids) {
+      const doctorSocketId = getUserSocketId(doctor_id);
+      const isConnected = isUserConnected(doctor_id);
+
+      console.log(`   👨‍⚕️ Doctor ${doctor_id}:`, {
+        socketId: doctorSocketId,
+        isConnected: isConnected,
+      });
+
+      // Get unread count
+      const unreadCount = await knex("alert_assignments")
+        .where("doctor_id", doctor_id)
+        .andWhere("read_status", false)
+        .count("id as count")
+        .first();
+
+      const alertData = {
+        alert: {
+          ...transactionResult.newAlert,
+          read_status: false,
+          assignment_id: doctor_id,
+        },
+        patient: patientDetails,
+        unread_count: parseInt(unreadCount?.count) || 0,
+        timestamp: new Date(),
+        server_time: new Date().toISOString(),
+        bp_reading: `${systolic}/${diastolic}`,
+        bp_status: bpStatus,
+      };
+
+      let sent = false;
+
+      // Try multiple methods to send alert
+      if (isConnected && doctorSocketId) {
+        // Method 1: Send to user's personal room
+        io.to(`user_${doctor_id}`).emit("new_alert", alertData);
+        console.log(`   ✅ Method 1: Sent to room user_${doctor_id}`);
+        sent = true;
+
+        // Method 2: Send to specific socket
+        io.to(doctorSocketId).emit("new_alert", alertData);
+        console.log(`   ✅ Method 2: Sent to socket ${doctorSocketId}`);
       }
 
-      // Fetch the complete alert with patient details
-      const [newAlertRows] = await connection.query(
-        `SELECT alerts.*, 
-                patients.name as patient_name, 
-                patients.email as patient_email, 
-                patients.phoneNumber as patient_phone,
-                patients.organization_id as patient_organization_id
-         FROM alerts 
-         LEFT JOIN users as patients ON alerts.user_id = patients.id 
-         WHERE alerts.id = ?`,
-        [alertId]
-      );
+      // Method 3: Broadcast to all clinicians room (fallback)
+      io.to("all_clinicians").emit("new_alert_broadcast", {
+        ...alertData,
+        broadcast: true,
+        intended_for: doctor_id,
+      });
+      console.log(`   ✅ Method 3: Broadcast to all_clinicians room`);
 
-      const newAlert = newAlertRows[0];
-
-      await connection.commit();
-
-      // 7. Send WebSocket notifications
-      const io = getIO();
-      console.log(
-        "📡 Sending WebSocket notifications to clinicians:",
-        validClinicianIds
-      );
-
-      let notificationsSent = 0;
-
-      for (const clinician_id of validClinicianIds) {
-        const clinicianSocketId = userSockets.get(clinician_id.toString());
-
-        if (clinicianSocketId) {
-          // Get updated unread count for this clinician
-          const [unreadCountRows] = await db.query(
-            "SELECT COUNT(id) as count FROM alert_assignments WHERE doctor_id = ? AND read_status = false",
-            [clinician_id]
-          );
-
-          const unreadCount = unreadCountRows[0].count;
-
-          io.to(clinicianSocketId).emit("new_alert", {
-            alert: {
-              ...newAlert,
-              read_status: false,
-              assignment_id: clinician_id,
-            },
-            patient: {
-              id: patientDetails.id,
-              name: patientDetails.name,
-              email: patientDetails.email,
-              phoneNumber: patientDetails.phoneNumber,
-              organization_id: patientDetails.organization_id,
-            },
-            unread_count: parseInt(unreadCount) || 0,
-            timestamp: new Date(),
-          });
-
-          console.log(`   ✅ Notification sent to clinician ${clinician_id}`);
-          notificationsSent++;
-        } else {
-          console.log(
-            `   ❌ Clinician ${clinician_id} not connected - no active socket`
-          );
-        }
+      if (sent) {
+        notificationsSent++;
       }
 
-      console.log(
-        `✅ BP Alert created successfully. Notifications sent to ${notificationsSent}/${validClinicianIds.length} clinicians`
-      );
-    } catch (transactionError) {
-      await connection.rollback();
-      throw transactionError;
-    } finally {
-      connection.release();
+      notificationResults.push({
+        doctor_id,
+        connected: isConnected,
+        socket_id: doctorSocketId,
+        notification_sent: sent,
+      });
     }
+
+    // Get connection status AFTER processing
+    const connectedUsersAfter = getConnectedUsers();
+    console.log("📊 Connected users AFTER alert:", connectedUsersAfter);
+
+    console.log("✅ BP Alert completed successfully");
+
+    return {
+      ok: true,
+      message: `BP alert created. Notifications sent to ${notificationsSent}/${doctor_ids.length} doctors`,
+      alert: transactionResult.newAlert,
+      notifications: {
+        sent: notificationsSent,
+        total: doctor_ids.length,
+        details: notificationResults,
+      },
+    };
   } catch (error) {
     console.error("❌ Error in triggerBPAlert:", error);
     throw error;
