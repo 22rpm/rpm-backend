@@ -1,6 +1,6 @@
 const express = require("express");
 const jwt = require("jsonwebtoken");
-const knex = require("../config/knex");
+const knex = require("../config/db");
 const { authRequired } = require("../middleware/auth");
 
 const {
@@ -12,7 +12,16 @@ const {
 } = require("../socket/socketServer");
 
 const router = express.Router();
+// ✅ Helper to calculate BP status
+const calculateBPStatus = (systolic, diastolic) => {
+  const sys = parseInt(systolic);
+  const dia = parseInt(diastolic);
 
+  if (sys < 90 || dia < 60) return "Low";
+  else if (sys <= 120 && dia <= 80) return "Normal";
+  else if (sys > 120 || dia > 80) return "High";
+  else return "Normal";
+};
 // Debug endpoint to check connected users
 router.get("/debug-connected-users", (req, res) => {
   const connectedUsers = Array.from(userSockets.entries());
@@ -862,4 +871,319 @@ router.patch("/mark-all-read", authRequired, async (req, res) => {
       .json({ ok: false, message: "Server error", error: error.message });
   }
 });
+
+router.get("/alert-settings", authRequired, async (req, res) => {
+  console.log("getting the alert settings");
+  try {
+    const doctor_id = req.user.id;
+
+    // Check if user is a doctor/clinician - USING YOUR MYSQL CONNECTION
+    const [roleRows] = await knex.query(
+      "SELECT role_type FROM role WHERE user_id = ?",
+      [doctor_id]
+    );
+
+    const role = roleRows[0]; // Get the first row
+    console.log("getting the dr setting .. dr role", role);
+
+    if (!role || !["doctor", "clinician"].includes(role.role_type)) {
+      console.log("no role or invalid role");
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. Doctor role required.",
+      });
+    }
+
+    // Get doctor's settings - USING YOUR MYSQL CONNECTION
+    const [settingsRows] = await knex.query(
+      "SELECT * FROM doctor_alert_settings WHERE doctor_id = ?",
+      [doctor_id]
+    );
+
+    // If no settings exist, return defaults
+    if (!settingsRows || settingsRows.length === 0) {
+      const defaultSettings = {
+        systolic_high: 140,
+        systolic_low: 90,
+        diastolic_high: 90,
+        diastolic_low: 60,
+      };
+      return res.json({
+        success: true,
+        settings: defaultSettings,
+        isDefault: true,
+      });
+    }
+
+    const settings = settingsRows[0];
+    res.json({
+      success: true,
+      settings: settings,
+      isDefault: false,
+    });
+  } catch (error) {
+    console.error("Error fetching doctor alert settings:", error);
+    res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  }
+});
+router.patch("/alert-settings", authRequired, async (req, res) => {
+  try {
+    const doctor_id = req.user.id;
+    const { systolic_high, systolic_low, diastolic_high, diastolic_low } =
+      req.body;
+
+    // Validate doctor role
+    const [roleRows] = await knex.query(
+      "SELECT role_type FROM role WHERE user_id = ?",
+      [doctor_id]
+    );
+
+    const role = roleRows[0];
+    if (!role || !["doctor", "clinician"].includes(role.role_type)) {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. Doctor role required.",
+      });
+    }
+
+    // Validate input
+    const errors = [];
+
+    if (systolic_high && (systolic_high < 100 || systolic_high > 200)) {
+      errors.push("Systolic high must be between 100 and 200");
+    }
+
+    if (systolic_low && (systolic_low < 60 || systolic_low > 150)) {
+      errors.push("Systolic low must be between 60 and 150");
+    }
+
+    if (diastolic_high && (diastolic_high < 60 || diastolic_high > 130)) {
+      errors.push("Diastolic high must be between 60 and 130");
+    }
+
+    if (diastolic_low && (diastolic_low < 40 || diastolic_low > 100)) {
+      errors.push("Diastolic low must be between 40 and 100");
+    }
+
+    if (systolic_high && systolic_low && systolic_high <= systolic_low) {
+      errors.push("Systolic high must be greater than systolic low");
+    }
+
+    if (diastolic_high && diastolic_low && diastolic_high <= diastolic_low) {
+      errors.push("Diastolic high must be greater than diastolic low");
+    }
+
+    if (errors.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Validation failed",
+        errors: errors,
+      });
+    }
+
+    // Check if settings already exist
+    const [existingSettings] = await knex.query(
+      "SELECT id FROM doctor_alert_settings WHERE doctor_id = ?",
+      [doctor_id]
+    );
+
+    let result;
+
+    if (existingSettings && existingSettings.length > 0) {
+      // Update existing settings
+      [result] = await knex.query(
+        `UPDATE doctor_alert_settings 
+         SET systolic_high = ?, systolic_low = ?, diastolic_high = ?, diastolic_low = ?, updated_at = NOW()
+         WHERE doctor_id = ?`,
+        [systolic_high, systolic_low, diastolic_high, diastolic_low, doctor_id]
+      );
+    } else {
+      // Insert new settings
+      [result] = await knex.query(
+        `INSERT INTO doctor_alert_settings 
+         (doctor_id, systolic_high, systolic_low, diastolic_high, diastolic_low) 
+         VALUES (?, ?, ?, ?, ?)`,
+        [doctor_id, systolic_high, systolic_low, diastolic_high, diastolic_low]
+      );
+    }
+
+    // Get updated settings
+    const [updatedSettings] = await knex.query(
+      "SELECT * FROM doctor_alert_settings WHERE doctor_id = ?",
+      [doctor_id]
+    );
+
+    res.json({
+      success: true,
+      message:
+        existingSettings && existingSettings.length > 0
+          ? "Settings updated successfully"
+          : "Settings created successfully",
+      settings: updatedSettings[0],
+    });
+  } catch (error) {
+    console.error("Error updating doctor alert settings:", error);
+    res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  }
+});
+
+router.post("/test/bp-alert", async (req, res) => {
+  console.log("📥 Incoming test request to /test/bp-alert");
+
+  const { patient_id, devId, devType, systolic, diastolic, data } = req.body;
+
+  console.log("📦 Request Body:", req.body);
+
+  if (!patient_id || !devType || !systolic || !diastolic) {
+    return res.status(400).json({
+      success: false,
+      message:
+        "Missing required fields: patient_id, devType, systolic, diastolic are required",
+    });
+  }
+
+  const bpStatus = calculateBPStatus(systolic, diastolic);
+  console.log(`🩺 Calculated BP Status: ${bpStatus}`);
+
+  // Only trigger BP alert for abnormal readings
+  if (devType !== "bp" || bpStatus === "Normal") {
+    return res.status(200).json({
+      success: true,
+      message: `BP status is ${bpStatus}. No alert triggered.`,
+    });
+  }
+
+  console.log("🚨 BP Alert Condition Met:", bpStatus);
+
+  let connection;
+  try {
+    connection = await db.getConnection();
+
+    // 1️⃣ Get doctors assigned to the patient
+    const [assignedDoctors] = await connection.query(
+      "SELECT doctor_id FROM patient_doctor_assignments WHERE patient_id = ?",
+      [patient_id]
+    );
+
+    if (!assignedDoctors.length) {
+      console.log("⚠️ No doctors assigned to patient");
+      return res.json({ ok: false, message: "No doctors assigned to patient" });
+    }
+
+    const doctor_ids = assignedDoctors.map((d) => d.doctor_id);
+    console.log("👨‍⚕️ Assigned Doctor IDs:", doctor_ids);
+
+    // 2️⃣ Validate doctors
+    const [validDoctors] = await connection.query(
+      `SELECT users.id, users.name, users.email, role.role_type
+       FROM users
+       JOIN role ON users.id = role.user_id
+       WHERE users.id IN (?) 
+       AND role.role_type IN ('clinician', 'doctor') 
+       AND users.is_active = true`,
+      [doctor_ids]
+    );
+
+    if (!validDoctors.length) {
+      console.log("❌ No valid doctors found");
+      return res.json({ ok: false, message: "No valid doctors found" });
+    }
+
+    // 3️⃣ Get patient details
+    const [patientRows] = await connection.query(
+      "SELECT id, name, email, phoneNumber, organization_id FROM users WHERE id = ?",
+      [patient_id]
+    );
+    const patientDetails = patientRows[0];
+
+    if (!patientDetails) {
+      return res.json({ ok: false, message: "Patient not found" });
+    }
+
+    console.log("👤 Patient details:", patientDetails.name);
+
+    // 4️⃣ Create alert + assignments in a transaction
+    await connection.beginTransaction();
+
+    const alertType = `BP_${bpStatus.toUpperCase()}`;
+    const alertDesc = `Blood Pressure Alert: ${bpStatus} (${systolic}/${diastolic} mmHg)`;
+
+    const [alertResult] = await connection.query(
+      "INSERT INTO alerts (user_id, `desc`, type, created_at) VALUES (?, ?, ?, ?)",
+      [patient_id, alertDesc, alertType, new Date()]
+    );
+
+    const alertId = alertResult.insertId;
+    console.log("📝 Alert created with ID:", alertId);
+
+    // Insert assignments for each doctor
+    const assignmentValues = doctor_ids.map((doctor_id) => [
+      alertId,
+      doctor_id,
+      false,
+      null,
+      new Date(),
+      new Date(),
+    ]);
+
+    await connection.query(
+      `INSERT INTO alert_assignments 
+       (alert_id, doctor_id, read_status, read_at, created_at, updated_at) 
+       VALUES ?`,
+      [assignmentValues]
+    );
+
+    await connection.commit();
+
+    console.log("✅ Alert and assignments created successfully.");
+
+    // 5️⃣ Send notifications via WebSocket
+    const io = getIO();
+    const notifications = [];
+
+    for (const doctor_id of doctor_ids) {
+      const socketId = getUserSocketId(doctor_id);
+      const connected = isUserConnected(doctor_id);
+
+      const alertData = {
+        alert_id: alertId,
+        patient: patientDetails,
+        bp_reading: `${systolic}/${diastolic}`,
+        bp_status: bpStatus,
+        timestamp: new Date(),
+      };
+
+      if (connected && socketId) {
+        io.to(`user_${doctor_id}`).emit("new_alert", alertData);
+        io.to(socketId).emit("new_alert", alertData);
+        console.log(`📡 Alert sent to doctor ${doctor_id}`);
+      }
+
+      io.to("all_clinicians").emit("new_alert_broadcast", alertData);
+      notifications.push({ doctor_id, connected });
+    }
+
+    res.status(201).json({
+      success: true,
+      message: "BP Alert triggered successfully",
+      bpStatus,
+      alertId,
+      doctors: doctor_ids,
+      notifications,
+    });
+  } catch (err) {
+    console.error("❌ Error in /test/bp-alert:", err);
+    if (connection) await connection.rollback();
+    res.status(500).json({ success: false, message: err.message });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
 module.exports = router;

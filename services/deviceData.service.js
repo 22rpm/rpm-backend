@@ -686,12 +686,21 @@ const calculateBPStatus = (systolic, diastolic) => {
   const sys = parseInt(systolic);
   const dia = parseInt(diastolic);
 
+  // Low BP
   if (sys < 90 || dia < 60) {
     return "Low";
-  } else if (sys <= 139 && dia <= 89) {
+  }
+  // Normal BP
+  else if (sys <= 120 && dia <= 80) {
     return "Normal";
-  } else {
+  }
+  // High BP
+  else if (sys > 120 || dia > 80) {
     return "High";
+  }
+  // Default fallback
+  else {
+    return "Normal";
   }
 };
 
