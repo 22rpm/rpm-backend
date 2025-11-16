@@ -14,39 +14,29 @@ const {
 
 const createDeviceDataController = async (req, res) => {
   try {
-    console.log("📥 Incoming request to createDeviceDataController");
+    const user = req.user;
+    const { devId, devType, data, dr_ids } = req.body;
 
-    const user = req.user; // set by authMiddleware
-    const { devId, devType, data } = req.body;
+    console.log("📥 createDeviceDataController", {
+      userId: user?.id,
+      devId,
+      devType,
+    });
 
-    console.log("👤 Authenticated User:", user);
-    console.log("📦 Request Body:", { devId, devType, data });
+    const result = await createDeviceDataService(
+      user.id,
+      devId,
+      devType,
+      data,
+      { dr_ids }
+    );
 
-    // call service - passing user.id instead of username
-    const result = await createDeviceDataService(user.id, devId, devType, data);
-
-    console.log("✅ Device data created successfully:", result);
-
-    // Check if BP data and status is not Normal, then trigger alert
-    if (
-      devType === "bp" &&
-      result.deviceData.bpStatus &&
-      result.deviceData.bpStatus !== "Normal"
-    ) {
-      console.log(`🚨 BP Alert Condition Met: ${result.deviceData.bpStatus}`);
-
-      try {
-        await triggerBPAlert(
-          user.id,
-          result.deviceData.bpStatus,
-          result.deviceData.systolic,
-          result.deviceData.diastolic
-        );
-      } catch (alertError) {
-        console.error("❌ Error triggering BP alert:", alertError);
-        // Don't fail the main request if alert fails
-      }
-    }
+    console.log("📤 createDeviceDataController result:", {
+      insertId: result.insertId,
+      bpStatus: result.deviceData?.bpStatus,
+      deviceWasNew: result.deviceWasNew,
+      alertCreated: !!result.alertCreated,
+    });
 
     res.status(201).json({
       success: true,
@@ -54,13 +44,63 @@ const createDeviceDataController = async (req, res) => {
       data: result,
     });
   } catch (err) {
-    console.error("❌ Error storing device data:", err);
+    console.error("❌ createDeviceDataController error:", err);
     res.status(500).json({
       success: false,
       message: err.message || "Internal Server Error",
     });
   }
 };
+
+// const createDeviceDataController = async (req, res) => {
+//   try {
+//     console.log("📥 Incoming request to createDeviceDataController");
+
+//     const user = req.user; // set by authMiddleware
+//     const { devId, devType, data } = req.body;
+
+//     console.log("👤 Authenticated User:", user);
+//     console.log("📦 Request Body:", { devId, devType, data });
+
+//     // call service - passing user.id instead of username
+//     const result = await createDeviceDataService(user.id, devId, devType, data);
+
+//     console.log("✅ Device data created successfully:", result);
+
+//     // Check if BP data and status is not Normal, then trigger alert
+//     if (
+//       devType === "bp" &&
+//       result.deviceData.bpStatus &&
+//       result.deviceData.bpStatus !== "Normal"
+//     ) {
+//       console.log(`🚨 BP Alert Condition Met: ${result.deviceData.bpStatus}`);
+
+//       try {
+//         await triggerBPAlert(
+//           user.id,
+//           result.deviceData.bpStatus,
+//           result.deviceData.systolic,
+//           result.deviceData.diastolic
+//         );
+//       } catch (alertError) {
+//         console.error("❌ Error triggering BP alert:", alertError);
+//         // Don't fail the main request if alert fails
+//       }
+//     }
+
+//     res.status(201).json({
+//       success: true,
+//       message: "Device data stored successfully",
+//       data: result,
+//     });
+//   } catch (err) {
+//     console.error("❌ Error storing device data:", err);
+//     res.status(500).json({
+//       success: false,
+//       message: err.message || "Internal Server Error",
+//     });
+//   }
+// };
 const createBPDataController = async (req, res) => {
   try {
     const user = req.user; // from authRequired → { id, email, role }

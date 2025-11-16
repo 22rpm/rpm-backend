@@ -704,83 +704,434 @@ const calculateBPStatus = (systolic, diastolic) => {
   }
 };
 
-const createDeviceDataService = async (userId, devId, devType, deviceData) => {
-  console.log("🛠️ createDeviceDataService called with:", {
+const createDeviceDataService = async (
+  userId,
+  devId,
+  devType,
+  deviceData = {},
+  opts = {}
+) => {
+  console.log("🛠 createDeviceDataService", {
     userId,
     devId,
     devType,
     deviceData,
   });
 
-  try {
-    // 1. First check if device exists for this user
-    console.log("🔍 Checking if device exists in devices table...");
+  // helper reused from your test-alert logic
+  const determineTypeForClinician = (vitals) => {
+    if (!vitals) return null;
+    const sVal = Number.parseInt(vitals.systolic, 10);
+    const dVal = Number.parseInt(vitals.diastolic, 10);
+    if (Number.isNaN(sVal) && Number.isNaN(dVal)) return null;
 
+    const sExtremeHigh = !Number.isNaN(sVal) && sVal > 140;
+    const sModerateHigh = !Number.isNaN(sVal) && sVal >= 130 && sVal <= 140;
+    const sExtremeLow = !Number.isNaN(sVal) && sVal < 90;
+    const sModerateLow = !Number.isNaN(sVal) && sVal >= 90 && sVal <= 99;
+
+    const dExtremeHigh = !Number.isNaN(dVal) && dVal > 99;
+    const dModerateHigh = !Number.isNaN(dVal) && dVal >= 90 && dVal <= 99;
+    const dExtremeLow = !Number.isNaN(dVal) && dVal < 60;
+    const dModerateLow = !Number.isNaN(dVal) && dVal >= 60 && dVal <= 69;
+
+    const anyHighBand =
+      sExtremeHigh || sModerateHigh || dExtremeHigh || dModerateHigh;
+    const anyLowBand =
+      sExtremeLow || sModerateLow || dExtremeLow || dModerateLow;
+
+    if ((sExtremeHigh || sModerateHigh) && (dExtremeLow || dModerateLow))
+      return "abnormal";
+    if ((dExtremeHigh || dModerateHigh) && (sExtremeLow || sModerateLow))
+      return "abnormal";
+
+    if (sExtremeHigh || dExtremeHigh || sExtremeLow || dExtremeLow)
+      return "high";
+    if (anyHighBand || anyLowBand) return "low";
+
+    return null;
+  };
+
+  // minimal BP status calculator (keeps your previous behavior)
+  const calculateBPStatus = (s, d) => {
+    const sVal = Number(s);
+    const dVal = Number(d);
+    if (Number.isNaN(sVal) || Number.isNaN(dVal)) return "Normal";
+
+    if (sVal > 180 || dVal > 120) return "Emergency";
+    if (sVal > 140 || dVal > 99) return "High";
+    if (sVal < 90 || dVal < 60) return "Low";
+    return "Normal";
+  };
+
+  let connection;
+  try {
+    // 1) ensure device exists
     const [existingDevice] = await db.query(
       "SELECT id FROM devices WHERE dev_id = ? AND user_id = ?",
       [devId, userId]
     );
 
-    // 2. If device doesn't exist, insert into devices table
     if (!existingDevice || existingDevice.length === 0) {
-      console.log("📝 Device not found, inserting into devices table...");
-
       await db.query(
         "INSERT INTO devices (dev_id, user_id, dev_type) VALUES (?, ?, ?)",
         [devId, userId, devType]
       );
-
-      console.log("✅ Device added to devices table");
-    } else {
-      console.log(
-        "ℹ️ Device already exists in devices table, skipping insertion"
-      );
     }
 
-    // 3. Calculate BP status for BP devices (simplified)
+    // 2) compute BP status if needed
     let processedData = { ...deviceData };
-
-    if (devType === "bp" && deviceData.systolic && deviceData.diastolic) {
+    if (
+      devType === "bp" &&
+      deviceData.systolic != null &&
+      deviceData.diastolic != null
+    ) {
       const bpStatus = calculateBPStatus(
         deviceData.systolic,
         deviceData.diastolic
       );
-      processedData = {
-        ...deviceData,
-        bpStatus: bpStatus,
-      };
+      processedData = { ...deviceData, bpStatus };
       console.log(
-        `📊 Calculated BP Status: ${bpStatus} for BP ${deviceData.systolic}/${deviceData.diastolic}`
+        "📊 Calculated BP status =",
+        bpStatus,
+        `for ${deviceData.systolic}/${deviceData.diastolic}`
       );
     }
 
-    // 4. Always insert into dev_data table
-    console.log("💾 Inserting device data into dev_data table...");
-
-    const [result] = await db.query(
+    // 3) insert dev_data
+    const [insertResult] = await db.query(
       "INSERT INTO dev_data (dev_id, user_id, dev_type, data) VALUES (?, ?, ?, ?)",
       [devId, userId, devType, JSON.stringify(processedData)]
     );
 
-    console.log("✅ Device data inserted successfully. Result:", result);
-
-    const response = {
-      insertId: result.insertId,
+    const serviceResponse = {
+      insertId: insertResult.insertId,
       devId,
       devType,
       userId,
       deviceData: processedData,
       deviceWasNew: !existingDevice || existingDevice.length === 0,
+      alertCreated: false,
     };
 
-    console.log("📤 Returning response from service:", response);
+    // 4) If BP device and bpStatus is not Normal -> run test-alert logic
+    if (
+      devType === "bp" &&
+      processedData.bpStatus &&
+      processedData.bpStatus !== "Normal"
+    ) {
+      console.log(
+        "🚨 BP Alert logic triggered from device data:",
+        processedData.bpStatus
+      );
 
-    return response;
+      // open connection to run transactional alert insertions and to fetch clinicians
+      connection = await db.getConnection();
+
+      // Build list of candidate clinicians:
+      // Priority: opts.dr_ids (if provided) -> try to fetch patient-doctor assignments -> fallback to clinicians in same organization
+      let clinicianRows = [];
+      const drIdsFromOpts =
+        Array.isArray(opts.dr_ids) && opts.dr_ids.length ? opts.dr_ids : null;
+
+      if (drIdsFromOpts) {
+        const [rows] = await connection.query(
+          `SELECT u.id, u.name, u.email, role.role_type,
+                  das.systolic_high, das.systolic_low, das.diastolic_high, das.diastolic_low
+           FROM users u
+           JOIN role ON u.id = role.user_id
+           LEFT JOIN doctor_alert_settings das ON u.id = das.doctor_id
+           WHERE u.id IN (?) AND role.role_type = 'clinician' AND u.is_active = true`,
+          [drIdsFromOpts]
+        );
+        clinicianRows = rows;
+      } else {
+        // try to fetch clinicians assigned to this patient from common assignment tables (best-effort)
+        // if your schema uses a different table name, replace 'patient_doctor' with it.
+        try {
+          const [rowsAssigned] = await connection.query(
+            `SELECT u.id, u.name, u.email, role.role_type,
+                    das.systolic_high, das.systolic_low, das.diastolic_high, das.diastolic_low
+             FROM users u
+             JOIN role ON u.id = role.user_id
+             LEFT JOIN doctor_alert_settings das ON u.id = das.doctor_id
+             JOIN patient_doctor pd ON pd.doctor_id = u.id
+             WHERE pd.patient_id = ? AND role.role_type = 'clinician' AND u.is_active = true`,
+            [userId]
+          );
+          clinicianRows = rowsAssigned;
+        } catch (e) {
+          // fallback: clinicians in same organization as patient
+          const [patientRows] = await connection.query(
+            "SELECT id, organization_id FROM users WHERE id = ?",
+            [userId]
+          );
+          const patient = patientRows[0];
+          if (patient && patient.organization_id) {
+            const [rowsOrg] = await connection.query(
+              `SELECT u.id, u.name, u.email, role.role_type,
+                      das.systolic_high, das.systolic_low, das.diastolic_high, das.diastolic_low
+               FROM users u
+               JOIN role ON u.id = role.user_id
+               LEFT JOIN doctor_alert_settings das ON u.id = das.doctor_id
+               WHERE u.organization_id = ? AND role.role_type = 'clinician' AND u.is_active = true`,
+              [patient.organization_id]
+            );
+            clinicianRows = rowsOrg;
+          } else {
+            // final fallback: all active clinicians
+            const [rowsAll] = await connection.query(
+              `SELECT u.id, u.name, u.email, role.role_type,
+                      das.systolic_high, das.systolic_low, das.diastolic_high, das.diastolic_low
+               FROM users u
+               JOIN role ON u.id = role.user_id
+               LEFT JOIN doctor_alert_settings das ON u.id = das.doctor_id
+               WHERE role.role_type = 'clinician' AND u.is_active = true`
+            );
+            clinicianRows = rowsAll;
+          }
+        }
+      }
+
+      console.log("🎯 Candidate clinicians count:", clinicianRows.length);
+
+      // filter clinicians based on their settings and derived vitals
+      const cliniciansToAlert = [];
+      const clinicianTypeMap = {};
+      const vitals = {
+        systolic: processedData.systolic,
+        diastolic: processedData.diastolic,
+      };
+      clinicianRows.forEach((clin) => {
+        // determineTypeForClinician uses measured bands (same as test-alert)
+        const derived = determineTypeForClinician(vitals);
+        if (derived) {
+          cliniciansToAlert.push(clin);
+          clinicianTypeMap[clin.id] = derived;
+        } else {
+          // fallback: if clinician has no specific thresholds saved, include them
+          const hasSettings =
+            clin.systolic_high ||
+            clin.systolic_low ||
+            clin.diastolic_high ||
+            clin.diastolic_low;
+          if (!hasSettings) {
+            cliniciansToAlert.push(clin);
+            clinicianTypeMap[clin.id] = "low"; // conservative default
+          }
+        }
+      });
+
+      console.log("📣 Final cliniciansToAlert:", cliniciansToAlert.length);
+
+      if (cliniciansToAlert.length === 0) {
+        // nothing to alert for
+        serviceResponse.alertCreated = false;
+        serviceResponse.filtered = true;
+        return serviceResponse;
+      }
+
+      // choose overall alert type by priority
+      const priority = { abnormal: 3, high: 2, low: 1 };
+      let overallType = null;
+      for (const clin of cliniciansToAlert) {
+        const t = clinicianTypeMap[clin.id] || "low";
+        if (!overallType) overallType = t;
+        else if (priority[t] > priority[overallType]) overallType = t;
+      }
+      if (!overallType) overallType = "low";
+
+      // Insert alert + assignments in transaction
+      await connection.beginTransaction();
+      try {
+        const [alertResult] = await connection.query(
+          "INSERT INTO alerts (user_id, `desc`, type, created_at) VALUES (?, ?, ?, ?)",
+          [
+            userId,
+            `BP alert (severity: ${overallType})`,
+            overallType,
+            new Date(),
+          ]
+        );
+        const alertId = alertResult.insertId;
+
+        const assignments = cliniciansToAlert.map((c) => [
+          alertId,
+          c.id,
+          false,
+          null,
+          new Date(),
+          new Date(),
+        ]);
+
+        await connection.query(
+          `INSERT INTO alert_assignments (alert_id, doctor_id, read_status, read_at, created_at, updated_at) VALUES ?`,
+          [assignments]
+        );
+
+        const [newAlertRows] = await connection.query(
+          `SELECT alerts.*, patients.name as patient_name, patients.email as patient_email, patients.phoneNumber as patient_phone, patients.organization_id as patient_organization_id
+           FROM alerts
+           LEFT JOIN users as patients ON alerts.user_id = patients.id
+           WHERE alerts.id = ?`,
+          [alertId]
+        );
+        const newAlert = newAlertRows[0];
+
+        await connection.commit();
+
+        // websocket notifications
+        const io = getIO();
+        const notificationResults = [];
+        let notificationsSent = 0;
+
+        for (const c of cliniciansToAlert) {
+          const clinician_id = c.id;
+          const clinicianSocketId = getUserSocketId(clinician_id);
+          const isConnected = isUserConnected(clinician_id);
+
+          const [unreadCountRows] = await connection.query(
+            "SELECT COUNT(id) as count FROM alert_assignments WHERE doctor_id = ? AND read_status = false",
+            [clinician_id]
+          );
+          const unreadCount = unreadCountRows[0]?.count || 0;
+
+          const alertData = {
+            alert: {
+              ...newAlert,
+              read_status: false,
+              assignment_id: clinician_id,
+              derived_type: clinicianTypeMap[clinician_id] || overallType,
+            },
+            patient: {
+              id: userId,
+            },
+            unread_count: parseInt(unreadCount) || 0,
+            timestamp: new Date(),
+            server_time: new Date().toISOString(),
+            vital_data: vitals,
+          };
+
+          let sent = false;
+          if (isConnected && clinicianSocketId) {
+            io.to(`user_${clinician_id}`).emit("new_alert", alertData);
+            io.to(clinicianSocketId).emit("new_alert", alertData);
+            sent = true;
+          }
+
+          if (sent) notificationsSent++;
+
+          notificationResults.push({
+            clinician_id,
+            connected: isConnected,
+            socket_id: clinicianSocketId,
+            notification_sent: sent,
+            alert_settings: c,
+          });
+        }
+
+        serviceResponse.alertCreated = true;
+        serviceResponse.alert = newAlert;
+        serviceResponse.notifications = {
+          sent: notificationsSent,
+          total: cliniciansToAlert.length,
+          details: notificationResults,
+        };
+
+        return serviceResponse;
+      } catch (txErr) {
+        await connection.rollback();
+        console.error("❌ BP alert transaction rolled back:", txErr);
+        throw txErr;
+      }
+    } // end BP alert block
+
+    return serviceResponse;
   } catch (error) {
-    console.error("❌ Error in createDeviceDataService:", error);
+    console.error("❌ createDeviceDataService error:", error);
     throw error;
+  } finally {
+    if (connection) connection.release();
   }
 };
+
+// const createDeviceDataService = async (userId, devId, devType, deviceData) => {
+//   console.log("🛠️ createDeviceDataService called with:", {
+//     userId,
+//     devId,
+//     devType,
+//     deviceData,
+//   });
+
+//   try {
+//     // 1. First check if device exists for this user
+//     console.log("🔍 Checking if device exists in devices table...");
+
+//     const [existingDevice] = await db.query(
+//       "SELECT id FROM devices WHERE dev_id = ? AND user_id = ?",
+//       [devId, userId]
+//     );
+
+//     // 2. If device doesn't exist, insert into devices table
+//     if (!existingDevice || existingDevice.length === 0) {
+//       console.log("📝 Device not found, inserting into devices table...");
+
+//       await db.query(
+//         "INSERT INTO devices (dev_id, user_id, dev_type) VALUES (?, ?, ?)",
+//         [devId, userId, devType]
+//       );
+
+//       console.log("✅ Device added to devices table");
+//     } else {
+//       console.log(
+//         "ℹ️ Device already exists in devices table, skipping insertion"
+//       );
+//     }
+
+//     // 3. Calculate BP status for BP devices (simplified)
+//     let processedData = { ...deviceData };
+
+//     if (devType === "bp" && deviceData.systolic && deviceData.diastolic) {
+//       const bpStatus = calculateBPStatus(
+//         deviceData.systolic,
+//         deviceData.diastolic
+//       );
+//       processedData = {
+//         ...deviceData,
+//         bpStatus: bpStatus,
+//       };
+//       console.log(
+//         `📊 Calculated BP Status: ${bpStatus} for BP ${deviceData.systolic}/${deviceData.diastolic}`
+//       );
+//     }
+
+//     // 4. Always insert into dev_data table
+//     console.log("💾 Inserting device data into dev_data table...");
+
+//     const [result] = await db.query(
+//       "INSERT INTO dev_data (dev_id, user_id, dev_type, data) VALUES (?, ?, ?, ?)",
+//       [devId, userId, devType, JSON.stringify(processedData)]
+//     );
+
+//     console.log("✅ Device data inserted successfully. Result:", result);
+
+//     const response = {
+//       insertId: result.insertId,
+//       devId,
+//       devType,
+//       userId,
+//       deviceData: processedData,
+//       deviceWasNew: !existingDevice || existingDevice.length === 0,
+//     };
+
+//     console.log("📤 Returning response from service:", response);
+
+//     return response;
+//   } catch (error) {
+//     console.error("❌ Error in createDeviceDataService:", error);
+//     throw error;
+//   }
+// };
 
 const createBPDataService = async (user, bpData) => {
   const username = user.email || user.id; // depends on what you keep in token
