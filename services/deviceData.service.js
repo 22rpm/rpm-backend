@@ -828,6 +828,31 @@ const createDeviceDataService = async (
       // open connection to run transactional alert insertions and to fetch clinicians
       connection = await db.getConnection();
 
+      // ✅ NEW: Get patient details including organization_id
+      const [patientRows] = await connection.query(
+        "SELECT id, name, email, phoneNumber, organization_id FROM users WHERE id = ?",
+        [userId]
+      );
+      const patientDetails = patientRows[0];
+
+      if (!patientDetails) {
+        throw new Error("Patient not found");
+      }
+
+      // ✅ NEW: Get organization admins (same as test-alert route)
+      const [adminRows] = await connection.query(
+        `SELECT users.id, users.name, users.email 
+         FROM users 
+         JOIN role ON users.id = role.user_id 
+         WHERE users.organization_id = ? 
+         AND role.role_type = 'admin' 
+         AND users.is_active = true`,
+        [patientDetails.organization_id]
+      );
+
+      const organizationAdmins = adminRows.map((admin) => admin.id);
+      console.log("👨‍💼 Organization admins found:", organizationAdmins);
+
       // Build list of candidate clinicians:
       // Priority: opts.dr_ids (if provided) -> try to fetch patient-doctor assignments -> fallback to clinicians in same organization
       let clinicianRows = [];
@@ -895,6 +920,13 @@ const createDeviceDataService = async (
 
       console.log("🎯 Candidate clinicians count:", clinicianRows.length);
 
+      // ✅ NEW: Use the first clinician as primary assigned doctor (same as test-alert)
+      const primaryDoctorId =
+        clinicianRows.length > 0 ? clinicianRows[0].id : null;
+      const primaryDoctor = clinicianRows.length > 0 ? clinicianRows[0] : null;
+
+      console.log("🎯 Primary assigned doctor:", primaryDoctor);
+
       // filter clinicians based on their settings and derived vitals
       const cliniciansToAlert = [];
       const clinicianTypeMap = {};
@@ -924,7 +956,14 @@ const createDeviceDataService = async (
 
       console.log("📣 Final cliniciansToAlert:", cliniciansToAlert.length);
 
-      if (cliniciansToAlert.length === 0) {
+      // ✅ NEW: Combine doctor IDs and admin IDs (remove duplicates) - same as test-alert
+      const clinicianIds = cliniciansToAlert.map((c) => c.id);
+      const allRecipientIds = [
+        ...new Set([...clinicianIds, ...organizationAdmins]),
+      ];
+      console.log("📨 All recipients (doctors + admins):", allRecipientIds);
+
+      if (allRecipientIds.length === 0) {
         // nothing to alert for
         serviceResponse.alertCreated = false;
         serviceResponse.filtered = true;
@@ -948,20 +987,21 @@ const createDeviceDataService = async (
           "INSERT INTO alerts (user_id, `desc`, type, created_at) VALUES (?, ?, ?, ?)",
           [
             userId,
-            `BP alert (severity: ${overallType})`,
+            `BP alert (severity: ${overallType}) - ${processedData.systolic}/${processedData.diastolic}`,
             overallType,
             new Date(),
           ]
         );
         const alertId = alertResult.insertId;
 
-        const assignments = cliniciansToAlert.map((c) => [
+        // ✅ UPDATED: Create assignments for ALL recipients (doctors + admins)
+        const assignments = allRecipientIds.map((recipient_id) => [
           alertId,
-          c.id,
-          false,
-          null,
-          new Date(),
-          new Date(),
+          recipient_id,
+          false, // read_status
+          null, // read_at
+          new Date(), // created_at
+          new Date(), // updated_at
         ]);
 
         await connection.query(
@@ -970,9 +1010,13 @@ const createDeviceDataService = async (
         );
 
         const [newAlertRows] = await connection.query(
-          `SELECT alerts.*, patients.name as patient_name, patients.email as patient_email, patients.phoneNumber as patient_phone, patients.organization_id as patient_organization_id
-           FROM alerts
-           LEFT JOIN users as patients ON alerts.user_id = patients.id
+          `SELECT alerts.*, 
+                  patients.name as patient_name, 
+                  patients.email as patient_email, 
+                  patients.phoneNumber as patient_phone, 
+                  patients.organization_id as patient_organization_id 
+           FROM alerts 
+           LEFT JOIN users as patients ON alerts.user_id = patients.id 
            WHERE alerts.id = ?`,
           [alertId]
         );
@@ -980,32 +1024,44 @@ const createDeviceDataService = async (
 
         await connection.commit();
 
-        // websocket notifications
+        // ✅ ENHANCED: WebSocket notifications for all recipients
         const io = getIO();
         const notificationResults = [];
         let notificationsSent = 0;
 
-        for (const c of cliniciansToAlert) {
-          const clinician_id = c.id;
-          const clinicianSocketId = getUserSocketId(clinician_id);
-          const isConnected = isUserConnected(clinician_id);
+        for (const recipient_id of allRecipientIds) {
+          const recipientSocketId = getUserSocketId(recipient_id);
+          const isConnected = isUserConnected(recipient_id);
 
           const [unreadCountRows] = await connection.query(
             "SELECT COUNT(id) as count FROM alert_assignments WHERE doctor_id = ? AND read_status = false",
-            [clinician_id]
+            [recipient_id]
           );
           const unreadCount = unreadCountRows[0]?.count || 0;
 
+          // ✅ ENHANCED: Include primary doctor information (same as test-alert)
           const alertData = {
             alert: {
               ...newAlert,
               read_status: false,
-              assignment_id: clinician_id,
-              derived_type: clinicianTypeMap[clinician_id] || overallType,
+              assignment_id: recipient_id,
+              // ✅ NEW: Include primary doctor assignment info
+              primary_assigned_doctor_id: primaryDoctorId,
+              primary_assigned_doctor_name:
+                primaryDoctor?.name || "Unknown Doctor",
+              primary_assigned_doctor_email: primaryDoctor?.email || "N/A",
+              derived_type: clinicianTypeMap[recipient_id] || overallType,
             },
-            patient: {
-              id: userId,
-            },
+            patient: patientDetails, // ✅ Use full patient details
+            // ✅ NEW: Include assigned doctor details
+            assigned_doctor: primaryDoctor
+              ? {
+                  id: primaryDoctor.id,
+                  name: primaryDoctor.name,
+                  email: primaryDoctor.email,
+                  phone: primaryDoctor.phoneNumber,
+                }
+              : null,
             unread_count: parseInt(unreadCount) || 0,
             timestamp: new Date(),
             server_time: new Date().toISOString(),
@@ -1013,28 +1069,65 @@ const createDeviceDataService = async (
           };
 
           let sent = false;
-          if (isConnected && clinicianSocketId) {
-            io.to(`user_${clinician_id}`).emit("new_alert", alertData);
-            io.to(clinicianSocketId).emit("new_alert", alertData);
+
+          // Try multiple methods to send alert
+          if (isConnected && recipientSocketId) {
+            // Method 1: Send to user's personal room
+            io.to(`user_${recipient_id}`).emit("new_alert", alertData);
+            console.log(`   ✅ Method 1: Sent to room user_${recipient_id}`);
             sent = true;
+
+            // Method 2: Send to specific socket
+            io.to(recipientSocketId).emit("new_alert", alertData);
+            console.log(`   ✅ Method 2: Sent to socket ${recipientSocketId}`);
           }
 
-          if (sent) notificationsSent++;
+          // Method 3: Broadcast to all clinicians room (fallback)
+          io.to("all_clinicians").emit("new_alert_broadcast", {
+            ...alertData,
+            broadcast: true,
+            intended_for: recipient_id,
+          });
+          console.log(`   ✅ Method 3: Broadcast to all_clinicians room`);
+
+          // ✅ NEW: Method 4: Send to admins room
+          if (organizationAdmins.includes(recipient_id)) {
+            io.to("all_admins").emit("admin_alert", {
+              ...alertData,
+              is_admin_alert: true,
+            });
+            console.log(
+              `   ✅ Method 4: Sent to admins room for admin ${recipient_id}`
+            );
+          }
+
+          if (sent) {
+            notificationsSent++;
+          }
 
           notificationResults.push({
-            clinician_id,
+            recipient_id,
+            role: organizationAdmins.includes(recipient_id)
+              ? "admin"
+              : "clinician",
             connected: isConnected,
-            socket_id: clinicianSocketId,
+            socket_id: recipientSocketId,
             notification_sent: sent,
-            alert_settings: c,
           });
         }
 
         serviceResponse.alertCreated = true;
         serviceResponse.alert = newAlert;
+        serviceResponse.primary_assigned_doctor = primaryDoctor;
+        serviceResponse.recipients = {
+          doctors: clinicianIds,
+          admins: organizationAdmins,
+          primary_doctor: primaryDoctorId,
+          total: allRecipientIds.length,
+        };
         serviceResponse.notifications = {
           sent: notificationsSent,
-          total: cliniciansToAlert.length,
+          total: allRecipientIds.length,
           details: notificationResults,
         };
 
