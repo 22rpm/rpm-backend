@@ -1,5 +1,6 @@
 // createSuperAdmin.js
-require("dotenv").config(); // Load .env vars
+const path = require("path");
+require("dotenv").config({ path: path.join(__dirname, "../.env") });
 const pool = require("./db"); // Adjust path if needed
 const bcrypt = require("bcrypt");
 
