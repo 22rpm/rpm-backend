@@ -215,7 +215,41 @@ app.use("/api/alerts", alertRoutes);
 app.use("/api/doctor", drRoutes);
 app.use("/api/org", orgRoutes);
 app.use("/api/patient", patientRoutes);
+// Add this temporary test route to check your current setup
+app.get("/debug-twilio", (req, res) => {
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  const phoneNumber = process.env.TWILIO_PHONE_NUMBER;
 
+  console.log("🔧 Current Twilio Configuration:");
+  console.log("Account SID:", accountSid);
+  console.log("Auth Token length:", authToken ? authToken.length : "Missing");
+  console.log("Phone Number:", phoneNumber);
+
+  // Check if Account SID is valid
+  const isValidSid =
+    accountSid && accountSid.startsWith("AC") && accountSid.length === 34;
+  const isHex = isValidSid
+    ? /^[A-Fa-f0-9]+$/.test(accountSid.substring(2))
+    : false;
+
+  res.json({
+    twilio_config: {
+      account_sid: accountSid,
+      account_sid_valid: isValidSid && isHex,
+      account_sid_length: accountSid ? accountSid.length : 0,
+      auth_token_set: !!authToken,
+      phone_number_set: !!phoneNumber,
+      issues: [],
+    },
+    analysis: {
+      current_sid_issue:
+        "Contains invalid character 'o' in hexadecimal portion",
+      expected_format: "AC + 32 hexadecimal characters (0-9, a-f only)",
+      example: "ACa1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0",
+    },
+  });
+});
 // Health check endpoint
 app.get("/health", (req, res) =>
   res.json({
@@ -251,12 +285,12 @@ app.get("/rpm-be/test-socket", (req, res) => {
   console.log("✅ Test endpoint hit - Backend is running");
   console.log("🍪 Cookies:", req.headers.cookie);
   console.log("📋 Headers:", req.headers);
-  
+
   res.json({
     status: "running",
     message: "Backend server is operational",
     cookies: req.headers.cookie ? "Present" : "Missing",
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   });
 });
 // Root endpoint redirect

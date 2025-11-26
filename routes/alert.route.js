@@ -1191,6 +1191,7 @@ const express = require("express");
 const jwt = require("jsonwebtoken");
 const db = require("../config/db");
 const { authRequired } = require("../middleware/auth");
+const twilioService = require("../services/twillio.service");
 
 const {
   userSockets,
@@ -1453,7 +1454,320 @@ router.get("/debug-connected-users", (req, res) => {
 //     if (connection) connection.release();
 //   }
 // });
+// router.post("/test-alert", async (req, res) => {
+//   const { dr_ids, type, desc, patient_id = 14 } = req.body;
 
+//   console.log("=".repeat(60));
+//   console.log("🚨 TEST ALERT CREATION REQUEST");
+//   console.log("=".repeat(60));
+//   console.log("   Patient ID:", patient_id);
+//   console.log("   Doctor IDs:", dr_ids);
+//   console.log("   Alert Type:", type);
+//   console.log("   Description:", desc);
+
+//   // Validate input
+//   if (!dr_ids || !Array.isArray(dr_ids) || dr_ids.length === 0 || !type) {
+//     return res.status(400).json({
+//       ok: false,
+//       message: "Invalid request: dr_ids (non-empty array) and type required",
+//     });
+//   }
+
+//   let connection;
+//   try {
+//     // Get connection status BEFORE processing
+//     const connectedUsersBefore = getConnectedUsers();
+//     console.log("📊 Connected users BEFORE alert:", connectedUsersBefore);
+
+//     // Get database connection
+//     connection = await db.getConnection();
+
+//     // Get patient details first to get organization_id
+//     const [patientRows] = await connection.query(
+//       "SELECT id, name, email, phoneNumber, organization_id FROM users WHERE id = ?",
+//       [patient_id]
+//     );
+
+//     const patientDetails = patientRows[0];
+
+//     if (!patientDetails) {
+//       return res.status(400).json({
+//         ok: false,
+//         message: "Patient not found",
+//       });
+//     }
+
+//     console.log("👤 Patient details:", patientDetails);
+
+//     // Get organization admins
+//     const [adminRows] = await connection.query(
+//       `SELECT users.id, users.name, users.email
+//        FROM users
+//        JOIN role ON users.id = role.user_id
+//        WHERE users.organization_id = ?
+//        AND role.role_type = 'admin'
+//        AND users.is_active = true`,
+//       [patientDetails.organization_id]
+//     );
+
+//     const organizationAdmins = adminRows.map((admin) => admin.id);
+//     console.log("👨‍💼 Organization admins found:", organizationAdmins);
+
+//     // Combine doctor IDs and admin IDs (remove duplicates)
+//     const allRecipientIds = [...new Set([...dr_ids, ...organizationAdmins])];
+//     console.log("📨 All recipients (doctors + admins):", allRecipientIds);
+
+//     // ✅ NEW: Get doctor details for the primary assigned doctor
+//     // Use the FIRST doctor in dr_ids as the primary assigned doctor
+//     const primaryDoctorId = dr_ids[0];
+//     console.log("🎯 Primary assigned doctor ID:", primaryDoctorId);
+
+//     const [doctorRows] = await connection.query(
+//       `SELECT users.id, users.name, users.email, users.phoneNumber
+//        FROM users
+//        WHERE users.id = ? AND users.is_active = true`,
+//       [primaryDoctorId]
+//     );
+
+//     const primaryDoctor = doctorRows[0];
+//     console.log("👨‍⚕️ Primary doctor details:", primaryDoctor);
+
+//     // Verify clinicians and admins exist and are active
+//     const [validRecipients] = await connection.query(
+//       `SELECT users.id, users.name, users.email, role.role_type
+//        FROM users
+//        JOIN role ON users.id = role.user_id
+//        WHERE users.id IN (?)
+//        AND role.role_type IN ('clinician', 'admin')
+//        AND users.is_active = true`,
+//       [allRecipientIds]
+//     );
+
+//     console.log("✅ Valid recipients found:", validRecipients.length);
+
+//     if (validRecipients.length === 0) {
+//       return res.status(400).json({
+//         ok: false,
+//         message: "No valid recipients found from the provided IDs",
+//       });
+//     }
+
+//     // Start transaction
+//     await connection.beginTransaction();
+
+//     try {
+//       // Insert alert
+//       const [alertResult] = await connection.query(
+//         "INSERT INTO alerts (user_id, `desc`, type, created_at) VALUES (?, ?, ?, ?)",
+//         [
+//           patient_id,
+//           desc || `Health alert with severity: ${type}`,
+//           type,
+//           new Date(),
+//         ]
+//       );
+
+//       const alertId = alertResult.insertId;
+//       console.log("📝 Alert inserted with ID:", alertId);
+
+//       // ✅ Create assignments for all recipients (doctors + admins)
+//       const assignments = allRecipientIds.map((recipient_id) => [
+//         alertId,
+//         recipient_id,
+//         false, // read_status
+//         null, // read_at
+//         new Date(), // created_at
+//         new Date(), // updated_at
+//       ]);
+
+//       await connection.query(
+//         `INSERT INTO alert_assignments (alert_id, doctor_id, read_status, read_at, created_at, updated_at) VALUES ?`,
+//         [assignments]
+//       );
+
+//       console.log(
+//         "✅ Alert assignments created for recipients:",
+//         allRecipientIds
+//       );
+
+//       // Fetch complete alert details
+//       const [newAlertRows] = await connection.query(
+//         `SELECT alerts.*,
+//                 patients.name as patient_name,
+//                 patients.email as patient_email,
+//                 patients.phoneNumber as patient_phone,
+//                 patients.organization_id as patient_organization_id
+//          FROM alerts
+//          LEFT JOIN users as patients ON alerts.user_id = patients.id
+//          WHERE alerts.id = ?`,
+//         [alertId]
+//       );
+
+//       const newAlert = newAlertRows[0];
+
+//       await connection.commit();
+
+//       // Send WebSocket notifications
+//       const io = getIO();
+//       console.log(
+//         "📡 Sending WebSocket notifications to recipients:",
+//         allRecipientIds
+//       );
+
+//       let notificationsSent = 0;
+//       const notificationResults = [];
+
+//       for (const recipient_id of allRecipientIds) {
+//         const recipientSocketId = getUserSocketId(recipient_id);
+//         const isConnected = isUserConnected(recipient_id);
+
+//         console.log(`   👨‍⚕️ Recipient ${recipient_id}:`, {
+//           socketId: recipientSocketId,
+//           isConnected: isConnected,
+//           inUserSockets: userSockets.has(recipient_id.toString()),
+//         });
+
+//         // Get unread count
+//         const [unreadCountRows] = await connection.query(
+//           "SELECT COUNT(id) as count FROM alert_assignments WHERE doctor_id = ? AND read_status = false",
+//           [recipient_id]
+//         );
+
+//         const unreadCount = unreadCountRows[0].count;
+
+//         // ✅ UPDATED: Include primary doctor information in alert data
+//         const alertData = {
+//           alert: {
+//             ...newAlert,
+//             read_status: false,
+//             assignment_id: recipient_id,
+//             // ✅ NEW: Include primary doctor assignment info for admins
+//             primary_assigned_doctor_id: primaryDoctorId,
+//             primary_assigned_doctor_name:
+//               primaryDoctor?.name || "Unknown Doctor",
+//             primary_assigned_doctor_email: primaryDoctor?.email || "N/A",
+//           },
+//           patient: patientDetails,
+//           // ✅ NEW: Include primary doctor details separately
+//           assigned_doctor: primaryDoctor
+//             ? {
+//                 id: primaryDoctor.id,
+//                 name: primaryDoctor.name,
+//                 email: primaryDoctor.email,
+//                 phone: primaryDoctor.phoneNumber,
+//               }
+//             : null,
+//           unread_count: parseInt(unreadCount) || 0,
+//           timestamp: new Date(),
+//           server_time: new Date().toISOString(),
+//           is_emergency: type === "critical" || type === "emergency",
+//           // ✅ NEW: Add recipient type to distinguish between doctor and admin alerts
+//           recipient_type: validRecipients.find((r) => r.id === recipient_id)
+//             ?.role_type,
+//         };
+
+//         let sent = false;
+
+//         // Try multiple methods to send alert
+//         if (isConnected && recipientSocketId) {
+//           // Method 1: Send to user's personal room
+//           io.to(`user_${recipient_id}`).emit("new_alert", alertData);
+//           console.log(`   ✅ Method 1: Sent to room user_${recipient_id}`);
+//           sent = true;
+
+//           // Method 2: Send to specific socket
+//           io.to(recipientSocketId).emit("new_alert", alertData);
+//           console.log(`   ✅ Method 2: Sent to socket ${recipientSocketId}`);
+//         }
+
+//         // Method 3: Broadcast to all clinicians room (fallback)
+//         io.to("all_clinicians").emit("new_alert_broadcast", {
+//           ...alertData,
+//           broadcast: true,
+//           intended_for: recipient_id,
+//         });
+//         console.log(`   ✅ Method 3: Broadcast to all_clinicians room`);
+
+//         // Method 4: Send to admins room - WITH ENHANCED DATA
+//         if (organizationAdmins.includes(recipient_id)) {
+//           const adminAlertData = {
+//             ...alertData,
+//             is_admin_alert: true,
+//             // ✅ ENHANCED: Include clear assignment information for admins
+//             doctor_assignment: {
+//               doctor_id: primaryDoctorId,
+//               doctor_name: primaryDoctor?.name || "Unknown Doctor",
+//               doctor_email: primaryDoctor?.email || "N/A",
+//               patient_id: patient_id,
+//               patient_name: patientDetails.name,
+//               alert_type: type,
+//               alert_description: desc,
+//             },
+//           };
+
+//           io.to("all_admins").emit("admin_alert", adminAlertData);
+//           console.log(
+//             `   ✅ Method 4: Sent to admins room for admin ${recipient_id}`
+//           );
+//         }
+
+//         if (sent) {
+//           notificationsSent++;
+//         }
+
+//         notificationResults.push({
+//           recipient_id,
+//           role: validRecipients.find((r) => r.id === recipient_id)?.role_type,
+//           connected: isConnected,
+//           socket_id: recipientSocketId,
+//           notification_sent: sent,
+//         });
+//       }
+
+//       // Get connection status AFTER processing
+//       const connectedUsersAfter = getConnectedUsers();
+//       console.log("📊 Connected users AFTER alert:", connectedUsersAfter);
+
+//       res.status(201).json({
+//         ok: true,
+//         message: `Alert created successfully. Notifications sent to ${notificationsSent}/${allRecipientIds.length} recipients`,
+//         alert: newAlert,
+//         patient: patientDetails,
+//         // ✅ NEW: Include primary doctor assignment in response
+//         primary_assigned_doctor: primaryDoctor,
+//         recipients: {
+//           doctors: dr_ids,
+//           primary_doctor: primaryDoctorId,
+//           admins: organizationAdmins,
+//           total: allRecipientIds.length,
+//         },
+//         notifications: {
+//           sent: notificationsSent,
+//           total: allRecipientIds.length,
+//           details: notificationResults,
+//         },
+//         connection_info: {
+//           before: connectedUsersBefore,
+//           after: connectedUsersAfter,
+//           total_connections: connectedUsersAfter.length,
+//         },
+//       });
+//     } catch (error) {
+//       await connection.rollback();
+//       throw error;
+//     }
+//   } catch (error) {
+//     console.error("❌ Error creating alert:", error);
+//     res.status(500).json({
+//       ok: false,
+//       message: "Server error creating alert",
+//       error: error.message,
+//       stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
+//     });
+//   } finally {
+//     if (connection) connection.release();
+//   }
+// });
 router.post("/test-alert", async (req, res) => {
   const { dr_ids, type, desc, patient_id = 14 } = req.body;
 
@@ -1499,9 +1813,17 @@ router.post("/test-alert", async (req, res) => {
 
     console.log("👤 Patient details:", patientDetails);
 
-    // Get organization admins
+    // Get organization details for SMS message
+    const [orgRows] = await connection.query(
+      "SELECT id, name FROM organizations WHERE id = ?",
+      [patientDetails.organization_id]
+    );
+    const organization = orgRows[0];
+    console.log("🏢 Organization details:", organization);
+
+    // Get organization admins with phone numbers
     const [adminRows] = await connection.query(
-      `SELECT users.id, users.name, users.email 
+      `SELECT users.id, users.name, users.email, users.phoneNumber 
        FROM users 
        JOIN role ON users.id = role.user_id 
        WHERE users.organization_id = ? 
@@ -1510,42 +1832,38 @@ router.post("/test-alert", async (req, res) => {
       [patientDetails.organization_id]
     );
 
-    const organizationAdmins = adminRows.map((admin) => admin.id);
-    console.log("👨‍💼 Organization admins found:", organizationAdmins);
+    const organizationAdmins = adminRows;
+    console.log("👨‍💼 Organization admins found:", organizationAdmins.length);
 
-    // Combine doctor IDs and admin IDs (remove duplicates)
-    const allRecipientIds = [...new Set([...dr_ids, ...organizationAdmins])];
-    console.log("📨 All recipients (doctors + admins):", allRecipientIds);
-
-    // ✅ NEW: Get doctor details for the primary assigned doctor
-    // Use the FIRST doctor in dr_ids as the primary assigned doctor
-    const primaryDoctorId = dr_ids[0];
-    console.log("🎯 Primary assigned doctor ID:", primaryDoctorId);
-
-    const [doctorRows] = await connection.query(
+    // Get ALL clinician details (not just IDs)
+    const [clinicianRows] = await connection.query(
       `SELECT users.id, users.name, users.email, users.phoneNumber 
-       FROM users 
-       WHERE users.id = ? AND users.is_active = true`,
-      [primaryDoctorId]
-    );
-
-    const primaryDoctor = doctorRows[0];
-    console.log("👨‍⚕️ Primary doctor details:", primaryDoctor);
-
-    // Verify clinicians and admins exist and are active
-    const [validRecipients] = await connection.query(
-      `SELECT users.id, users.name, users.email, role.role_type 
        FROM users 
        JOIN role ON users.id = role.user_id 
        WHERE users.id IN (?) 
-       AND role.role_type IN ('clinician', 'admin')
+       AND role.role_type = 'clinician'
        AND users.is_active = true`,
-      [allRecipientIds]
+      [dr_ids]
     );
 
-    console.log("✅ Valid recipients found:", validRecipients.length);
+    console.log("👨‍⚕️ Clinicians found:", clinicianRows.length);
 
-    if (validRecipients.length === 0) {
+    // Combine clinicians and admins for notifications
+    const allRecipients = [...clinicianRows, ...organizationAdmins];
+    console.log(
+      "📨 All recipients (clinicians + admins):",
+      allRecipients.length
+    );
+
+    // Get primary doctor details
+    const primaryDoctorId = dr_ids[0];
+    const primaryDoctor = clinicianRows.find(
+      (doc) => doc.id === primaryDoctorId
+    );
+    console.log("🎯 Primary assigned doctor:", primaryDoctor);
+
+    // Verify we have valid recipients
+    if (allRecipients.length === 0) {
       return res.status(400).json({
         ok: false,
         message: "No valid recipients found from the provided IDs",
@@ -1570,7 +1888,8 @@ router.post("/test-alert", async (req, res) => {
       const alertId = alertResult.insertId;
       console.log("📝 Alert inserted with ID:", alertId);
 
-      // ✅ Create assignments for all recipients (doctors + admins)
+      // Create assignments for all recipients
+      const allRecipientIds = allRecipients.map((r) => r.id);
       const assignments = allRecipientIds.map((recipient_id) => [
         alertId,
         recipient_id,
@@ -1604,324 +1923,100 @@ router.post("/test-alert", async (req, res) => {
       );
 
       const newAlert = newAlertRows[0];
-
       await connection.commit();
 
-      // Send WebSocket notifications
-      const io = getIO();
-      console.log(
-        "📡 Sending WebSocket notifications to recipients:",
-        allRecipientIds
-      );
+      // ✅ SEND SMS ALERTS TO ALL RECIPIENTS
+      console.log("=".repeat(50));
+      console.log("📱 STARTING SMS NOTIFICATIONS");
+      console.log("=".repeat(50));
 
-      let notificationsSent = 0;
-      const notificationResults = [];
+      const smsResults = [];
+      const smsPromises = [];
 
-      for (const recipient_id of allRecipientIds) {
-        const recipientSocketId = getUserSocketId(recipient_id);
-        const isConnected = isUserConnected(recipient_id);
-
-        console.log(`   👨‍⚕️ Recipient ${recipient_id}:`, {
-          socketId: recipientSocketId,
-          isConnected: isConnected,
-          inUserSockets: userSockets.has(recipient_id.toString()),
-        });
-
-        // Get unread count
-        const [unreadCountRows] = await connection.query(
-          "SELECT COUNT(id) as count FROM alert_assignments WHERE doctor_id = ? AND read_status = false",
-          [recipient_id]
-        );
-
-        const unreadCount = unreadCountRows[0].count;
-
-        // ✅ UPDATED: Include primary doctor information in alert data
-        const alertData = {
-          alert: {
-            ...newAlert,
-            read_status: false,
-            assignment_id: recipient_id,
-            // ✅ NEW: Include primary doctor assignment info for admins
-            primary_assigned_doctor_id: primaryDoctorId,
-            primary_assigned_doctor_name: primaryDoctor?.name || "Unknown Doctor",
-            primary_assigned_doctor_email: primaryDoctor?.email || "N/A",
-          },
-          patient: patientDetails,
-          // ✅ NEW: Include primary doctor details separately
-          assigned_doctor: primaryDoctor ? {
-            id: primaryDoctor.id,
-            name: primaryDoctor.name,
-            email: primaryDoctor.email,
-            phone: primaryDoctor.phoneNumber
-          } : null,
-          unread_count: parseInt(unreadCount) || 0,
-          timestamp: new Date(),
-          server_time: new Date().toISOString(),
-          is_emergency: type === "critical" || type === "emergency",
-          // ✅ NEW: Add recipient type to distinguish between doctor and admin alerts
-          recipient_type: validRecipients.find(r => r.id === recipient_id)?.role_type
-        };
-
-        let sent = false;
-
-        // Try multiple methods to send alert
-        if (isConnected && recipientSocketId) {
-          // Method 1: Send to user's personal room
-          io.to(`user_${recipient_id}`).emit("new_alert", alertData);
-          console.log(`   ✅ Method 1: Sent to room user_${recipient_id}`);
-          sent = true;
-
-          // Method 2: Send to specific socket
-          io.to(recipientSocketId).emit("new_alert", alertData);
-          console.log(`   ✅ Method 2: Sent to socket ${recipientSocketId}`);
-        }
-
-        // Method 3: Broadcast to all clinicians room (fallback)
-        io.to("all_clinicians").emit("new_alert_broadcast", {
-          ...alertData,
-          broadcast: true,
-          intended_for: recipient_id,
-        });
-        console.log(`   ✅ Method 3: Broadcast to all_clinicians room`);
-
-        // Method 4: Send to admins room - WITH ENHANCED DATA
-        if (organizationAdmins.includes(recipient_id)) {
-          const adminAlertData = {
-            ...alertData,
-            is_admin_alert: true,
-            // ✅ ENHANCED: Include clear assignment information for admins
-            doctor_assignment: {
-              doctor_id: primaryDoctorId,
-              doctor_name: primaryDoctor?.name || "Unknown Doctor", 
-              doctor_email: primaryDoctor?.email || "N/A",
-              patient_id: patient_id,
-              patient_name: patientDetails.name,
-              alert_type: type,
-              alert_description: desc
-            }
-          };
-          
-          io.to("all_admins").emit("admin_alert", adminAlertData);
-          console.log(
-            `   ✅ Method 4: Sent to admins room for admin ${recipient_id}`
+      for (const recipient of allRecipients) {
+        // Only send SMS if recipient has a phone number
+        if (recipient.phoneNumber) {
+          const formattedPhone = twilioService.formatPhoneNumber(
+            recipient.phoneNumber
           );
-        }
 
-        if (sent) {
-          notificationsSent++;
-        }
+          if (formattedPhone) {
+            // Generate appropriate message based on recipient role
+            const isAdmin = organizationAdmins.some(
+              (admin) => admin.id === recipient.id
+            );
+            const rolePrefix = isAdmin ? "[ADMIN] " : "";
 
-        notificationResults.push({
-          recipient_id,
-          role: validRecipients.find((r) => r.id === recipient_id)?.role_type,
-          connected: isConnected,
-          socket_id: recipientSocketId,
-          notification_sent: sent,
-        });
+            const smsMessage = twilioService.generateAlertMessage(
+              type,
+              patientDetails.name,
+              desc || `Health alert - ${type} priority`,
+              organization?.name
+            );
+
+            const fullMessage = `${rolePrefix}${smsMessage}`;
+
+            console.log(
+              `   📲 Sending SMS to ${recipient.name} (${formattedPhone})`
+            );
+
+            // Create SMS promise
+            const smsPromise = twilioService
+              .sendSMS(formattedPhone, fullMessage)
+              .then((smsResult) => ({
+                recipient_id: recipient.id,
+                recipient_name: recipient.name,
+                phone: formattedPhone,
+                role: isAdmin ? "admin" : "clinician",
+                sms_success: smsResult.success,
+                message_id: smsResult.messageId,
+                error: smsResult.error,
+              }));
+
+            smsPromises.push(smsPromise);
+          } else {
+            console.log(
+              `   ⚠️  Invalid phone number for ${recipient.name}: ${recipient.phoneNumber}`
+            );
+            smsResults.push({
+              recipient_id: recipient.id,
+              recipient_name: recipient.name,
+              phone: recipient.phoneNumber,
+              role: organizationAdmins.some(
+                (admin) => admin.id === recipient.id
+              )
+                ? "admin"
+                : "clinician",
+              sms_success: false,
+              error: "Invalid phone number format",
+            });
+          }
+        } else {
+          console.log(`   ⚠️  No phone number for ${recipient.name}`);
+          smsResults.push({
+            recipient_id: recipient.id,
+            recipient_name: recipient.name,
+            phone: null,
+            role: organizationAdmins.some((admin) => admin.id === recipient.id)
+              ? "admin"
+              : "clinician",
+            sms_success: false,
+            error: "No phone number available",
+          });
+        }
       }
 
-      // Get connection status AFTER processing
-      const connectedUsersAfter = getConnectedUsers();
-      console.log("📊 Connected users AFTER alert:", connectedUsersAfter);
+      // Wait for all SMS promises to complete
+      const smsPromiseResults = await Promise.all(smsPromises);
+      smsResults.push(...smsPromiseResults);
 
-      res.status(201).json({
-        ok: true,
-        message: `Alert created successfully. Notifications sent to ${notificationsSent}/${allRecipientIds.length} recipients`,
-        alert: newAlert,
-        patient: patientDetails,
-        // ✅ NEW: Include primary doctor assignment in response
-        primary_assigned_doctor: primaryDoctor,
-        recipients: {
-          doctors: dr_ids,
-          primary_doctor: primaryDoctorId,
-          admins: organizationAdmins,
-          total: allRecipientIds.length,
-        },
-        notifications: {
-          sent: notificationsSent,
-          total: allRecipientIds.length,
-          details: notificationResults,
-        },
-        connection_info: {
-          before: connectedUsersBefore,
-          after: connectedUsersAfter,
-          total_connections: connectedUsersAfter.length,
-        },
-      });
-    } catch (error) {
-      await connection.rollback();
-      throw error;
-    }
-  } catch (error) {
-    console.error("❌ Error creating alert:", error);
-    res.status(500).json({
-      ok: false,
-      message: "Server error creating alert",
-      error: error.message,
-      stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
-    });
-  } finally {
-    if (connection) connection.release();
-  }
-});router.post("/test-alert", async (req, res) => {
-  const { dr_ids, type, desc, patient_id = 14 } = req.body;
-
-  console.log("=".repeat(60));
-  console.log("🚨 TEST ALERT CREATION REQUEST");
-  console.log("=".repeat(60));
-  console.log("   Patient ID:", patient_id);
-  console.log("   Doctor IDs:", dr_ids);
-  console.log("   Alert Type:", type);
-  console.log("   Description:", desc);
-
-  // Validate input
-  if (!dr_ids || !Array.isArray(dr_ids) || dr_ids.length === 0 || !type) {
-    return res.status(400).json({
-      ok: false,
-      message: "Invalid request: dr_ids (non-empty array) and type required",
-    });
-  }
-
-  let connection;
-  try {
-    // Get connection status BEFORE processing
-    const connectedUsersBefore = getConnectedUsers();
-    console.log("📊 Connected users BEFORE alert:", connectedUsersBefore);
-
-    // Get database connection
-    connection = await db.getConnection();
-
-    // Get patient details first to get organization_id
-    const [patientRows] = await connection.query(
-      "SELECT id, name, email, phoneNumber, organization_id FROM users WHERE id = ?",
-      [patient_id]
-    );
-
-    const patientDetails = patientRows[0];
-
-    if (!patientDetails) {
-      return res.status(400).json({
-        ok: false,
-        message: "Patient not found",
-      });
-    }
-
-    console.log("👤 Patient details:", patientDetails);
-
-    // Get organization admins
-    const [adminRows] = await connection.query(
-      `SELECT users.id, users.name, users.email 
-       FROM users 
-       JOIN role ON users.id = role.user_id 
-       WHERE users.organization_id = ? 
-       AND role.role_type = 'admin' 
-       AND users.is_active = true`,
-      [patientDetails.organization_id]
-    );
-
-    const organizationAdmins = adminRows.map((admin) => admin.id);
-    console.log("👨‍💼 Organization admins found:", organizationAdmins);
-
-    // Combine doctor IDs and admin IDs (remove duplicates)
-    const allRecipientIds = [...new Set([...dr_ids, ...organizationAdmins])];
-    console.log("📨 All recipients (doctors + admins):", allRecipientIds);
-
-    // ✅ NEW: Get doctor details for the primary assigned doctor
-    // Use the FIRST doctor in dr_ids as the primary assigned doctor
-    const primaryDoctorId = dr_ids[0];
-    console.log("🎯 Primary assigned doctor ID:", primaryDoctorId);
-
-    const [doctorRows] = await connection.query(
-      `SELECT users.id, users.name, users.email, users.phoneNumber 
-       FROM users 
-       WHERE users.id = ? AND users.is_active = true`,
-      [primaryDoctorId]
-    );
-
-    const primaryDoctor = doctorRows[0];
-    console.log("👨‍⚕️ Primary doctor details:", primaryDoctor);
-
-    // Verify clinicians and admins exist and are active
-    const [validRecipients] = await connection.query(
-      `SELECT users.id, users.name, users.email, role.role_type 
-       FROM users 
-       JOIN role ON users.id = role.user_id 
-       WHERE users.id IN (?) 
-       AND role.role_type IN ('clinician', 'admin')
-       AND users.is_active = true`,
-      [allRecipientIds]
-    );
-
-    console.log("✅ Valid recipients found:", validRecipients.length);
-
-    if (validRecipients.length === 0) {
-      return res.status(400).json({
-        ok: false,
-        message: "No valid recipients found from the provided IDs",
-      });
-    }
-
-    // Start transaction
-    await connection.beginTransaction();
-
-    try {
-      // Insert alert
-      const [alertResult] = await connection.query(
-        "INSERT INTO alerts (user_id, `desc`, type, created_at) VALUES (?, ?, ?, ?)",
-        [
-          patient_id,
-          desc || `Health alert with severity: ${type}`,
-          type,
-          new Date(),
-        ]
-      );
-
-      const alertId = alertResult.insertId;
-      console.log("📝 Alert inserted with ID:", alertId);
-
-      // ✅ Create assignments for all recipients (doctors + admins)
-      const assignments = allRecipientIds.map((recipient_id) => [
-        alertId,
-        recipient_id,
-        false, // read_status
-        null, // read_at
-        new Date(), // created_at
-        new Date(), // updated_at
-      ]);
-
-      await connection.query(
-        `INSERT INTO alert_assignments (alert_id, doctor_id, read_status, read_at, created_at, updated_at) VALUES ?`,
-        [assignments]
-      );
-
-      console.log(
-        "✅ Alert assignments created for recipients:",
-        allRecipientIds
-      );
-
-      // Fetch complete alert details
-      const [newAlertRows] = await connection.query(
-        `SELECT alerts.*, 
-                patients.name as patient_name, 
-                patients.email as patient_email, 
-                patients.phoneNumber as patient_phone, 
-                patients.organization_id as patient_organization_id 
-         FROM alerts 
-         LEFT JOIN users as patients ON alerts.user_id = patients.id 
-         WHERE alerts.id = ?`,
-        [alertId]
-      );
-
-      const newAlert = newAlertRows[0];
-
-      await connection.commit();
+      console.log("✅ SMS notifications completed");
 
       // Send WebSocket notifications
       const io = getIO();
-      console.log(
-        "📡 Sending WebSocket notifications to recipients:",
-        allRecipientIds
-      );
+      console.log("=".repeat(50));
+      console.log("📡 SENDING WEBSOCKET NOTIFICATIONS");
+      console.log("=".repeat(50));
 
       let notificationsSent = 0;
       const notificationResults = [];
@@ -1944,20 +2039,18 @@ router.post("/test-alert", async (req, res) => {
 
         const unreadCount = unreadCountRows[0].count;
 
-        // ✅ UPDATED: Include primary doctor information in alert data
+        // Include primary doctor information in alert data
         const alertData = {
           alert: {
             ...newAlert,
             read_status: false,
             assignment_id: recipient_id,
-            // ✅ NEW: Include primary doctor assignment info for admins
             primary_assigned_doctor_id: primaryDoctorId,
             primary_assigned_doctor_name:
               primaryDoctor?.name || "Unknown Doctor",
             primary_assigned_doctor_email: primaryDoctor?.email || "N/A",
           },
           patient: patientDetails,
-          // ✅ NEW: Include primary doctor details separately
           assigned_doctor: primaryDoctor
             ? {
                 id: primaryDoctor.id,
@@ -1970,9 +2063,9 @@ router.post("/test-alert", async (req, res) => {
           timestamp: new Date(),
           server_time: new Date().toISOString(),
           is_emergency: type === "critical" || type === "emergency",
-          // ✅ NEW: Add recipient type to distinguish between doctor and admin alerts
-          recipient_type: validRecipients.find((r) => r.id === recipient_id)
-            ?.role_type,
+          recipient_type:
+            allRecipients.find((r) => r.id === recipient_id)?.role_type ||
+            "clinician",
         };
 
         let sent = false;
@@ -1998,11 +2091,10 @@ router.post("/test-alert", async (req, res) => {
         console.log(`   ✅ Method 3: Broadcast to all_clinicians room`);
 
         // Method 4: Send to admins room - WITH ENHANCED DATA
-        if (organizationAdmins.includes(recipient_id)) {
+        if (organizationAdmins.some((admin) => admin.id === recipient_id)) {
           const adminAlertData = {
             ...alertData,
             is_admin_alert: true,
-            // ✅ ENHANCED: Include clear assignment information for admins
             doctor_assignment: {
               doctor_id: primaryDoctorId,
               doctor_name: primaryDoctor?.name || "Unknown Doctor",
@@ -2026,34 +2118,58 @@ router.post("/test-alert", async (req, res) => {
 
         notificationResults.push({
           recipient_id,
-          role: validRecipients.find((r) => r.id === recipient_id)?.role_type,
+          role:
+            allRecipients.find((r) => r.id === recipient_id)?.role_type ||
+            "clinician",
           connected: isConnected,
           socket_id: recipientSocketId,
           notification_sent: sent,
         });
       }
 
+      console.log("✅ WebSocket notifications completed");
+
       // Get connection status AFTER processing
       const connectedUsersAfter = getConnectedUsers();
       console.log("📊 Connected users AFTER alert:", connectedUsersAfter);
 
+      // Calculate SMS success stats
+      const successfulSMS = smsResults.filter((r) => r.sms_success).length;
+      const totalSMSAttempts = smsResults.length;
+
+      console.log("=".repeat(60));
+      console.log("🎯 ALERT CREATION SUMMARY");
+      console.log("=".repeat(60));
+      console.log(
+        `   WebSocket: ${notificationsSent}/${allRecipientIds.length} recipients`
+      );
+      console.log(`   SMS: ${successfulSMS}/${totalSMSAttempts} recipients`);
+      console.log(`   Total recipients: ${allRecipients.length}`);
+      console.log("=".repeat(60));
+
       res.status(201).json({
         ok: true,
-        message: `Alert created successfully. Notifications sent to ${notificationsSent}/${allRecipientIds.length} recipients`,
+        message: `Alert created successfully. WebSocket: ${notificationsSent}/${allRecipientIds.length} recipients. SMS: ${successfulSMS}/${totalSMSAttempts} recipients.`,
         alert: newAlert,
         patient: patientDetails,
-        // ✅ NEW: Include primary doctor assignment in response
         primary_assigned_doctor: primaryDoctor,
+        organization: organization,
         recipients: {
-          doctors: dr_ids,
-          primary_doctor: primaryDoctorId,
+          clinicians: clinicianRows,
           admins: organizationAdmins,
-          total: allRecipientIds.length,
+          total: allRecipients.length,
         },
         notifications: {
-          sent: notificationsSent,
-          total: allRecipientIds.length,
-          details: notificationResults,
+          websocket: {
+            sent: notificationsSent,
+            total: allRecipientIds.length,
+            details: notificationResults,
+          },
+          sms: {
+            sent: successfulSMS,
+            total: totalSMSAttempts,
+            details: smsResults,
+          },
         },
         connection_info: {
           before: connectedUsersBefore,

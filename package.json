@@ -29,6 +29,7 @@
     "socket.io": "^4.8.1",
     "speakeasy": "^2.0.0",
     "sqlite3": "^5.1.7",
+    "twilio": "^5.10.6",
     "ua-parser-js": "^2.0.4"
   },
   "devDependencies": {

@@ -4,10 +4,10 @@ const pool = require("./db"); // Adjust path if needed
 const bcrypt = require("bcrypt");
 
 // User details
-const username = "muhammadmehtab058";
-const name = "Muhammad Mehtab";
-const email = "muhammadmehtab058@gmail.com";
-const passwordPlain = "Mehtab@123";
+const username = "rickytorres";
+const name = "Ricky Torres";
+const email = "Info@twentytwohealth.com";
+const passwordPlain = "RPM$2025!";
 const roleType = "super-admin";
 
 // Salt rounds for bcrypt (adjust as needed for security)
