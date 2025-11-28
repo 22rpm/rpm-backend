@@ -679,6 +679,7 @@ const {
   isUserConnected,
   getUserSocketId,
 } = require("../socket/socketServer");
+const twilioService = require("../services/twillio.service");
 
 // Service
 
@@ -703,7 +704,6 @@ const calculateBPStatus = (systolic, diastolic) => {
     return "Normal";
   }
 };
-
 const createDeviceDataService = async (
   userId,
   devId,
@@ -828,7 +828,7 @@ const createDeviceDataService = async (
       // open connection to run transactional alert insertions and to fetch clinicians
       connection = await db.getConnection();
 
-      // ✅ NEW: Get patient details including organization_id
+      // ✅ Get patient details including organization_id
       const [patientRows] = await connection.query(
         "SELECT id, name, email, phoneNumber, organization_id FROM users WHERE id = ?",
         [userId]
@@ -839,7 +839,7 @@ const createDeviceDataService = async (
         throw new Error("Patient not found");
       }
 
-      // ✅ NEW: Get organization admins (same as test-alert route)
+      // ✅ Get organization admins
       const [adminRows] = await connection.query(
         `SELECT users.id, users.name, users.email 
          FROM users 
@@ -861,7 +861,7 @@ const createDeviceDataService = async (
 
       if (drIdsFromOpts) {
         const [rows] = await connection.query(
-          `SELECT u.id, u.name, u.email, role.role_type,
+          `SELECT u.id, u.name, u.email, u.phoneNumber, role.role_type,
                   das.systolic_high, das.systolic_low, das.diastolic_high, das.diastolic_low
            FROM users u
            JOIN role ON u.id = role.user_id
@@ -872,10 +872,9 @@ const createDeviceDataService = async (
         clinicianRows = rows;
       } else {
         // try to fetch clinicians assigned to this patient from common assignment tables (best-effort)
-        // if your schema uses a different table name, replace 'patient_doctor' with it.
         try {
           const [rowsAssigned] = await connection.query(
-            `SELECT u.id, u.name, u.email, role.role_type,
+            `SELECT u.id, u.name, u.email, u.phoneNumber, role.role_type,
                     das.systolic_high, das.systolic_low, das.diastolic_high, das.diastolic_low
              FROM users u
              JOIN role ON u.id = role.user_id
@@ -894,7 +893,7 @@ const createDeviceDataService = async (
           const patient = patientRows[0];
           if (patient && patient.organization_id) {
             const [rowsOrg] = await connection.query(
-              `SELECT u.id, u.name, u.email, role.role_type,
+              `SELECT u.id, u.name, u.email, u.phoneNumber, role.role_type,
                       das.systolic_high, das.systolic_low, das.diastolic_high, das.diastolic_low
                FROM users u
                JOIN role ON u.id = role.user_id
@@ -906,7 +905,7 @@ const createDeviceDataService = async (
           } else {
             // final fallback: all active clinicians
             const [rowsAll] = await connection.query(
-              `SELECT u.id, u.name, u.email, role.role_type,
+              `SELECT u.id, u.name, u.email, u.phoneNumber, role.role_type,
                       das.systolic_high, das.systolic_low, das.diastolic_high, das.diastolic_low
                FROM users u
                JOIN role ON u.id = role.user_id
@@ -920,7 +919,7 @@ const createDeviceDataService = async (
 
       console.log("🎯 Candidate clinicians count:", clinicianRows.length);
 
-      // ✅ NEW: Use the first clinician as primary assigned doctor (same as test-alert)
+      // ✅ Use the first clinician as primary assigned doctor
       const primaryDoctorId =
         clinicianRows.length > 0 ? clinicianRows[0].id : null;
       const primaryDoctor = clinicianRows.length > 0 ? clinicianRows[0] : null;
@@ -935,7 +934,7 @@ const createDeviceDataService = async (
         diastolic: processedData.diastolic,
       };
       clinicianRows.forEach((clin) => {
-        // determineTypeForClinician uses measured bands (same as test-alert)
+        // determineTypeForClinician uses measured bands
         const derived = determineTypeForClinician(vitals);
         if (derived) {
           cliniciansToAlert.push(clin);
@@ -956,7 +955,7 @@ const createDeviceDataService = async (
 
       console.log("📣 Final cliniciansToAlert:", cliniciansToAlert.length);
 
-      // ✅ NEW: Combine doctor IDs and admin IDs (remove duplicates) - same as test-alert
+      // ✅ Combine doctor IDs and admin IDs (remove duplicates)
       const clinicianIds = cliniciansToAlert.map((c) => c.id);
       const allRecipientIds = [
         ...new Set([...clinicianIds, ...organizationAdmins]),
@@ -994,7 +993,7 @@ const createDeviceDataService = async (
         );
         const alertId = alertResult.insertId;
 
-        // ✅ UPDATED: Create assignments for ALL recipients (doctors + admins)
+        // ✅ Create assignments for ALL recipients (doctors + admins)
         const assignments = allRecipientIds.map((recipient_id) => [
           alertId,
           recipient_id,
@@ -1024,7 +1023,7 @@ const createDeviceDataService = async (
 
         await connection.commit();
 
-        // ✅ ENHANCED: WebSocket notifications for all recipients
+        // ✅ WebSocket notifications for all recipients
         const io = getIO();
         const notificationResults = [];
         let notificationsSent = 0;
@@ -1039,21 +1038,19 @@ const createDeviceDataService = async (
           );
           const unreadCount = unreadCountRows[0]?.count || 0;
 
-          // ✅ ENHANCED: Include primary doctor information (same as test-alert)
+          // ✅ Include primary doctor information
           const alertData = {
             alert: {
               ...newAlert,
               read_status: false,
               assignment_id: recipient_id,
-              // ✅ NEW: Include primary doctor assignment info
               primary_assigned_doctor_id: primaryDoctorId,
               primary_assigned_doctor_name:
                 primaryDoctor?.name || "Unknown Doctor",
               primary_assigned_doctor_email: primaryDoctor?.email || "N/A",
               derived_type: clinicianTypeMap[recipient_id] || overallType,
             },
-            patient: patientDetails, // ✅ Use full patient details
-            // ✅ NEW: Include assigned doctor details
+            patient: patientDetails,
             assigned_doctor: primaryDoctor
               ? {
                   id: primaryDoctor.id,
@@ -1082,22 +1079,14 @@ const createDeviceDataService = async (
             console.log(`   ✅ Method 2: Sent to socket ${recipientSocketId}`);
           }
 
-          // Method 3: Broadcast to all clinicians room (fallback)
-          io.to("all_clinicians").emit("new_alert_broadcast", {
-            ...alertData,
-            broadcast: true,
-            intended_for: recipient_id,
-          });
-          console.log(`   ✅ Method 3: Broadcast to all_clinicians room`);
-
-          // ✅ NEW: Method 4: Send to admins room
+          // ✅ Send to admins room for admin recipients
           if (organizationAdmins.includes(recipient_id)) {
             io.to("all_admins").emit("admin_alert", {
               ...alertData,
               is_admin_alert: true,
             });
             console.log(
-              `   ✅ Method 4: Sent to admins room for admin ${recipient_id}`
+              `   ✅ Method 3: Sent to admins room for admin ${recipient_id}`
             );
           }
 
@@ -1116,6 +1105,110 @@ const createDeviceDataService = async (
           });
         }
 
+        // ✅ TWILIO SMS NOTIFICATIONS FOR CLINICIANS
+        console.log("=".repeat(50));
+        console.log("📱 STARTING SMS NOTIFICATIONS FOR CLINICIANS");
+        console.log("=".repeat(50));
+
+        const smsResults = [];
+        const smsPromises = [];
+
+        // Get patient name for SMS message
+        const patientName = patientDetails.name || "Patient";
+
+        // Send SMS to all clinicians (not admins)
+        for (const clinician of cliniciansToAlert) {
+          // Only send SMS if clinician has a phone number
+          if (clinician.phoneNumber) {
+            const formattedPhone = twilioService.formatPhoneNumber(
+              clinician.phoneNumber
+            );
+
+            if (formattedPhone) {
+              // Create personalized SMS message
+              const smsMessage = `🚨 ALERT: Your patient ${patientName} has a ${overallType.toUpperCase()} BP reading: ${
+                processedData.systolic
+              }/${
+                processedData.diastolic
+              }. Please check the portal for details and contact them if necessary.`;
+
+              console.log(
+                `   📲 Sending SMS to Dr. ${clinician.name} (${formattedPhone})`
+              );
+
+              // Create SMS promise
+              const smsPromise = twilioService
+                .sendSMS(formattedPhone, smsMessage)
+                .then((smsResult) => ({
+                  recipient_id: clinician.id,
+                  recipient_name: clinician.name,
+                  phone: formattedPhone,
+                  role: "clinician",
+                  sms_success: smsResult.success,
+                  message_id: smsResult.messageId,
+                  error: smsResult.error,
+                }))
+                .catch((error) => ({
+                  recipient_id: clinician.id,
+                  recipient_name: clinician.name,
+                  phone: formattedPhone,
+                  role: "clinician",
+                  sms_success: false,
+                  error: error.message,
+                }));
+
+              smsPromises.push(smsPromise);
+            } else {
+              console.log(
+                `   ⚠️  Invalid phone number for Dr. ${clinician.name}: ${clinician.phoneNumber}`
+              );
+              smsResults.push({
+                recipient_id: clinician.id,
+                recipient_name: clinician.name,
+                phone: clinician.phoneNumber,
+                role: "clinician",
+                sms_success: false,
+                error: "Invalid phone number format",
+              });
+            }
+          } else {
+            console.log(
+              `   ⚠️  No phone number available for Dr. ${clinician.name}`
+            );
+            smsResults.push({
+              recipient_id: clinician.id,
+              recipient_name: clinician.name,
+              phone: null,
+              role: "clinician",
+              sms_success: false,
+              error: "No phone number available",
+            });
+          }
+        }
+
+        // Wait for all SMS promises to complete
+        if (smsPromises.length > 0) {
+          const smsPromiseResults = await Promise.allSettled(smsPromises);
+
+          // Extract results from promises
+          smsPromiseResults.forEach((result) => {
+            if (result.status === "fulfilled") {
+              smsResults.push(result.value);
+            }
+          });
+        }
+
+        console.log("✅ SMS notifications completed");
+
+        // Calculate SMS success stats
+        const successfulSMS = smsResults.filter((r) => r.sms_success).length;
+        const totalSMSAttempts = smsResults.length;
+
+        console.log(
+          `📊 SMS Results: ${successfulSMS}/${totalSMSAttempts} successful`
+        );
+
+        // ✅ Update service response with all notification data
         serviceResponse.alertCreated = true;
         serviceResponse.alert = newAlert;
         serviceResponse.primary_assigned_doctor = primaryDoctor;
@@ -1126,9 +1219,16 @@ const createDeviceDataService = async (
           total: allRecipientIds.length,
         };
         serviceResponse.notifications = {
-          sent: notificationsSent,
-          total: allRecipientIds.length,
-          details: notificationResults,
+          websocket: {
+            sent: notificationsSent,
+            total: allRecipientIds.length,
+            details: notificationResults,
+          },
+          sms: {
+            sent: successfulSMS,
+            total: totalSMSAttempts,
+            details: smsResults,
+          },
         };
 
         return serviceResponse;
@@ -1147,6 +1247,449 @@ const createDeviceDataService = async (
     if (connection) connection.release();
   }
 };
+// const createDeviceDataService = async (
+//   userId,
+//   devId,
+//   devType,
+//   deviceData = {},
+//   opts = {}
+// ) => {
+//   console.log("🛠 createDeviceDataService", {
+//     userId,
+//     devId,
+//     devType,
+//     deviceData,
+//   });
+
+//   // helper reused from your test-alert logic
+//   const determineTypeForClinician = (vitals) => {
+//     if (!vitals) return null;
+//     const sVal = Number.parseInt(vitals.systolic, 10);
+//     const dVal = Number.parseInt(vitals.diastolic, 10);
+//     if (Number.isNaN(sVal) && Number.isNaN(dVal)) return null;
+
+//     const sExtremeHigh = !Number.isNaN(sVal) && sVal > 140;
+//     const sModerateHigh = !Number.isNaN(sVal) && sVal >= 130 && sVal <= 140;
+//     const sExtremeLow = !Number.isNaN(sVal) && sVal < 90;
+//     const sModerateLow = !Number.isNaN(sVal) && sVal >= 90 && sVal <= 99;
+
+//     const dExtremeHigh = !Number.isNaN(dVal) && dVal > 99;
+//     const dModerateHigh = !Number.isNaN(dVal) && dVal >= 90 && dVal <= 99;
+//     const dExtremeLow = !Number.isNaN(dVal) && dVal < 60;
+//     const dModerateLow = !Number.isNaN(dVal) && dVal >= 60 && dVal <= 69;
+
+//     const anyHighBand =
+//       sExtremeHigh || sModerateHigh || dExtremeHigh || dModerateHigh;
+//     const anyLowBand =
+//       sExtremeLow || sModerateLow || dExtremeLow || dModerateLow;
+
+//     if ((sExtremeHigh || sModerateHigh) && (dExtremeLow || dModerateLow))
+//       return "abnormal";
+//     if ((dExtremeHigh || dModerateHigh) && (sExtremeLow || sModerateLow))
+//       return "abnormal";
+
+//     if (sExtremeHigh || dExtremeHigh || sExtremeLow || dExtremeLow)
+//       return "high";
+//     if (anyHighBand || anyLowBand) return "low";
+
+//     return null;
+//   };
+
+//   // minimal BP status calculator (keeps your previous behavior)
+//   const calculateBPStatus = (s, d) => {
+//     const sVal = Number(s);
+//     const dVal = Number(d);
+//     if (Number.isNaN(sVal) || Number.isNaN(dVal)) return "Normal";
+
+//     if (sVal > 180 || dVal > 120) return "Emergency";
+//     if (sVal > 140 || dVal > 99) return "High";
+//     if (sVal < 90 || dVal < 60) return "Low";
+//     return "Normal";
+//   };
+
+//   let connection;
+//   try {
+//     // 1) ensure device exists
+//     const [existingDevice] = await db.query(
+//       "SELECT id FROM devices WHERE dev_id = ? AND user_id = ?",
+//       [devId, userId]
+//     );
+
+//     if (!existingDevice || existingDevice.length === 0) {
+//       await db.query(
+//         "INSERT INTO devices (dev_id, user_id, dev_type) VALUES (?, ?, ?)",
+//         [devId, userId, devType]
+//       );
+//     }
+
+//     // 2) compute BP status if needed
+//     let processedData = { ...deviceData };
+//     if (
+//       devType === "bp" &&
+//       deviceData.systolic != null &&
+//       deviceData.diastolic != null
+//     ) {
+//       const bpStatus = calculateBPStatus(
+//         deviceData.systolic,
+//         deviceData.diastolic
+//       );
+//       processedData = { ...deviceData, bpStatus };
+//       console.log(
+//         "📊 Calculated BP status =",
+//         bpStatus,
+//         `for ${deviceData.systolic}/${deviceData.diastolic}`
+//       );
+//     }
+
+//     // 3) insert dev_data
+//     const [insertResult] = await db.query(
+//       "INSERT INTO dev_data (dev_id, user_id, dev_type, data) VALUES (?, ?, ?, ?)",
+//       [devId, userId, devType, JSON.stringify(processedData)]
+//     );
+
+//     const serviceResponse = {
+//       insertId: insertResult.insertId,
+//       devId,
+//       devType,
+//       userId,
+//       deviceData: processedData,
+//       deviceWasNew: !existingDevice || existingDevice.length === 0,
+//       alertCreated: false,
+//     };
+
+//     // 4) If BP device and bpStatus is not Normal -> run test-alert logic
+//     if (
+//       devType === "bp" &&
+//       processedData.bpStatus &&
+//       processedData.bpStatus !== "Normal"
+//     ) {
+//       console.log(
+//         "🚨 BP Alert logic triggered from device data:",
+//         processedData.bpStatus
+//       );
+
+//       // open connection to run transactional alert insertions and to fetch clinicians
+//       connection = await db.getConnection();
+
+//       // ✅ NEW: Get patient details including organization_id
+//       const [patientRows] = await connection.query(
+//         "SELECT id, name, email, phoneNumber, organization_id FROM users WHERE id = ?",
+//         [userId]
+//       );
+//       const patientDetails = patientRows[0];
+
+//       if (!patientDetails) {
+//         throw new Error("Patient not found");
+//       }
+
+//       // ✅ NEW: Get organization admins (same as test-alert route)
+//       const [adminRows] = await connection.query(
+//         `SELECT users.id, users.name, users.email
+//          FROM users
+//          JOIN role ON users.id = role.user_id
+//          WHERE users.organization_id = ?
+//          AND role.role_type = 'admin'
+//          AND users.is_active = true`,
+//         [patientDetails.organization_id]
+//       );
+
+//       const organizationAdmins = adminRows.map((admin) => admin.id);
+//       console.log("👨‍💼 Organization admins found:", organizationAdmins);
+
+//       // Build list of candidate clinicians:
+//       // Priority: opts.dr_ids (if provided) -> try to fetch patient-doctor assignments -> fallback to clinicians in same organization
+//       let clinicianRows = [];
+//       const drIdsFromOpts =
+//         Array.isArray(opts.dr_ids) && opts.dr_ids.length ? opts.dr_ids : null;
+
+//       if (drIdsFromOpts) {
+//         const [rows] = await connection.query(
+//           `SELECT u.id, u.name, u.email, role.role_type,
+//                   das.systolic_high, das.systolic_low, das.diastolic_high, das.diastolic_low
+//            FROM users u
+//            JOIN role ON u.id = role.user_id
+//            LEFT JOIN doctor_alert_settings das ON u.id = das.doctor_id
+//            WHERE u.id IN (?) AND role.role_type = 'clinician' AND u.is_active = true`,
+//           [drIdsFromOpts]
+//         );
+//         clinicianRows = rows;
+//       } else {
+//         // try to fetch clinicians assigned to this patient from common assignment tables (best-effort)
+//         // if your schema uses a different table name, replace 'patient_doctor' with it.
+//         try {
+//           const [rowsAssigned] = await connection.query(
+//             `SELECT u.id, u.name, u.email, role.role_type,
+//                     das.systolic_high, das.systolic_low, das.diastolic_high, das.diastolic_low
+//              FROM users u
+//              JOIN role ON u.id = role.user_id
+//              LEFT JOIN doctor_alert_settings das ON u.id = das.doctor_id
+//              JOIN patient_doctor pd ON pd.doctor_id = u.id
+//              WHERE pd.patient_id = ? AND role.role_type = 'clinician' AND u.is_active = true`,
+//             [userId]
+//           );
+//           clinicianRows = rowsAssigned;
+//         } catch (e) {
+//           // fallback: clinicians in same organization as patient
+//           const [patientRows] = await connection.query(
+//             "SELECT id, organization_id FROM users WHERE id = ?",
+//             [userId]
+//           );
+//           const patient = patientRows[0];
+//           if (patient && patient.organization_id) {
+//             const [rowsOrg] = await connection.query(
+//               `SELECT u.id, u.name, u.email, role.role_type,
+//                       das.systolic_high, das.systolic_low, das.diastolic_high, das.diastolic_low
+//                FROM users u
+//                JOIN role ON u.id = role.user_id
+//                LEFT JOIN doctor_alert_settings das ON u.id = das.doctor_id
+//                WHERE u.organization_id = ? AND role.role_type = 'clinician' AND u.is_active = true`,
+//               [patient.organization_id]
+//             );
+//             clinicianRows = rowsOrg;
+//           } else {
+//             // final fallback: all active clinicians
+//             const [rowsAll] = await connection.query(
+//               `SELECT u.id, u.name, u.email, role.role_type,
+//                       das.systolic_high, das.systolic_low, das.diastolic_high, das.diastolic_low
+//                FROM users u
+//                JOIN role ON u.id = role.user_id
+//                LEFT JOIN doctor_alert_settings das ON u.id = das.doctor_id
+//                WHERE role.role_type = 'clinician' AND u.is_active = true`
+//             );
+//             clinicianRows = rowsAll;
+//           }
+//         }
+//       }
+
+//       console.log("🎯 Candidate clinicians count:", clinicianRows.length);
+
+//       // ✅ NEW: Use the first clinician as primary assigned doctor (same as test-alert)
+//       const primaryDoctorId =
+//         clinicianRows.length > 0 ? clinicianRows[0].id : null;
+//       const primaryDoctor = clinicianRows.length > 0 ? clinicianRows[0] : null;
+
+//       console.log("🎯 Primary assigned doctor:", primaryDoctor);
+
+//       // filter clinicians based on their settings and derived vitals
+//       const cliniciansToAlert = [];
+//       const clinicianTypeMap = {};
+//       const vitals = {
+//         systolic: processedData.systolic,
+//         diastolic: processedData.diastolic,
+//       };
+//       clinicianRows.forEach((clin) => {
+//         // determineTypeForClinician uses measured bands (same as test-alert)
+//         const derived = determineTypeForClinician(vitals);
+//         if (derived) {
+//           cliniciansToAlert.push(clin);
+//           clinicianTypeMap[clin.id] = derived;
+//         } else {
+//           // fallback: if clinician has no specific thresholds saved, include them
+//           const hasSettings =
+//             clin.systolic_high ||
+//             clin.systolic_low ||
+//             clin.diastolic_high ||
+//             clin.diastolic_low;
+//           if (!hasSettings) {
+//             cliniciansToAlert.push(clin);
+//             clinicianTypeMap[clin.id] = "low"; // conservative default
+//           }
+//         }
+//       });
+
+//       console.log("📣 Final cliniciansToAlert:", cliniciansToAlert.length);
+
+//       // ✅ NEW: Combine doctor IDs and admin IDs (remove duplicates) - same as test-alert
+//       const clinicianIds = cliniciansToAlert.map((c) => c.id);
+//       const allRecipientIds = [
+//         ...new Set([...clinicianIds, ...organizationAdmins]),
+//       ];
+//       console.log("📨 All recipients (doctors + admins):", allRecipientIds);
+
+//       if (allRecipientIds.length === 0) {
+//         // nothing to alert for
+//         serviceResponse.alertCreated = false;
+//         serviceResponse.filtered = true;
+//         return serviceResponse;
+//       }
+
+//       // choose overall alert type by priority
+//       const priority = { abnormal: 3, high: 2, low: 1 };
+//       let overallType = null;
+//       for (const clin of cliniciansToAlert) {
+//         const t = clinicianTypeMap[clin.id] || "low";
+//         if (!overallType) overallType = t;
+//         else if (priority[t] > priority[overallType]) overallType = t;
+//       }
+//       if (!overallType) overallType = "low";
+
+//       // Insert alert + assignments in transaction
+//       await connection.beginTransaction();
+//       try {
+//         const [alertResult] = await connection.query(
+//           "INSERT INTO alerts (user_id, `desc`, type, created_at) VALUES (?, ?, ?, ?)",
+//           [
+//             userId,
+//             `BP alert (severity: ${overallType}) - ${processedData.systolic}/${processedData.diastolic}`,
+//             overallType,
+//             new Date(),
+//           ]
+//         );
+//         const alertId = alertResult.insertId;
+
+//         // ✅ UPDATED: Create assignments for ALL recipients (doctors + admins)
+//         const assignments = allRecipientIds.map((recipient_id) => [
+//           alertId,
+//           recipient_id,
+//           false, // read_status
+//           null, // read_at
+//           new Date(), // created_at
+//           new Date(), // updated_at
+//         ]);
+
+//         await connection.query(
+//           `INSERT INTO alert_assignments (alert_id, doctor_id, read_status, read_at, created_at, updated_at) VALUES ?`,
+//           [assignments]
+//         );
+
+//         const [newAlertRows] = await connection.query(
+//           `SELECT alerts.*,
+//                   patients.name as patient_name,
+//                   patients.email as patient_email,
+//                   patients.phoneNumber as patient_phone,
+//                   patients.organization_id as patient_organization_id
+//            FROM alerts
+//            LEFT JOIN users as patients ON alerts.user_id = patients.id
+//            WHERE alerts.id = ?`,
+//           [alertId]
+//         );
+//         const newAlert = newAlertRows[0];
+
+//         await connection.commit();
+
+//         // ✅ ENHANCED: WebSocket notifications for all recipients
+//         const io = getIO();
+//         const notificationResults = [];
+//         let notificationsSent = 0;
+
+//         for (const recipient_id of allRecipientIds) {
+//           const recipientSocketId = getUserSocketId(recipient_id);
+//           const isConnected = isUserConnected(recipient_id);
+
+//           const [unreadCountRows] = await connection.query(
+//             "SELECT COUNT(id) as count FROM alert_assignments WHERE doctor_id = ? AND read_status = false",
+//             [recipient_id]
+//           );
+//           const unreadCount = unreadCountRows[0]?.count || 0;
+
+//           // ✅ ENHANCED: Include primary doctor information (same as test-alert)
+//           const alertData = {
+//             alert: {
+//               ...newAlert,
+//               read_status: false,
+//               assignment_id: recipient_id,
+//               // ✅ NEW: Include primary doctor assignment info
+//               primary_assigned_doctor_id: primaryDoctorId,
+//               primary_assigned_doctor_name:
+//                 primaryDoctor?.name || "Unknown Doctor",
+//               primary_assigned_doctor_email: primaryDoctor?.email || "N/A",
+//               derived_type: clinicianTypeMap[recipient_id] || overallType,
+//             },
+//             patient: patientDetails, // ✅ Use full patient details
+//             // ✅ NEW: Include assigned doctor details
+//             assigned_doctor: primaryDoctor
+//               ? {
+//                   id: primaryDoctor.id,
+//                   name: primaryDoctor.name,
+//                   email: primaryDoctor.email,
+//                   phone: primaryDoctor.phoneNumber,
+//                 }
+//               : null,
+//             unread_count: parseInt(unreadCount) || 0,
+//             timestamp: new Date(),
+//             server_time: new Date().toISOString(),
+//             vital_data: vitals,
+//           };
+
+//           let sent = false;
+
+//           // Try multiple methods to send alert
+//           if (isConnected && recipientSocketId) {
+//             // Method 1: Send to user's personal room
+//             io.to(`user_${recipient_id}`).emit("new_alert", alertData);
+//             console.log(`   ✅ Method 1: Sent to room user_${recipient_id}`);
+//             sent = true;
+
+//             // Method 2: Send to specific socket
+//             io.to(recipientSocketId).emit("new_alert", alertData);
+//             console.log(`   ✅ Method 2: Sent to socket ${recipientSocketId}`);
+//           }
+
+//           // Method 3: Broadcast to all clinicians room (fallback)
+//           // io.to("all_clinicians").emit("new_alert_broadcast", {
+//           //   ...alertData,
+//           //   broadcast: true,
+//           //   intended_for: recipient_id,
+//           // });
+//           // console.log(`   ✅ Method 3: Broadcast to all_clinicians room`);
+
+//           // ✅ NEW: Method 4: Send to admins room
+//           if (organizationAdmins.includes(recipient_id)) {
+//             io.to("all_admins").emit("admin_alert", {
+//               ...alertData,
+//               is_admin_alert: true,
+//             });
+//             console.log(
+//               `   ✅ Method 4: Sent to admins room for admin ${recipient_id}`
+//             );
+//           }
+
+//           if (sent) {
+//             notificationsSent++;
+//           }
+
+//           notificationResults.push({
+//             recipient_id,
+//             role: organizationAdmins.includes(recipient_id)
+//               ? "admin"
+//               : "clinician",
+//             connected: isConnected,
+//             socket_id: recipientSocketId,
+//             notification_sent: sent,
+//           });
+//         }
+
+//         serviceResponse.alertCreated = true;
+//         serviceResponse.alert = newAlert;
+//         serviceResponse.primary_assigned_doctor = primaryDoctor;
+//         serviceResponse.recipients = {
+//           doctors: clinicianIds,
+//           admins: organizationAdmins,
+//           primary_doctor: primaryDoctorId,
+//           total: allRecipientIds.length,
+//         };
+//         serviceResponse.notifications = {
+//           sent: notificationsSent,
+//           total: allRecipientIds.length,
+//           details: notificationResults,
+//         };
+
+//         return serviceResponse;
+//       } catch (txErr) {
+//         await connection.rollback();
+//         console.error("❌ BP alert transaction rolled back:", txErr);
+//         throw txErr;
+//       }
+//     } // end BP alert block
+
+//     return serviceResponse;
+//   } catch (error) {
+//     console.error("❌ createDeviceDataService error:", error);
+//     throw error;
+//   } finally {
+//     if (connection) connection.release();
+//   }
+// };
 
 // const createDeviceDataService = async (userId, devId, devType, deviceData) => {
 //   console.log("🛠️ createDeviceDataService called with:", {
