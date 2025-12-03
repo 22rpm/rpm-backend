@@ -157,6 +157,7 @@ const orgRoutes = require("./routes/org.routes");
 const alertRoutes = require("./routes/alert.route");
 const drRoutes = require("./routes/doctor.routes");
 const patientRoutes = require("./routes/patient.routes");
+const emailRoutes = require("./routes/emailRoute");
 const fs = require("fs");
 const path = require("path");
 
@@ -215,6 +216,7 @@ app.use("/api/alerts", alertRoutes);
 app.use("/api/doctor", drRoutes);
 app.use("/api/org", orgRoutes);
 app.use("/api/patient", patientRoutes);
+app.use("/api/email", emailRoutes);
 // Add this temporary test route to check your current setup
 app.get("/debug-twilio", (req, res) => {
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
