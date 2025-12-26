@@ -197,6 +197,62 @@ async function updateUserLastLogin(userId) {
 //     return res.status(500).json({ error: "Server error" });
 //   }
 // }
+
+async function simpleLogin(req, res) {
+  try {
+    const { identifier, password, method } = req.body;
+
+    if (!identifier || !password || !method) {
+      return res.status(400).json({ message: "Missing login fields" });
+    }
+
+    // 1️⃣ Find user
+    let user = null;
+    if (method === "email") {
+      user = await findUserByEmail(identifier);
+    } else if (method === "username") {
+      user = await findUserByUsername(identifier);
+    } else {
+      return res.status(400).json({ message: "Invalid login method" });
+    }
+
+    if (!user) {
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
+
+    // 2️⃣ Check password
+    const validPassword = await bcrypt.compare(password, user.password);
+    if (!validPassword) {
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
+
+    // 3️⃣ Fetch role
+    const role = await findRoleByUsername(user.username);
+    if (!role) {
+      return res.status(404).json({ message: "User role not found" });
+    }
+
+    // 4️⃣ Update last login
+    await updateUserLastLogin(user.id);
+
+    // 5️⃣ Return success (no tokens)
+    return res.status(200).json({
+      message: "Login successful",
+      user: {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        name: user.name,
+        role: role,
+        organization_id: user.organization_id,
+      },
+    });
+  } catch (err) {
+    console.error("Simple login error:", err);
+    return res.status(500).json({ message: "Server error" });
+  }
+}
+
 async function login(req, res) {
   try {
     const { identifier, password, method, login_method } = req.body;
@@ -949,4 +1005,5 @@ module.exports = {
   verifyLogin,
   addDevData,
   refresh,
+  simpleLogin,
 };
