@@ -10,13 +10,14 @@ const {
   findRoleByUsername,
   updateLastLogin,
   findUserByUsername,
+  findUserByPhone,
 } = require("../services/user.service");
 const { insertDevData } = require("../services/devData.service");
 const { COOKIE_NAME } = require("../middleware/auth");
 const { registerSchema } = require("../validations/auth.validation");
 const { createUser, assignRole } = require("../services/user.service");
 const speakeasy = require("speakeasy");
-const { buildFingerprint } = require("../utils/fingerprint");
+const { buildFingerprint, buildDeviceFingerprint } = require("../utils/fingerprint");
 const {
   getDeviceByHash,
   trustDevice,
@@ -33,6 +34,19 @@ const {
   deleteRefreshTokenForDevice,
   assignDoctorsToPatient,
 } = require("../services/auth.service");
+const twilioService = require("../services/twillio.service");
+
+const TRUST_DAYS = 60;
+
+// Treat an identifier as a phone number when it has no "@", contains only
+// phone-ish characters, and has 7-15 digits once punctuation is stripped.
+function looksLikePhone(identifier) {
+  if (!identifier || String(identifier).includes("@")) return false;
+  const raw = String(identifier).trim();
+  if (!/^[\d\s()+\-.]+$/.test(raw)) return false;
+  const digits = raw.replace(/\D/g, "");
+  return digits.length >= 7 && digits.length <= 15;
+}
 const { log } = require("console");
 
 const COOKIE_SECURE = process.env.NODE_ENV === "production";
@@ -253,136 +267,313 @@ async function simpleLogin(req, res) {
   }
 }
 
+// ============================================================================
+// STEP 4 — replacement for `login` (currently starts at line 256)
+// ============================================================================
+//
+// Changes from the existing version:
+//   1. Accepts a phone number as `identifier` and looks the user up by phone.
+//   2. Checks whether this device is already trusted; if so, skips OTP.
+//   3. Sends the OTP by SMS when the patient logged in with a phone number,
+//      by email otherwise.
+//   4. `method === "username"` no longer silently bypasses OTP for phone
+//      logins — the app sends method:"username" for anything without an "@".
+//
+// Password is still required on every path.
+// ============================================================================
+
 async function login(req, res) {
   try {
     const { identifier, password, method, login_method } = req.body;
 
-    // Determine if identifier is email or username
-    let user;
-    if (method === "email") {
+    if (!identifier || !password) {
+      return res.status(400).json({ message: "Missing credentials" });
+    }
+
+    // ---- 1. Resolve the user --------------------------------------------
+    // Phone is checked first: the mobile app sends method:"username" for any
+    // identifier without an "@", so we cannot rely on `method` alone.
+    let user = null;
+    let loginChannel = "email"; // how we'll deliver the OTP
+
+    if (looksLikePhone(identifier)) {
+      user = await findUserByPhone(identifier);
+      loginChannel = "sms";
+    } else if (method === "email" || String(identifier).includes("@")) {
       user = await findUserByEmail(identifier);
+      loginChannel = "email";
     } else {
       user = await findUserByUsername(identifier);
+      loginChannel = "email";
     }
 
     if (!user) {
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
-    // ✅ Check password
+    // ---- 2. Password ------------------------------------------------------
     const validPassword = await bcrypt.compare(password, user.password);
     if (!validPassword) {
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
-    // ✅ Fetch role from DB
+    // ---- 3. Role ----------------------------------------------------------
     const role = await findRoleByUsername(user.username);
-    console.log("Fetched role from database:", role);
-
     if (!role) {
       return res.status(401).json({ message: "User role not found" });
     }
-
     const role_type = role;
     const org_id = user.organization_id;
 
-    console.log("User role and org ID in login:", org_id, role_type);
+    // ---- 4. Device trust --------------------------------------------------
+    // A device is trusted when a previous OTP was verified on it and that
+    // trust has not expired. Trusted devices skip the OTP step.
+    const fp = buildDeviceFingerprint(req, req.body.client_device_id);
+    const [trustRows] = await db.query(
+      `SELECT id, trusted_until, revoked
+         FROM user_devices
+        WHERE user_id = ? AND device_fingerprint = ?
+        LIMIT 1`,
+      [user.id, fp.fingerprintHash]
+    );
+    const knownDevice = trustRows[0] || null;
+    const deviceIsTrusted =
+      knownDevice &&
+      !knownDevice.revoked &&
+      knownDevice.trusted_until &&
+      new Date(knownDevice.trusted_until) > new Date();
 
-    // ✅ Handle direct login (username or biometric)
-    if (method === "username" || login_method === "biometric") {
-      // ✅ Update last_login timestamp
-      await updateUserLastLogin(user.id);
+    console.log(
+      `Login: user=${user.id} channel=${loginChannel} ` +
+        `fp=${fp.fingerprintHash.slice(0, 12)}… (${fp.source}) ` +
+        `trusted=${!!deviceIsTrusted}`
+    );
 
-      // ✅ Generate access token
-      const accessToken = jwt.sign(
-        {
-          id: user.id,
-          name: user.name,
-          username: user.username,
-          email: user.email,
-          role_type,
-          org_id,
-          phoneNumber: user.phoneNumber,
-        },
-        process.env.JWT_SECRET,
-        { expiresIn: "45m" }
-      );
-
-      // ✅ Generate refresh token
-      const refreshToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
-        expiresIn: "14d",
-      });
-
-      const deviceFingerprint =
-        req.body.device_fingerprint || "unique-browser-hash";
-
-      // ✅ Save device session
-      await saveOrUpdateUserDevice({
-        userId: user.id,
-        deviceFingerprint,
-        ipAddress: req.headers["x-forwarded-for"]?.split(",")[0] || req.ip,
-        userAgent: req.headers["user-agent"],
-        refreshToken,
-        absoluteExpiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
-      });
-
-      // ✅ Set secure cookies
-      res.cookie("token", accessToken, {
-        httpOnly: true,
-        secure: true, // PRODUCTION: true for HTTPS
-        sameSite: "none", // PRODUCTION: none for cross-site
-        maxAge: 45 * 60 * 1000, // 45 minutes
-      });
-
-      res.cookie("refresh_token", refreshToken, {
-        httpOnly: true,
-        secure: true, // PRODUCTION: true for HTTPS
-        sameSite: "none", // PRODUCTION: none for cross-site
-        maxAge: 14 * 24 * 60 * 60 * 1000, // 14 days
-      });
-
-      console.log("Cookies set successfully");
-
-      return res.status(200).json({
-        message: "Login successful",
-        user: {
-          id: user.id,
-          email: user.email,
-          role: role,
-        },
-        token: accessToken,
+    // ---- 5. Direct login: trusted device, or biometric re-auth -------------
+    if (deviceIsTrusted || login_method === "biometric") {
+      return await issueSession({
+        req,
+        res,
+        user,
+        role,
+        role_type,
+        org_id,
+        fingerprintHash: fp.fingerprintHash,
+        // Re-issuing a session on an already-trusted device extends the
+        // window; biometric on an untrusted device does not grant trust.
+        extendTrust: !!deviceIsTrusted,
       });
     }
 
-    // ✅ If login method is email, proceed with OTP flow
-    if (method === "email") {
-      // Generate 6-digit OTP
-      const otp = ("" + Math.floor(100000 + Math.random() * 900000)).substring(
-        0,
-        6
-      );
-      console.log(`Generated OTP for ${identifier}: ${otp}`);
+    // ---- 6. Otherwise: send an OTP ----------------------------------------
+    const otp = ("" + Math.floor(100000 + Math.random() * 900000)).substring(0, 6);
+    await createOtp(user.id, otp, "login");
 
-      // Store OTP in DB
-      await createOtp(user.id, otp, "login");
+    if (loginChannel === "sms") {
+      const to = twilioService.formatPhoneNumber(user.phoneNumber);
+      if (!to) {
+        console.error(`No usable phone number for user ${user.id}`);
+        return res
+          .status(500)
+          .json({ error: "No phone number on file for this account" });
+      }
 
-      // Send OTP via email
-      if (sendOtpEmail) {
-        await sendOtpEmail(user.email, otp);
-      } else {
-        console.log(`OTP for ${identifier}: ${otp}`);
+      const message =
+        `Your 22RPM verification code is ${otp}. ` +
+        `It expires in 5 minutes. Do not share this code.`;
+
+      const result = await twilioService.sendSMS(to, message);
+      if (!result.success) {
+        console.error(`SMS OTP failed for user ${user.id}:`, result.error);
+        return res.status(500).json({
+          error: result.userMessage || "Failed to send verification code",
+        });
       }
 
       return res.status(200).json({
         message: "OTP sent, please verify",
         requiresOtp: true,
+        otpChannel: "sms",
+        otpRecipientMasked: maskPhoneTail(user.phoneNumber),
       });
     }
+
+    // email channel
+    try {
+      if (sendOtpEmail) {
+        await sendOtpEmail(user.email, otp);
+      } else {
+        console.log(`OTP for ${identifier}: ${otp}`);
+      }
+    } catch (mailErr) {
+      console.error(`Email OTP failed for user ${user.id}:`, mailErr.message);
+      return res
+        .status(500)
+        .json({ error: "Failed to send verification code by email" });
+    }
+
+    return res.status(200).json({
+      message: "OTP sent, please verify",
+      requiresOtp: true,
+      otpChannel: "email",
+    });
   } catch (err) {
     console.error("Login error:", err);
     return res.status(500).json({ error: "Server error" });
   }
 }
+
+// ============================================================================
+// Shared session issuer — used by the trusted-device path in `login` and by
+// `verifyOtpController`. Keeps token/cookie/session logic in one place instead
+// of duplicated across both.
+// ============================================================================
+
+async function issueSession({
+  req,
+  res,
+  user,
+  role,
+  role_type,
+  org_id,
+  fingerprintHash,
+  extendTrust,
+}) {
+  await updateUserLastLogin(user.id);
+
+  const accessToken = jwt.sign(
+    {
+      id: user.id,
+      name: user.name,
+      username: user.username,
+      email: user.email,
+      role_type: role_type || role,
+      org_id: org_id ?? user.organization_id,
+      phoneNumber: user.phoneNumber,
+    },
+    process.env.JWT_SECRET,
+    { expiresIn: "45m" }
+  );
+
+  const refreshToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
+    expiresIn: "14d",
+  });
+
+  await saveOrUpdateUserDevice({
+    userId: user.id,
+    deviceFingerprint: fingerprintHash,
+    ipAddress: req.headers["x-forwarded-for"]?.split(",")[0] || req.ip,
+    userAgent: req.headers["user-agent"],
+    refreshToken,
+    absoluteExpiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+  });
+
+  if (extendTrust) {
+    const trustedUntil = new Date(
+      Date.now() + TRUST_DAYS * 24 * 60 * 60 * 1000
+    );
+    await db.query(
+      `UPDATE user_devices
+          SET trusted_until = ?
+        WHERE user_id = ? AND device_fingerprint = ?`,
+      [trustedUntil, user.id, fingerprintHash]
+    );
+    console.log(
+      `Device trusted for user ${user.id} until ${trustedUntil.toISOString()}`
+    );
+  }
+
+  res.cookie("token", accessToken, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "none",
+    maxAge: 45 * 60 * 1000,
+  });
+
+  res.cookie("refresh_token", refreshToken, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "none",
+    maxAge: 14 * 24 * 60 * 60 * 1000,
+  });
+
+  return res.status(200).json({
+    message: "Login successful",
+    user: {
+      id: user.id,
+      email: user.email,
+      role: role,
+    },
+    token: accessToken,
+  });
+}
+
+// Masks a phone number for display: "6617337622" -> "(***) ***-7622"
+function maskPhoneTail(phone) {
+  const digits = String(phone || "").replace(/\D/g, "");
+  if (digits.length < 4) return "your phone";
+  return `(***) ***-${digits.slice(-4)}`;
+}
+
+// ============================================================================
+// STEP 5 — replacement for `verifyOtpController` (currently line 626)
+// ============================================================================
+//
+// Changes from the existing version:
+//   1. Accepts `identifier` (what the mobile app actually sends) as well as
+//      the legacy `email` field. The current code only reads `email`, so OTP
+//      verification from the app fails outright.
+//   2. Resolves the user by phone / email / username, matching `login`.
+//   3. On success, marks this device trusted for TRUST_DAYS so subsequent
+//      logins skip the OTP.
+// ============================================================================
+
+const verifyOtpController = async (req, res) => {
+  try {
+    const { identifier, email, otp } = req.body;
+    const lookup = identifier || email;
+
+    if (!lookup || !otp) {
+      return res.status(400).json({ error: "Missing identifier or OTP" });
+    }
+
+    let user = null;
+    if (looksLikePhone(lookup)) {
+      user = await findUserByPhone(lookup);
+    } else if (String(lookup).includes("@")) {
+      user = await findUserByEmail(lookup);
+    } else {
+      user = await findUserByUsername(lookup);
+    }
+
+    if (!user) return res.status(400).json({ error: "User not found" });
+
+    const valid = await verifyOtp(user.id, otp, "login");
+    if (!valid) {
+      return res.status(400).json({ error: "Invalid or expired OTP" });
+    }
+
+    const role = await findRoleByUsername(user.username);
+
+    // Successful OTP on this device -> trust it going forward.
+    const fp = buildDeviceFingerprint(req, req.body.client_device_id);
+
+    return await issueSession({
+      req,
+      res,
+      user,
+      role,
+      role_type: role,
+      org_id: user.organization_id,
+      fingerprintHash: fp.fingerprintHash,
+      extendTrust: true,
+    });
+  } catch (err) {
+    console.error("verifyOtp error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+};
+
 // async function login(req, res) {
 //   try {
 //     const { email, password } = req.body;
@@ -609,81 +800,7 @@ async function verifyLogin(req, res) {
   return res.json({ message: "Login successful", token: "jwt-token-here" });
 }
 
-const verifyOtpController = async (req, res) => {
-  try {
-    const { email, otp, device_fingerprint } = req.body;
 
-    // 1. Find user
-    const user = await findUserByEmail(email);
-    if (!user) return res.status(400).json({ error: "User not found" });
-
-    const role = await findRoleByUsername(user.username);
-    console.log("user role ", role);
-    // 2. Verify OTP via service
-    const valid = await verifyOtp(user.id, otp, "login");
-    if (!valid)
-      return res.status(400).json({ error: "Invalid or expired OTP" });
-
-    // 3. Generate short-lived Access Token (include role in payload)
-    await updateUserLastLogin(user.id);
-    const accessToken = jwt.sign(
-      {
-        id: user.id,
-        name: user.name,
-        username: user.username,
-        email: user.email,
-        role: user.role,
-        phoneNumber: user.phoneNumber,
-      }, // 👈 include role
-      process.env.JWT_SECRET,
-      { expiresIn: "45m" }
-    );
-
-    // 4. Generate Refresh Token
-    const refreshToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
-      expiresIn: "14d",
-    });
-    // const refreshToken = crypto.randomBytes(64).toString("hex");
-
-    // 5. Persist/rotate refresh token & session
-    await saveOrUpdateUserDevice({
-      userId: user.id,
-      deviceFingerprint: device_fingerprint,
-      ipAddress: req.headers["x-forwarded-for"]?.split(",")[0] || req.ip,
-      userAgent: req.headers["user-agent"],
-      refreshToken,
-      absoluteExpiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000), // 14 days
-    });
-
-    // 6. Set cookies
-    res.cookie("token", accessToken, {
-      httpOnly: true,
-      secure: true, // PRODUCTION: true for HTTPS
-      sameSite: "none", // PRODUCTION: none for cross-site
-      maxAge: 45 * 60 * 1000, // 45 minutes
-    });
-
-    res.cookie("refresh_token", refreshToken, {
-      httpOnly: true,
-      secure: true, // PRODUCTION: true for HTTPS
-      sameSite: "none", // PRODUCTION: none for cross-site
-      maxAge: 14 * 24 * 60 * 60 * 1000, // 14 days
-    });
-    console.log("hello user", user);
-    // 7. Respond with role so frontend knows dashboard to show
-    return res.status(200).json({
-      message: "OTP verified successfully",
-      user: {
-        id: user.id,
-        email: user.email,
-        role: role,
-      },
-    });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: "Server error" });
-  }
-};
 async function addDevData(req, res) {
   try {
     const jsonData = req.body; // data from frontend (assumed JSON)

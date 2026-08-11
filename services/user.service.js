@@ -62,13 +62,43 @@ async function findUserByUsername(username) {
   console.log("📊 Query result for username:", rows);
   return rows[0] || null;
 }
+// Look up a user by phone number.
+//
+// Matches on the last 10 digits so stored formats (+1..., dashes, spaces,
+// parentheses) don't have to agree with what the patient types.
+//
+// NOTE: phoneNumber is not unique in the schema. If two accounts share a
+// number (a couple, or a caregiver's phone), this returns the most recent
+// and logs a warning. Worth a real policy decision before rollout.
+async function findUserByPhone(phone) {
+  const digits = String(phone || "").replace(/\D/g, "");
+  if (digits.length < 7) return null;
 
+  const tail = digits.slice(-10);
+  const [rows] = await db.query(
+    `SELECT id, username, name, email, password, phoneNumber, organization_id,
+            created_at, updated_at
+     FROM users
+     WHERE phoneNumber IS NOT NULL
+       AND REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(phoneNumber,'+',''),'-',''),' ',''),'(',''),')','') LIKE ?
+     ORDER BY id DESC`,
+    [`%${tail}`]
+  );
+
+  if (rows.length > 1) {
+    console.warn(
+      `⚠️  ${rows.length} users match phone ending ${tail} — using id ${rows[0].id}`
+    );
+  }
+  return rows[0] || null;
+}
 module.exports = {
   findUserByEmail,
   findRoleByUsername,
   createUser,
   assignRole,
   findUserByUsername,
+  findUserByPhone,
   updateLastLogin,
   getUserById,
 };
