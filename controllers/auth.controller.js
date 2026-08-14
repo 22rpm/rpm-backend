@@ -48,7 +48,7 @@ function looksLikePhone(identifier) {
   return digits.length >= 7 && digits.length <= 15;
 }
 const { log } = require("console");
-
+const audit = require("../services/audit.service");
 const COOKIE_SECURE = process.env.NODE_ENV === "production";
 
 function signJwt(userPayload) {
@@ -306,16 +306,34 @@ async function login(req, res) {
       user = await findUserByUsername(identifier);
       loginChannel = "email";
     }
-
-    if (!user) {
+if (!user) {
+      audit.recordAsync({
+        req,
+        actorId: null,
+        actorRole: "anonymous",
+        action: audit.ACTIONS.LOGIN_FAILURE,
+        entityType: "user",
+        metadata: { reason: "user_not_found", channel: loginChannel },
+      });
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
     // ---- 2. Password ------------------------------------------------------
     const validPassword = await bcrypt.compare(password, user.password);
     if (!validPassword) {
+      audit.recordAsync({
+        req,
+        actorId: user.id,
+        actorRole: "unknown",
+        action: audit.ACTIONS.LOGIN_FAILURE,
+        entityType: "user",
+        entityId: user.id,
+        organizationId: user.organization_id,
+        metadata: { reason: "bad_password" },
+      });
       return res.status(401).json({ message: "Invalid credentials" });
     }
+    
 
     // ---- 3. Role ----------------------------------------------------------
     const role = await findRoleByUsername(user.username);
@@ -496,7 +514,16 @@ async function issueSession({
     sameSite: "none",
     maxAge: 14 * 24 * 60 * 60 * 1000,
   });
-
+audit.recordAsync({
+    req,
+    actorId: user.id,
+    actorRole: role_type || role,
+    action: audit.ACTIONS.LOGIN_SUCCESS,
+    entityType: "user",
+    entityId: user.id,
+    organizationId: org_id ?? user.organization_id,
+    metadata: { trusted_device: !!extendTrust },
+  });
   return res.status(200).json({
     message: "Login successful",
     user: {
