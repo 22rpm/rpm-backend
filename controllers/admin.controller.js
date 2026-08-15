@@ -33,32 +33,28 @@ export async function getAllUsers(req, res) {
 
     console.log("🔍 Role Type:", role_type);
     console.log("🔍 Org ID:", org_id);
-    console.log("🔍 Role Type === 'admin':", role_type === "admin");
+    console.log("🔍 Resolved org scope:", req.orgScope);
 
-    // ✅ Check if user is admin
-    if (role_type === "admin") {
-      console.log("✅ User is admin, proceeding...");
-
-      // ✅ Org Admin - has org_id
-      if (org_id) {
-        console.log("🔍 User is Org Admin, fetching org users...");
-        const users = await findOrgUsersWithRoles(org_id);
-        return res.status(200).json({
-          ok: true,
-          message: "Users fetched successfully",
-          users,
+    // Both org admins and super-admins may list users, but always within the
+    // single organization resolved by the orgScope middleware:
+    //   - admin        -> their own organization (req.orgScope === their org)
+    //   - super-admin  -> the organization they selected via ?organizationId=
+    // req.orgScope is authoritative; a client-supplied org is never trusted here.
+    if (role_type === "admin" || role_type === "super-admin") {
+      if (req.orgScope === undefined || req.orgScope === null) {
+        return res.status(400).json({
+          ok: false,
+          message: "No organization context resolved",
         });
       }
-      // ✅ Super Admin - no org_id
-      else {
-        console.log("🔍 User is Super Admin, fetching all users...");
-        const allUsers = await findAllUsers();
-        return res.status(200).json({
-          ok: true,
-          message: "All users fetched successfully (Super Admin)",
-          users: allUsers,
-        });
-      }
+
+      console.log("✅ Fetching users for org:", req.orgScope);
+      const users = await findOrgUsersWithRoles(req.orgScope);
+      return res.status(200).json({
+        ok: true,
+        message: "Users fetched successfully",
+        users,
+      });
     }
 
     console.log("❌ Access denied - Role check failed");

@@ -1191,6 +1191,7 @@ const express = require("express");
 const jwt = require("jsonwebtoken");
 const db = require("../config/db");
 const { authRequired } = require("../middleware/auth");
+const { resolveOrgScope } = require("../middleware/orgScope");
 const twilioService = require("../services/twillio.service");
 
 const {
@@ -2375,12 +2376,29 @@ router.post("/", authRequired, async (req, res) => {
 });
 
 // Get unread alerts count for notification badge
-router.get("/unread-count", authRequired, async (req, res) => {
+router.get("/unread-count", authRequired, resolveOrgScope, async (req, res) => {
   const clinician_id = req.user.id;
 
   let connection;
   try {
     connection = await db.getConnection();
+
+    // Super-admin: unread count across the whole selected organization
+    // (every alert whose patient belongs to req.orgScope).
+    if (req.user.role_type === "super-admin") {
+      const [orgUnreadRows] = await connection.query(
+        `SELECT COUNT(DISTINCT aa.id) as count
+           FROM alert_assignments aa
+           JOIN alerts a ON aa.alert_id = a.id
+           JOIN users p ON a.user_id = p.id
+          WHERE p.organization_id = ? AND aa.read_status = false`,
+        [req.orgScope]
+      );
+      return res.json({
+        ok: true,
+        unread_count: parseInt(orgUnreadRows[0].count) || 0,
+      });
+    }
 
     // Verify the user is a clinician
     const [roleRows] = await connection.query(
@@ -2415,12 +2433,56 @@ router.get("/unread-count", authRequired, async (req, res) => {
 });
 
 // Get all alerts for a clinician (with read status)
-router.get("/my-alerts", authRequired, async (req, res) => {
+router.get("/my-alerts", authRequired, resolveOrgScope, async (req, res) => {
   const clinician_id = req.user.id;
 
   let connection;
   try {
     connection = await db.getConnection();
+
+    // Super-admin: every alert for patients in the selected organization,
+    // regardless of which clinician the alert was assigned to.
+    if (req.user.role_type === "super-admin") {
+      const [orgAlerts] = await connection.query(
+        `SELECT alerts.id,
+                alerts.user_id as patient_id,
+                alerts.desc,
+                alerts.type,
+                alerts.created_at as alert_created_at,
+                alerts.updated_at as alert_updated_at,
+                alert_assignments.read_status,
+                alert_assignments.read_at,
+                alert_assignments.created_at as assigned_at,
+                alert_assignments.id as assignment_id,
+                alert_assignments.doctor_id,
+                patients.name as patient_name,
+                patients.email as patient_email,
+                patients.phoneNumber as patient_phone,
+                patients.organization_id as patient_organization_id
+         FROM alert_assignments
+         JOIN alerts ON alert_assignments.alert_id = alerts.id
+         JOIN users as patients ON alerts.user_id = patients.id
+         WHERE patients.organization_id = ?
+         ORDER BY alerts.created_at DESC`,
+        [req.orgScope]
+      );
+
+      const [orgUnreadRows] = await connection.query(
+        `SELECT COUNT(DISTINCT aa.id) as count
+           FROM alert_assignments aa
+           JOIN alerts a ON aa.alert_id = a.id
+           JOIN users p ON a.user_id = p.id
+          WHERE p.organization_id = ? AND aa.read_status = false`,
+        [req.orgScope]
+      );
+
+      return res.json({
+        ok: true,
+        alerts: orgAlerts,
+        unread_count: parseInt(orgUnreadRows[0].count) || 0,
+        total_alerts: orgAlerts.length,
+      });
+    }
 
     // Verify the user is a clinician
     const [roleRows] = await connection.query(

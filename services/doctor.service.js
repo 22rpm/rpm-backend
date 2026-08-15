@@ -1015,6 +1015,71 @@ const getUserWithLatestDeviceDataService = async (userId) => {
   }
 };
 
+// Super-admin view: every patient in a given organization (not assignment-based).
+async function getOrgPatientsService(orgId, limit = 10, offset = 0) {
+  const query = `
+    SELECT
+      u.id AS patient_id,
+      u.username,
+      u.name,
+      u.email,
+      u.phoneNumber,
+      u.last_login,
+      u.is_active,
+      u.organization_id,
+      u.created_at
+    FROM users u
+    WHERE u.organization_id = ?
+      AND EXISTS (
+        SELECT 1 FROM role r
+        WHERE r.user_id = u.id AND r.role_type = 'patient'
+      )
+    ORDER BY u.last_login DESC, u.name ASC
+    LIMIT ? OFFSET ?
+  `;
+  const [patients] = await db.query(query, [orgId, limit, offset]);
+  return patients;
+}
+
+// Super-admin view: search patients within a given organization.
+async function searchOrgPatientsService(orgId, search) {
+  const likeQuery = `%${search}%`;
+  const query = `
+    SELECT
+      u.id AS patient_id,
+      u.username,
+      u.name,
+      u.email,
+      u.phoneNumber,
+      u.last_login,
+      u.is_active,
+      u.organization_id,
+      u.created_at
+    FROM users u
+    WHERE u.organization_id = ?
+      AND (
+        u.name LIKE ? OR
+        u.username LIKE ? OR
+        u.email LIKE ? OR
+        u.phoneNumber LIKE ?
+      )
+      AND EXISTS (
+        SELECT 1 FROM role r
+        WHERE r.user_id = u.id AND r.role_type = 'patient'
+      )
+    ORDER BY u.name ASC
+    LIMIT 20
+  `;
+  const [patients] = await db.query(query, [
+    orgId,
+    likeQuery,
+    likeQuery,
+    likeQuery,
+    likeQuery,
+  ]);
+  return patients;
+}
+
 module.exports = {
   getUserWithLatestDeviceDataService,
   getPatientVitalSignsService,
@@ -1022,4 +1087,6 @@ module.exports = {
   verifyDoctorPatientAccess,
   getPatientDeviceDataService,
   searchAssignedPatientsService,
+  getOrgPatientsService,
+  searchOrgPatientsService,
 };

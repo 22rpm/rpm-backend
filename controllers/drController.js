@@ -4,21 +4,30 @@ import {
   getAssignedPatientsService,
   searchAssignedPatientsService,
   getUserWithLatestDeviceDataService,
+  getOrgPatientsService,
+  searchOrgPatientsService,
 } from "../services/doctor.service.js";
 import { getPatientVitalSignsService } from "../services/doctor.service.js";
+
+const SUPER_ADMIN = "super-admin";
 
 export const getPatientVitalSignsController = async (req, res) => {
   try {
     const doctor = req.user;
     const { patientId } = req.params;
 
-    // Verify doctor has access to this patient
-    const hasAccess = await verifyDoctorPatientAccess(doctor.id, patientId);
-    if (!hasAccess) {
-      return res.status(403).json({
-        success: false,
-        message: "Access denied to patient data",
-      });
+    // Org scope (resolveOrgScope + scopePatientParam) has already confirmed this
+    // patient belongs to the request's organization. Super-admins view any
+    // patient in the selected clinic; clinicians additionally require an
+    // explicit assignment.
+    if (doctor.role_type !== SUPER_ADMIN) {
+      const hasAccess = await verifyDoctorPatientAccess(doctor.id, patientId);
+      if (!hasAccess) {
+        return res.status(403).json({
+          success: false,
+          message: "Access denied to patient data",
+        });
+      }
     }
 
     const vitalSigns = await getPatientVitalSignsService(patientId);
@@ -122,13 +131,16 @@ export const getPatientDeviceDataController = async (req, res) => {
       }
     }
 
-    // Verify doctor has access to this patient
-    const hasAccess = await verifyDoctorPatientAccess(doctor.id, patientId);
-    if (!hasAccess) {
-      return res.status(403).json({
-        success: false,
-        message: "Access denied to patient data",
-      });
+    // Org scope already confirmed this patient is in the request's organization.
+    // Clinicians additionally require an explicit assignment; super-admins do not.
+    if (doctor.role_type !== SUPER_ADMIN) {
+      const hasAccess = await verifyDoctorPatientAccess(doctor.id, patientId);
+      if (!hasAccess) {
+        return res.status(403).json({
+          success: false,
+          message: "Access denied to patient data",
+        });
+      }
     }
 
     const deviceData = await getPatientDeviceDataService(
@@ -164,11 +176,12 @@ export const getAssignedPatientsController = async (req, res) => {
     const limitInt = parseInt(limit);
     const offset = (pageInt - 1) * limitInt;
 
-    const result = await getAssignedPatientsService(
-      doctor.id,
-      limitInt,
-      offset
-    );
+    // Super-admin sees every patient in the selected organization (req.orgScope);
+    // a clinician sees only the patients assigned to them.
+    const result =
+      doctor.role_type === SUPER_ADMIN
+        ? await getOrgPatientsService(req.orgScope, limitInt, offset)
+        : await getAssignedPatientsService(doctor.id, limitInt, offset);
 
     res.status(200).json({
       success: true,
@@ -195,10 +208,12 @@ export const searchAssignedPatientsController = async (req, res) => {
       });
     }
 
-    const result = await searchAssignedPatientsService(
-      doctor.id,
-      search.trim()
-    );
+    // Super-admin searches across the selected organization; a clinician
+    // searches only within their assigned patients.
+    const result =
+      doctor.role_type === SUPER_ADMIN
+        ? await searchOrgPatientsService(req.orgScope, search.trim())
+        : await searchAssignedPatientsService(doctor.id, search.trim());
 
     res.status(200).json({
       success: true,

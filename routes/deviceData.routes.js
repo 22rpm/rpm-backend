@@ -16,6 +16,7 @@ const {
   getDevicesUsedController,
 } = require("../controllers/devicedata.controller");
 const { authRequired } = require("../middleware/auth");
+const { resolveOrgScope, scopePatientParam } = require("../middleware/orgScope");
 
 // POST /api/devices/:devId/data - Store device data for a specific device ID
 router.post("/devices/data", authRequired, createDeviceDataController);
@@ -37,7 +38,13 @@ router.get(
   authRequired,
   getDeviceDataController
 );
-router.get("/devices-used/:userId", authRequired, getDevicesUsedController);
+router.get(
+  "/devices-used/:userId",
+  authRequired,
+  resolveOrgScope,
+  scopePatientParam("userId"),
+  getDevicesUsedController
+);
 
 router.get("/devices/data/latest", authRequired, getLatestDeviceDataController); // Add this
 

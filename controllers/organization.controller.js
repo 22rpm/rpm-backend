@@ -1,6 +1,62 @@
 const bcrypt = require("bcrypt");
 const organizationService = require("../services/org.service");
 const db = require("../config/db");
+const audit = require("../services/audit.service");
+
+// GET /api/org/organizations/:id
+// Returns an organization plus counts of doctors, patients, admins, and active
+// devices. This is the super-admin "organization context" view; loading it is
+// treated as an organization context switch and audited as such.
+//
+// Access: super-admin may view any organization; any other authenticated user
+// may view only their own organization. A mismatch returns 404 so we do not
+// confirm the existence of organizations outside the caller's scope.
+async function getOrganizationById(req, res) {
+  try {
+    const { id } = req.params;
+    const parsedId = parseInt(id, 10);
+    if (!id || Number.isNaN(parsedId)) {
+      return res
+        .status(400)
+        .json({ ok: false, message: "Valid organization ID is required" });
+    }
+
+    const role = req.user && req.user.role_type;
+    const isSuperAdmin = role === "super-admin";
+
+    if (!isSuperAdmin && Number(req.user && req.user.org_id) !== parsedId) {
+      // Do not confirm existence of organizations outside the caller's scope.
+      return res
+        .status(404)
+        .json({ ok: false, message: "Organization not found" });
+    }
+
+    const organization = await organizationService.getOrganizationWithCounts(
+      parsedId
+    );
+    if (!organization) {
+      return res
+        .status(404)
+        .json({ ok: false, message: "Organization not found" });
+    }
+
+    if (isSuperAdmin) {
+      // A super-admin opening an organization's context is a context switch.
+      audit.recordAsync({
+        req,
+        action: audit.ACTIONS.ORG_CONTEXT_SWITCH,
+        entityType: "organization",
+        entityId: parsedId,
+        organizationId: parsedId,
+      });
+    }
+
+    return res.status(200).json({ ok: true, organization });
+  } catch (err) {
+    console.error("Get organization by id error:", err);
+    return res.status(500).json({ ok: false, message: "Server error" });
+  }
+}
 async function addOrganization(req, res) {
   try {
     const { name, code, admin } = req.body;
@@ -549,6 +605,7 @@ async function getDoctorsByOrganization(req, res) {
   }
 }
 module.exports = {
+  getOrganizationById,
   getDoctorsByOrganization,
   addOrganization,
   editOrganization,

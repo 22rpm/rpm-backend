@@ -78,6 +78,13 @@ router.get(
   superAdminOnly,
   organizationController.getAllOrganizations
 );
+// Organization detail + counts (super-admin org-context view)
+router.get(
+  "/organizations/:id",
+  authRequired,
+  superAdminOnly,
+  organizationController.getOrganizationById
+);
 router.get(
   "/admins",
   authRequired,
