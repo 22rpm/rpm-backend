@@ -153,6 +153,21 @@ async function authRequired(req, res, next) {
     });
   }
 }
+// Role guard. Must run AFTER authRequired so req.user (from the JWT) is set.
+// Usage: router.get("/x", authRequired, requireRole("super-admin"), handler)
+function requireRole(...allowedRoles) {
+  return function (req, res, next) {
+    const role = req.user && req.user.role_type;
+    if (!role || !allowedRoles.includes(role)) {
+      return res.status(403).json({
+        ok: false,
+        message: "Forbidden: insufficient role",
+      });
+    }
+    next();
+  };
+}
+
 // this is being used in live chat messageService
 function authMiddleware(req, res, next) {
   const authHeader = req.headers["authorization"];
@@ -170,4 +185,4 @@ function authMiddleware(req, res, next) {
   }
 }
 
-module.exports = { authRequired, COOKIE_NAME, authMiddleware };
+module.exports = { authRequired, requireRole, COOKIE_NAME, authMiddleware };

@@ -67,11 +67,11 @@ async function getAllOrganizations() {
       "organizations.created_at",
       "organizations.updated_at",
       knex.raw(`
-        (SELECT COUNT(*) 
-         FROM users 
-         JOIN roles ON users.id = roles.user_id 
-         WHERE users.organization_id = organizations.id 
-         AND roles.role_type = 'admin') as total_admins
+        (SELECT COUNT(*)
+         FROM users
+         JOIN role ON users.id = role.user_id
+         WHERE users.organization_id = organizations.id
+         AND role.role_type = 'admin') as total_admins
       `)
     );
 }
