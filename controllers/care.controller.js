@@ -5,11 +5,10 @@
 // never read from the request body. All patient-linked access is org-scoped by
 // the route middleware (resolveOrgScope + scopePatientParam).
 const timeEntryService = require("../services/timeEntry.service");
-
-// A single manual entry may not exceed 8 hours. Typical monthly RPM billable
-// time is ~20-40 min, so this is a generous ceiling whose real job is catching
-// fat-finger errors (e.g. minutes typed as a huge number), not bounding policy.
-const MAX_DURATION_MINUTES = 480;
+const {
+  validateStartedAt,
+  validateDurationMinutes,
+} = require("../services/careValidation");
 
 // Validates the shared entry body (create + correct). Returns parsed values.
 function validateEntryBody(body) {
@@ -23,32 +22,17 @@ function validateEntryBody(body) {
     );
   }
 
-  const minutes = Number(duration_minutes);
-  if (!Number.isInteger(minutes) || minutes <= 0) {
-    errors.push("duration_minutes must be a positive integer");
-  } else if (minutes > MAX_DURATION_MINUTES) {
-    errors.push(
-      `duration_minutes must not exceed ${MAX_DURATION_MINUTES} (8 hours)`
-    );
-  }
+  const dur = validateDurationMinutes(duration_minutes);
+  if (dur.error) errors.push(dur.error);
 
   if (typeof note !== "string" || note.trim() === "") {
     errors.push("note is required for manual entries");
   }
 
-  let startedDate = null;
-  if (started_at === undefined || started_at === null || started_at === "") {
-    errors.push("started_at is required");
-  } else {
-    startedDate = new Date(started_at);
-    if (Number.isNaN(startedDate.getTime())) {
-      errors.push("started_at is not a valid date");
-    } else if (startedDate.getTime() > Date.now()) {
-      errors.push("started_at cannot be in the future");
-    }
-  }
+  const st = validateStartedAt(started_at);
+  if (st.error) errors.push(st.error);
 
-  return { errors, minutes, startedDate };
+  return { errors, minutes: dur.minutes, startedDate: st.date };
 }
 
 // POST /api/care/patients/:patientId/time-entries

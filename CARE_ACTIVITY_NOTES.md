@@ -70,19 +70,31 @@ file and the timer-service comment block together.
 
 ## Known issues / TODOs
 
-### Corrections don't record who made them (Part 2)
-- A correction writes a superseding `time_entries` row. `staff_user_id` is
+### Corrections don't record who made them (Part 2 + Part 4)
+- A correction writes a superseding row in `time_entries` (Part 2) **and in
+  `patient_calls`** (Part 4 call corrections). In both, `staff_user_id` is
   **preserved from the original** (correct for billing attribution — the clinical
-  time belongs to whoever did the work), but there is **no `corrected_by`**: the
-  identity of the person who made the correction is not stored anywhere on the
-  row.
+  time/call belongs to whoever did the work), but there is **no `corrected_by`**:
+  the identity of the person who made the correction is not stored anywhere on
+  the row.
 - For a billing record this is an audit gap — "someone changed this from 12 to
-  15 minutes" with no name is exactly what an auditor would flag.
+  15 minutes" with no name is exactly what an auditor would flag. The same gap
+  applies to a call whose outcome/reason/note was corrected.
 - **Fix direction:** add a `corrected_by` column (INT UNSIGNED FK -> users) set to
-  `req.user.id` on correction rows, OR write an `audit_log` entry per correction
-  (services/audit.service.js). The audit_log route keeps the ledger schema
-  unchanged and matches the §4 "retain change/audit records" principle; a column
-  keeps it queryable inline. Decide before this ships as a billing source.
+  `req.user.id` on correction rows in **both** tables, OR write an `audit_log`
+  entry per correction (services/audit.service.js). The audit_log route keeps the
+  schemas unchanged and matches the §4 "retain change/audit records" principle; a
+  column keeps it queryable inline. Decide before this ships as a billing source.
+- Clinical notes (Part 5) will have the same property — corrections preserve the
+  original author and don't record the corrector — so fold notes in when this is
+  addressed.
+
+### Correction response `time_entry` field can be a carried-forward entry (Part 4 API note)
+- On a call correction with **no time change**, the response's `time_entry` is the
+  **carried-forward** entry (the existing linked row), NOT a newly created one.
+  The field name reads like "the entry I just created," which it isn't in that
+  case. Frontend should treat `time_entry` as "the entry currently linked to this
+  call," and must not assume a correction always produced a new ledger row.
 
 ### patient_calls.outcome — needs a constrained set (change B)
 - Currently `VARCHAR(255)` (`config/migrations/20260817120200_create_patient_calls.js`).

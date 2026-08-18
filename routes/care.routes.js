@@ -14,8 +14,13 @@ const {
   listTimeEntries,
   correctTimeEntry,
 } = require("../controllers/care.controller");
+const {
+  createCall,
+  listCalls,
+  correctCall,
+} = require("../controllers/callDoc.controller");
 
-// Who may log/read clinical time. Patients never.
+// Who may log/read clinical time and calls. Patients never.
 const CLINICAL_STAFF = ["clinician", "admin", "super-admin"];
 
 router.post(
@@ -43,6 +48,34 @@ router.post(
   resolveOrgScope,
   scopePatientParam("patientId"),
   correctTimeEntry
+);
+
+// --- Part 4: patient call documentation ---
+router.post(
+  "/patients/:patientId/calls",
+  authRequired,
+  requireRole(...CLINICAL_STAFF),
+  resolveOrgScope,
+  scopePatientParam("patientId"),
+  createCall
+);
+
+router.get(
+  "/patients/:patientId/calls",
+  authRequired,
+  requireRole(...CLINICAL_STAFF),
+  resolveOrgScope,
+  scopePatientParam("patientId"),
+  listCalls
+);
+
+router.post(
+  "/patients/:patientId/calls/:id/correct",
+  authRequired,
+  requireRole(...CLINICAL_STAFF),
+  resolveOrgScope,
+  scopePatientParam("patientId"),
+  correctCall
 );
 
 module.exports = router;

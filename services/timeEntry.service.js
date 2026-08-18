@@ -18,23 +18,31 @@ const ACTIVITY_CATEGORIES = [
   "other",
 ];
 
-async function getEntryById(id) {
-  const [rows] = await db.query("SELECT * FROM time_entries WHERE id = ?", [id]);
+// `executor` is the pool by default, or a transaction connection when a caller
+// (e.g. call documentation) needs these inserts inside a transaction.
+async function getEntryById(id, executor = db) {
+  const [rows] = await executor.query(
+    "SELECT * FROM time_entries WHERE id = ?",
+    [id]
+  );
   return rows[0] || null;
 }
 
 // Insert a completed manual entry. ended_at is computed once and stored.
-async function createManualEntry({
-  patientId,
-  staffUserId,
-  organizationId,
-  activityCategory,
-  startedAt,
-  durationSeconds,
-  note,
-}) {
+async function createManualEntry(
+  {
+    patientId,
+    staffUserId,
+    organizationId,
+    activityCategory,
+    startedAt,
+    durationSeconds,
+    note,
+  },
+  executor = db
+) {
   const endedAt = new Date(startedAt.getTime() + durationSeconds * 1000);
-  const [result] = await db.query(
+  const [result] = await executor.query(
     `INSERT INTO time_entries
        (patient_id, staff_user_id, organization_id, activity_category,
         started_at, ended_at, duration_seconds, entry_method, status, note)
@@ -50,7 +58,7 @@ async function createManualEntry({
       note,
     ]
   );
-  return getEntryById(result.insertId);
+  return getEntryById(result.insertId, executor);
 }
 
 // Head-of-chain entries for a patient (org-scoped), newest first. The LEFT JOIN
@@ -80,18 +88,21 @@ async function findSupersededBy(id) {
 }
 
 // Insert a superseding correction row.
-async function createCorrection({
-  originalId,
-  patientId,
-  staffUserId,
-  organizationId,
-  activityCategory,
-  startedAt,
-  durationSeconds,
-  note,
-}) {
+async function createCorrection(
+  {
+    originalId,
+    patientId,
+    staffUserId,
+    organizationId,
+    activityCategory,
+    startedAt,
+    durationSeconds,
+    note,
+  },
+  executor = db
+) {
   const endedAt = new Date(startedAt.getTime() + durationSeconds * 1000);
-  const [result] = await db.query(
+  const [result] = await executor.query(
     `INSERT INTO time_entries
        (patient_id, staff_user_id, organization_id, activity_category,
         started_at, ended_at, duration_seconds, entry_method, status, note, supersedes)
@@ -108,7 +119,7 @@ async function createCorrection({
       originalId,
     ]
   );
-  return getEntryById(result.insertId);
+  return getEntryById(result.insertId, executor);
 }
 
 module.exports = {
