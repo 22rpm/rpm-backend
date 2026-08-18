@@ -10,6 +10,33 @@ import {
   findAllUsers,
 } from "../services/admin.service.js"; // note the .js extension
 import bcrypt from "bcrypt";
+
+// Role lives in the separate `role` table (users has no role column), keyed by
+// user_id. Take the most recent role row, matching how auth resolves a role.
+async function getUserRoleType(userId) {
+  const [rows] = await pool.query(
+    "SELECT role_type FROM role WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+    [userId]
+  );
+  return rows[0]?.role_type || null;
+}
+
+// A non-super-admin must never modify a super-admin account (privilege
+// escalation). Org membership + existence are already enforced upstream by
+// scopePatientParam("userId"); this only adds the role protection on top.
+// Returns true (and sends a 403) if the request must be blocked.
+async function blockedSuperAdminTarget(req, res, targetUserId) {
+  const targetRole = await getUserRoleType(targetUserId);
+  if (targetRole === "super-admin" && req.user.role_type !== "super-admin") {
+    res.status(403).json({
+      ok: false,
+      message: "You are not allowed to modify a super-admin account",
+    });
+    return true;
+  }
+  return false;
+}
+
 export async function getAllUsers(req, res) {
   try {
     const currentUserId = req.user.id;
@@ -72,6 +99,9 @@ export async function updateUser(req, res) {
     const { userId } = req.params;
     const { name, email, phoneNumber, status, password } = req.body;
 
+    // A non-super-admin may not modify a super-admin account.
+    if (await blockedSuperAdminTarget(req, res, userId)) return;
+
     let is_active = null;
     if (status) {
       if (status.toLowerCase() === "active") is_active = 1;
@@ -121,6 +151,9 @@ export async function toggleUserStatus(req, res) {
       return res.status(400).json({ ok: false, message: "Invalid user ID" });
     }
 
+    // A non-super-admin may not modify a super-admin account.
+    if (await blockedSuperAdminTarget(req, res, parsedUserId)) return;
+
     const isActive = status === "Active";
     const success = await toggleUserStatusService(parsedUserId, isActive);
 
@@ -150,8 +183,15 @@ export async function deleteUser(req, res) {
       return res.status(400).json({ ok: false, message: "Invalid user ID" });
     }
 
-    // Skip self-delete check for now since no auth
-    // if (parsedUserId === req.user.id) { ... }
+    // Restore the self-delete guard now that req.user exists.
+    if (parsedUserId === Number(req.user.id)) {
+      return res
+        .status(400)
+        .json({ ok: false, message: "You cannot delete your own account" });
+    }
+
+    // A non-super-admin may not delete a super-admin account.
+    if (await blockedSuperAdminTarget(req, res, parsedUserId)) return;
 
     const success = await deleteUserService(parsedUserId);
     console.log("success", success);
