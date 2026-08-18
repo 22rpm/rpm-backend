@@ -70,6 +70,17 @@ file and the timer-service comment block together.
 
 ## Known issues / TODOs
 
+### GET /api/care/time-entries should filter by month server-side (Part 2 / billing)
+- Billable time is billed per calendar month (CPT 99457/99458). The activity UI's
+  billable counter must show the current month only, but the GET endpoints return
+  the full head-of-chain history with no date filter, so the frontend currently
+  filters by `started_at` **client-side**.
+- Fine at ~12 patients; wrong at 100 (pulls an unbounded history to the client to
+  sum one month).
+- **Fix direction:** `GET /api/care/patients/:patientId/time-entries` should accept
+  `?month=YYYY-MM` (or `?from=&to=`) and filter on `started_at` server-side. The
+  `(patient_id, started_at)` index already supports the range scan.
+
 ### Corrections don't record who made them (Part 2 + Part 4)
 - A correction writes a superseding row in `time_entries` (Part 2) **and in
   `patient_calls`** (Part 4 call corrections). In both, `staff_user_id` is

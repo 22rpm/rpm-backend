@@ -19,9 +19,25 @@ const {
   listCalls,
   correctCall,
 } = require("../controllers/callDoc.controller");
+const {
+  createNote,
+  listNotes,
+  correctNote,
+} = require("../controllers/clinicalNote.controller");
+const { listStaff } = require("../controllers/careStaff.controller");
 
-// Who may log/read clinical time and calls. Patients never.
+// Who may log/read clinical time, calls, and notes. Patients never.
 const CLINICAL_STAFF = ["clinician", "admin", "super-admin"];
+
+// Staff-name lookup for attribution. Org-scoped but NOT patient-linked, so it
+// uses resolveOrgScope without scopePatientParam.
+router.get(
+  "/staff",
+  authRequired,
+  requireRole(...CLINICAL_STAFF),
+  resolveOrgScope,
+  listStaff
+);
 
 router.post(
   "/patients/:patientId/time-entries",
@@ -76,6 +92,34 @@ router.post(
   resolveOrgScope,
   scopePatientParam("patientId"),
   correctCall
+);
+
+// --- Part 5: clinical notes ---
+router.post(
+  "/patients/:patientId/notes",
+  authRequired,
+  requireRole(...CLINICAL_STAFF),
+  resolveOrgScope,
+  scopePatientParam("patientId"),
+  createNote
+);
+
+router.get(
+  "/patients/:patientId/notes",
+  authRequired,
+  requireRole(...CLINICAL_STAFF),
+  resolveOrgScope,
+  scopePatientParam("patientId"),
+  listNotes
+);
+
+router.post(
+  "/patients/:patientId/notes/:id/correct",
+  authRequired,
+  requireRole(...CLINICAL_STAFF),
+  resolveOrgScope,
+  scopePatientParam("patientId"),
+  correctNote
 );
 
 module.exports = router;
