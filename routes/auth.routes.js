@@ -7,7 +7,6 @@ const {
   register,
   verifyOtpController,
   refresh,
-  simpleLogin,
 } = require("../controllers/auth.controller");
 const { authRequired } = require("../middleware/auth");
 const { addDevData } = require("../controllers/auth.controller");
@@ -16,7 +15,6 @@ const router = express.Router();
 
 router.post("/refresh-token", refresh);
 router.post("/login", login);
-router.post("/simple-login", simpleLogin);
 router.get("/check-me", authRequired, me);
 router.post("/logout", authRequired, logout);
 router.post("/register", authRequired, register);
