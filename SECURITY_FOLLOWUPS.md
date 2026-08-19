@@ -42,3 +42,30 @@ privilege-escalation fix for the admin user-mutation and care-team routes.
   the box; if a hotfix must be made on the box, it needs to be committed and
   pushed the same day. Consider a pre-deploy `git status` gate that refuses to
   deploy when the working tree is dirty.
+
+## 6. IDOR: cross-org clinician read on `getDoctorsByOrganization` — LIVE in prod
+- `GET /api/org/organization/:organizationId`
+  (`routes/org.routes.js:101`, `controllers/organization.controller.js:556`)
+  reads the org id straight from the client-supplied path param and never runs
+  `resolveOrgScope`. It is gated `requireRole("admin","super-admin")` but does not
+  check that an admin's requested org is their own — so an admin at clinic A can
+  request `/api/org/organization/<B>` and get clinic B's active clinician roster
+  (id, name, username, email, phoneNumber). A live cross-org read of PHI-adjacent
+  staff data, on deployed code.
+- Callers today: `AddUserModal.jsx:39` and `EditUserModal.jsx:61` (dashboard),
+  both passing the org in the URL path.
+- **Fix size — small, and worth shipping on its own.** `orgScope.js` is already on
+  main, so this needs no new infrastructure. Two shapes:
+  - *Tightest, zero frontend risk (recommended to ship now):* add a guard so a
+    non-super-admin can only read their own org — resolve the caller's role, and if
+    not super-admin, force the query to `req.user.org_id` (or 404 when the path id
+    differs). ~5 lines in the controller; admins and super-admins keep working
+    exactly as today, the cross-org read is closed.
+  - *Consistent with the rest of the clinical surface (do later):* add
+    `resolveOrgScope` to the route and read `req.orgScope` instead of the path param.
+    Transparent for admins (scope ignores client input, uses own org). BUT
+    super-admins resolve their org from `?organizationId=` (query), while the two
+    callers pass it in the path and the fetch interceptor's `CLINICAL_RE` does not
+    cover `/api/org/*` — so this variant also needs the callers (or the interceptor)
+    updated, or a super-admin path-param fallback in `resolveOrgScope`. Bigger blast
+    radius; not needed to close the vuln.
