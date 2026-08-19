@@ -1,0 +1,237 @@
+// services/patientEnrollment.service.js
+//
+// Transactional patient enrollment (§3.1). One enrollment writes users, role,
+// patient_profiles, and — when provided — patient_conditions, care team,
+// patient_consents, patient_devices, and the 99453 rpm_device_setups. All or
+// nothing: a half-enrolled patient is worse than a failed enrollment.
+//
+// The patient's password is a random, un-guessable secret (the column is NOT
+// NULL) that nobody uses — patients authenticate by phone + SMS OTP (Option 1).
+const db = require("../config/db");
+const bcrypt = require("bcrypt");
+const crypto = require("crypto");
+
+function httpError(status, message) {
+  const e = new Error(message);
+  e.httpStatus = status;
+  return e;
+}
+
+async function generateUniqueUsername(conn) {
+  for (let i = 0; i < 5; i++) {
+    const candidate = "patient_" + crypto.randomBytes(4).toString("hex");
+    const [rows] = await conn.query(
+      "SELECT id FROM users WHERE username = ? LIMIT 1",
+      [candidate]
+    );
+    if (rows.length === 0) return candidate;
+  }
+  throw httpError(500, "Could not generate a unique username");
+}
+
+async function enrollPatient({
+  actorId,
+  organizationId,
+  name,
+  email,
+  username,
+  phoneNumber,
+  dateOfBirth,
+  enrolledAt,
+  programStatus,
+  insurancePayerId,
+  comments,
+  conditions,
+  careTeam,
+  consent,
+  device,
+}) {
+  // Hash a random password OUTSIDE the transaction (in-memory compute, can't
+  // half-commit). Never returned to anyone.
+  const randomPassword = crypto.randomBytes(24).toString("base64");
+  const hashedPassword = await bcrypt.hash(randomPassword, 12);
+
+  const conn = await db.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    // --- resolve/validate before writes (relational checks inside the txn) ---
+    let finalUsername = username;
+    if (!finalUsername) {
+      finalUsername = await generateUniqueUsername(conn);
+    } else {
+      const [u] = await conn.query(
+        "SELECT id FROM users WHERE username = ? LIMIT 1",
+        [finalUsername]
+      );
+      if (u.length) throw httpError(409, "Username already exists");
+    }
+
+    const [e] = await conn.query(
+      "SELECT id FROM users WHERE email = ? LIMIT 1",
+      [email]
+    );
+    if (e.length) throw httpError(409, "Email already exists");
+
+    if (insurancePayerId != null) {
+      const [p] = await conn.query(
+        "SELECT id FROM insurance_payers WHERE id = ? AND is_active = 1",
+        [insurancePayerId]
+      );
+      if (!p.length) throw httpError(400, "Unknown or inactive insurance_payer_id");
+    }
+
+    if (device) {
+      const [dt] = await conn.query(
+        "SELECT `key` FROM device_types WHERE `key` = ? AND is_active = 1",
+        [device.device_type]
+      );
+      if (!dt.length) {
+        throw httpError(
+          400,
+          `device_type '${device.device_type}' is not available for enrollment`
+        );
+      }
+    }
+
+    if (device && device.setup && !consent) {
+      throw httpError(
+        400,
+        "Device setup (99453) requires consent; provide the consent block"
+      );
+    }
+
+    if (careTeam && careTeam.length) {
+      const [docs] = await conn.query(
+        `SELECT u.id
+           FROM users u JOIN role r ON r.user_id = u.id
+          WHERE u.id IN (?) AND u.organization_id = ?
+            AND r.role_type = 'clinician' AND u.is_active = 1`,
+        [careTeam, organizationId]
+      );
+      const valid = new Set(docs.map((d) => Number(d.id)));
+      const invalid = careTeam.filter((id) => !valid.has(Number(id)));
+      if (invalid.length) {
+        throw httpError(
+          400,
+          `Not clinicians in this organization: ${invalid.join(", ")}`
+        );
+      }
+    }
+
+    // --- writes ---
+    const [ures] = await conn.query(
+      `INSERT INTO users
+         (username, name, email, password, phoneNumber, is_active, organization_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 1, ?, NOW(), NOW())`,
+      [finalUsername, name, email, hashedPassword, phoneNumber, organizationId]
+    );
+    const patientId = ures.insertId;
+
+    await conn.query(
+      `INSERT INTO role (username, user_id, role_type, created_at, updated_at)
+       VALUES (?, ?, 'patient', NOW(), NOW())`,
+      [finalUsername, patientId]
+    );
+
+    await conn.query(
+      `INSERT INTO patient_profiles
+         (user_id, date_of_birth, enrolled_at, program_status, insurance_payer_id, comments)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [patientId, dateOfBirth, enrolledAt, programStatus, insurancePayerId, comments]
+    );
+
+    let conditionsCount = 0;
+    if (conditions && conditions.length) {
+      await conn.query(
+        "INSERT INTO patient_conditions (patient_id, name) VALUES ?",
+        [conditions.map((c) => [patientId, c])]
+      );
+      conditionsCount = conditions.length;
+    }
+
+    let careTeamCount = 0;
+    if (careTeam && careTeam.length) {
+      await conn.query(
+        "INSERT INTO patient_doctor_assignments (patient_id, doctor_id, assigned_by) VALUES ?",
+        [careTeam.map((docId) => [patientId, docId, actorId])]
+      );
+      careTeamCount = careTeam.length;
+    }
+
+    let consentId = null;
+    if (consent) {
+      const [cres] = await conn.query(
+        `INSERT INTO patient_consents
+           (patient_id, organization_id, status, consent_date, method, obtained_by, supervising_provider_id)
+         VALUES (?, ?, 'obtained', ?, ?, ?, ?)`,
+        [
+          patientId,
+          organizationId,
+          consent.consent_date,
+          consent.method,
+          actorId,
+          consent.supervising_provider_id,
+        ]
+      );
+      consentId = cres.insertId;
+    }
+
+    let deviceCreated = false;
+    if (device) {
+      await conn.query(
+        `INSERT INTO patient_devices
+           (patient_id, organization_id, device_type, serial_number, assigned_at, assigned_by, status)
+         VALUES (?, ?, ?, ?, ?, ?, 'active')`,
+        [
+          patientId,
+          organizationId,
+          device.device_type,
+          device.serial_number,
+          device.assigned_at,
+          actorId,
+        ]
+      );
+      deviceCreated = true;
+    }
+
+    let setupCreated = false;
+    if (device && device.setup && consentId) {
+      await conn.query(
+        `INSERT INTO rpm_device_setups
+           (patient_id, organization_id, device_type, setup_date, performed_by, consent_id, billed)
+         VALUES (?, ?, ?, ?, ?, ?, 0)`,
+        [
+          patientId,
+          organizationId,
+          device.device_type,
+          device.assigned_at,
+          actorId,
+          consentId,
+        ]
+      );
+      setupCreated = true;
+    }
+
+    await conn.commit();
+    return {
+      patientId,
+      username: finalUsername,
+      conditionsCount,
+      careTeamCount,
+      consentCreated: !!consent,
+      deviceCreated,
+      setupCreated,
+    };
+  } catch (err) {
+    await conn.rollback();
+    if (err && err.code === "ER_DUP_ENTRY") {
+      throw httpError(409, "Email or username already exists");
+    }
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+module.exports = { enrollPatient };
