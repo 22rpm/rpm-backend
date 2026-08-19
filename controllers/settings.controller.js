@@ -75,10 +75,10 @@ const updateSettingsController = async (req, res) => {
   } catch (error) {
     console.error("Update settings error:", error);
     if (error.code === "USERNAME_TAKEN") {
-      return res.status(400).json({ error: "Username already taken" });
+      return res.status(409).json({ error: "Username already taken" });
     }
     if (error.code === "EMAIL_TAKEN") {
-      return res.status(400).json({ error: "Email already taken" });
+      return res.status(409).json({ error: "Email already taken" });
     }
     if (error.code === "INVALID_EMAIL") {
       return res.status(400).json({ error: "Invalid email format" });

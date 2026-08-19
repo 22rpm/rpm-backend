@@ -531,7 +531,8 @@ const verifyOtpController = async (req, res) => {
       return res.status(400).json({ error: "Invalid or expired OTP" });
     }
 
-    const role = await findRoleByUsername(user.username);
+    // Resolve role by user_id (same authorization primitive as login).
+    const role = await findRoleByUserId(user.id);
 
     // Successful OTP on this device -> trust it going forward.
     const fp = buildDeviceFingerprint(req, req.body.client_device_id);
@@ -1044,7 +1045,8 @@ const refresh = async (req, res) => {
           return res.status(403).json({ message: "Refresh token expired" });
         }
 
-        const role = await findRoleByUsername(user.username);
+        // Resolve role by user_id (same authorization primitive as login).
+        const role = await findRoleByUserId(user.id);
 
         const accessToken = jwt.sign(
           {
