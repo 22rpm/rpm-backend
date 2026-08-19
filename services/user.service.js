@@ -21,6 +21,25 @@ async function findRoleByUsername(username) {
   return rows[0]?.role_type || null;
 }
 
+// Resolve a user's role by user_id (not the non-unique username), using
+// most-privileged-wins. With UNIQUE(role.user_id) landed this returns the single
+// row; the privilege ordering is defense-in-depth on an authorization primitive.
+async function findRoleByUserId(userId) {
+  const [rows] = await db.query(
+    `SELECT role_type FROM role WHERE user_id = ?
+      ORDER BY CASE role_type
+        WHEN 'super-admin' THEN 4
+        WHEN 'admin' THEN 3
+        WHEN 'clinician' THEN 2
+        WHEN 'patient' THEN 1
+        ELSE 0 END DESC,
+        id ASC
+      LIMIT 1`,
+    [userId]
+  );
+  return rows[0]?.role_type || null;
+}
+
 async function createUser({
   username,
   name,
@@ -94,6 +113,7 @@ async function findUserByPhone(phone) {
 module.exports = {
   findUserByEmail,
   findRoleByUsername,
+  findRoleByUserId,
   findUserByPhone,
   createUser,
   assignRole,

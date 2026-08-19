@@ -14,8 +14,19 @@ import bcrypt from "bcrypt";
 // Role lives in the separate `role` table (users has no role column), keyed by
 // user_id. Take the most recent role row, matching how auth resolves a role.
 async function getUserRoleType(userId) {
+  // Most-privileged-wins, not newest-wins: a stale/newer lower-privilege row must
+  // never lower a user's effective role. With UNIQUE(role.user_id) this returns
+  // the single row; the ordering is defense-in-depth on an authorization primitive.
   const [rows] = await pool.query(
-    "SELECT role_type FROM role WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+    `SELECT role_type FROM role WHERE user_id = ?
+      ORDER BY CASE role_type
+        WHEN 'super-admin' THEN 4
+        WHEN 'admin' THEN 3
+        WHEN 'clinician' THEN 2
+        WHEN 'patient' THEN 1
+        ELSE 0 END DESC,
+        id ASC
+      LIMIT 1`,
     [userId]
   );
   return rows[0]?.role_type || null;

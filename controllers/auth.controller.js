@@ -8,6 +8,7 @@ const db = require("../config/db");
 const {
   findUserByEmail,
   findRoleByUsername,
+  findRoleByUserId,
   updateLastLogin,
   findUserByUsername,
   findUserByPhone,
@@ -281,7 +282,12 @@ if (!user) {
     
 
     // ---- 3. Role ----------------------------------------------------------
-    const role = await findRoleByUsername(user.username);
+    // Resolve by user_id (not the non-unique username) — the user row is already
+    // loaded, and role is an authorization boundary (esp. once patient logins may
+    // skip the password). Other auth flows still use findRoleByUsername; see the
+    // report — they are correct once UNIQUE(users.username) + UNIQUE(role.user_id)
+    // land.
+    const role = await findRoleByUserId(user.id);
     if (!role) {
       return res.status(401).json({ message: "User role not found" });
     }
