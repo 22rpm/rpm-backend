@@ -335,7 +335,8 @@ if (!user) {
     }
 
     // ---- 6. Otherwise: send an OTP ----------------------------------------
-    const otp = ("" + Math.floor(100000 + Math.random() * 900000)).substring(0, 6);
+    // Cryptographically secure — this is a second factor on PHI, so not Math.random.
+    const otp = String(crypto.randomInt(100000, 1000000));
     await createOtp(user.id, otp, "login");
 
     if (loginChannel === "sms") {
