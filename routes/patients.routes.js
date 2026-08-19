@@ -5,12 +5,18 @@
 const express = require("express");
 const router = express.Router();
 const { authRequired, requireRole } = require("../middleware/auth");
-const { resolveOrgScope } = require("../middleware/orgScope");
+const { resolveOrgScope, scopePatientParam } = require("../middleware/orgScope");
 const {
   enrollPatient,
   getEnrollmentOptions,
 } = require("../controllers/patientEnrollment.controller");
 const { getWorklist } = require("../controllers/patientWorklist.controller");
+const {
+  getPatientForEdit,
+  updatePatient,
+} = require("../controllers/patientEdit.controller");
+
+const staffRoles = requireRole("clinician", "admin", "super-admin");
 
 // POST /api/patients — enroll a patient into the caller's organization
 // (super-admin passes ?organizationId=). Not patient-linked (creating a new
@@ -44,6 +50,31 @@ router.get(
   requireRole("clinician", "admin", "super-admin"),
   resolveOrgScope,
   getWorklist
+);
+
+// Patient-scoped routes come LAST so the static paths above (/enrollment-options,
+// /worklist) are matched first and not swallowed by the :patientId param.
+// scopePatientParam 404s a patient outside the caller's org.
+//
+// GET /api/patients/:patientId — editable detail to prefill the edit form.
+router.get(
+  "/:patientId",
+  authRequired,
+  staffRoles,
+  resolveOrgScope,
+  scopePatientParam("patientId"),
+  getPatientForEdit
+);
+
+// PATCH /api/patients/:patientId — upsert profile + conditions + care team.
+// Creates patient_profiles when absent. enrolled_at changes are audited.
+router.patch(
+  "/:patientId",
+  authRequired,
+  staffRoles,
+  resolveOrgScope,
+  scopePatientParam("patientId"),
+  updatePatient
 );
 
 module.exports = router;
