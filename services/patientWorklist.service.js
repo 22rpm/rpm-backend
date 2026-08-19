@@ -55,8 +55,14 @@ async function getWorklist({ orgScope, userId, month, mine }) {
     params.push(userId);
   }
   const [rows] = await db.query(
+    // DATE columns are formatted to plain 'YYYY-MM-DD' strings in SQL: mysql2
+    // otherwise returns them as midnight-UTC Date objects that serialize to full
+    // ISO timestamps and shift a day for any client west of UTC. last_login is a
+    // real timestamp (has a time component) and stays as-is.
     `SELECT u.id, u.name, u.last_login,
-            p.date_of_birth, p.enrolled_at, p.program_status, p.comments,
+            DATE_FORMAT(p.date_of_birth, '%Y-%m-%d') AS date_of_birth,
+            DATE_FORMAT(p.enrolled_at, '%Y-%m-%d') AS enrolled_at,
+            p.program_status, p.comments,
             ip.name AS insurance_payer
        FROM users u
        JOIN role r ON r.user_id = u.id AND r.role_type = 'patient'
