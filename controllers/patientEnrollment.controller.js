@@ -158,4 +158,18 @@ async function enrollPatient(req, res) {
   }
 }
 
-module.exports = { enrollPatient };
+// GET /api/patients/enrollment-options — payers + device types (global, active)
+// and the org-scoped clinician roster, for the enrollment form. Org comes from
+// req.orgScope (set by resolveOrgScope), never the client.
+async function getEnrollmentOptions(req, res) {
+  try {
+    const { payers, device_types, clinicians } =
+      await enrollmentService.getEnrollmentOptions(req.orgScope);
+    return res.status(200).json({ ok: true, payers, device_types, clinicians });
+  } catch (err) {
+    console.error("getEnrollmentOptions error:", err);
+    return res.status(500).json({ ok: false, message: "Server error" });
+  }
+}
+
+module.exports = { enrollPatient, getEnrollmentOptions };

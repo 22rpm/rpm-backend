@@ -234,4 +234,31 @@ async function enrollPatient({
   }
 }
 
-module.exports = { enrollPatient };
+// Read-only lookups the enrollment form needs, in one round trip.
+//
+// payers and device_types are GLOBAL lookups (not org-scoped) — active rows only.
+// clinicians IS the org-scoped roster for the care-team picker: active clinicians
+// in `orgScope`. This is deliberately NOT organization.getDoctorsByOrganization,
+// which trusts a client-passed org id and skips resolveOrgScope (cross-org read —
+// see SECURITY_FOLLOWUPS). Here the org comes from req.orgScope, never the client.
+async function getEnrollmentOptions(orgScope) {
+  const [payers] = await db.query(
+    "SELECT id, name FROM insurance_payers WHERE is_active = 1 ORDER BY sort_order, name"
+  );
+  const [deviceTypes] = await db.query(
+    "SELECT `key`, label FROM device_types WHERE is_active = 1 ORDER BY sort_order, label"
+  );
+  const [clinicians] = await db.query(
+    `SELECT u.id, u.name
+       FROM users u
+       JOIN role r ON r.user_id = u.id
+      WHERE u.organization_id = ?
+        AND r.role_type = 'clinician'
+        AND u.is_active = 1
+      ORDER BY u.name`,
+    [orgScope]
+  );
+  return { payers, device_types: deviceTypes, clinicians };
+}
+
+module.exports = { enrollPatient, getEnrollmentOptions };

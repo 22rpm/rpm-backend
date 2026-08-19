@@ -6,7 +6,10 @@ const express = require("express");
 const router = express.Router();
 const { authRequired, requireRole } = require("../middleware/auth");
 const { resolveOrgScope } = require("../middleware/orgScope");
-const { enrollPatient } = require("../controllers/patientEnrollment.controller");
+const {
+  enrollPatient,
+  getEnrollmentOptions,
+} = require("../controllers/patientEnrollment.controller");
 
 // POST /api/patients — enroll a patient into the caller's organization
 // (super-admin passes ?organizationId=). Not patient-linked (creating a new
@@ -17,6 +20,17 @@ router.post(
   requireRole("clinician", "admin", "super-admin"),
   resolveOrgScope,
   enrollPatient
+);
+
+// GET /api/patients/enrollment-options — lookups for the enrollment form:
+// active payers + active device types (global) and the org-scoped clinician
+// roster. Same auth + scope as the POST (super-admin passes ?organizationId=).
+router.get(
+  "/enrollment-options",
+  authRequired,
+  requireRole("clinician", "admin", "super-admin"),
+  resolveOrgScope,
+  getEnrollmentOptions
 );
 
 module.exports = router;
