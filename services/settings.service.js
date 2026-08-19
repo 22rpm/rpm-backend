@@ -16,6 +16,21 @@ async function updateSettingsService(
     throw error;
   }
 
+  // Reject a username already taken by another user with a clear conflict rather
+  // than a duplicate-key error. This guards even before UNIQUE(users.username)
+  // lands; the ER_DUP_ENTRY catch below is the post-migration backstop.
+  if (username) {
+    const [dupe] = await pool.execute(
+      "SELECT id FROM users WHERE username = ? AND id <> ? LIMIT 1",
+      [username, userId]
+    );
+    if (dupe.length) {
+      const error = new Error("Username already taken");
+      error.code = "USERNAME_TAKEN";
+      throw error;
+    }
+  }
+
   // Build dynamic query arrays
   const fields = [];
   const values = [];
@@ -46,7 +61,20 @@ async function updateSettingsService(
 
   // Update users table
   const query = `UPDATE users SET ${fields.join(", ")} WHERE id = ?`;
-  await pool.execute(query, values);
+  try {
+    await pool.execute(query, values);
+  } catch (err) {
+    // Backstop for the UNIQUE(users.username)/email constraints (post-migration).
+    if (err && err.code === "ER_DUP_ENTRY") {
+      const dupEmail = /email/i.test(err.message || "");
+      const e = new Error(
+        dupEmail ? "Email already taken" : "Username already taken"
+      );
+      e.code = dupEmail ? "EMAIL_TAKEN" : "USERNAME_TAKEN";
+      throw e;
+    }
+    throw err;
+  }
 
   // If username updated, also update in role table
   if (username) {

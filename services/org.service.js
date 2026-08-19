@@ -67,11 +67,11 @@ async function getAllOrganizations() {
       "organizations.created_at",
       "organizations.updated_at",
       knex.raw(`
-        (SELECT COUNT(*) 
-         FROM users 
-         JOIN roles ON users.id = roles.user_id 
-         WHERE users.organization_id = organizations.id 
-         AND roles.role_type = 'admin') as total_admins
+        (SELECT COUNT(*)
+         FROM users
+         JOIN role ON users.id = role.user_id
+         WHERE users.organization_id = organizations.id
+         AND role.role_type = 'admin') as total_admins
       `)
     );
 }
@@ -318,8 +318,61 @@ async function getAllOrganizationsWithAdminCount() {
     throw error;
   }
 }
+// Organization detail plus per-role headcounts and device count, used by the
+// super-admin org-context view. Roles: 'clinician' (doctors), 'patient',
+// 'admin'. "Active devices" = device rows owned by active users in the org.
+async function getOrganizationWithCounts(id) {
+  const parsedId = parseInt(id);
+  if (isNaN(parsedId)) {
+    throw new Error("Invalid organization ID");
+  }
+
+  const organization = await knex("organizations")
+    .where({ id: parsedId, is_deleted: false })
+    .first();
+
+  if (!organization) return null;
+
+  const countUsersByRole = async (roleType) => {
+    const row = await knex("users as u")
+      .join("role as r", "u.id", "r.user_id")
+      .where({ "u.organization_id": parsedId, "r.role_type": roleType })
+      .countDistinct({ c: "u.id" })
+      .first();
+    return Number(row && row.c) || 0;
+  };
+
+  const [doctors, patients, admins] = await Promise.all([
+    countUsersByRole("clinician"),
+    countUsersByRole("patient"),
+    countUsersByRole("admin"),
+  ]);
+
+  const deviceRow = await knex("devices as d")
+    .join("users as u", "d.user_id", "u.id")
+    .where({ "u.organization_id": parsedId, "u.is_active": 1 })
+    .countDistinct({ c: "d.id" })
+    .first();
+  const activeDevices = Number(deviceRow && deviceRow.c) || 0;
+
+  return {
+    id: organization.id,
+    name: organization.name,
+    org_code: organization.org_code,
+    created_at: organization.created_at,
+    updated_at: organization.updated_at,
+    counts: {
+      doctors,
+      patients,
+      admins,
+      active_devices: activeDevices,
+    },
+  };
+}
+
 module.exports = {
   createOrganization,
+  getOrganizationWithCounts,
   findOrganizationById,
   findOrganizationByCode,
   getAllOrganizationsWithAdminCount,

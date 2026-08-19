@@ -10,6 +10,44 @@ import {
   findAllUsers,
 } from "../services/admin.service.js"; // note the .js extension
 import bcrypt from "bcrypt";
+
+// Role lives in the separate `role` table (users has no role column), keyed by
+// user_id. Take the most recent role row, matching how auth resolves a role.
+async function getUserRoleType(userId) {
+  // Most-privileged-wins, not newest-wins: a stale/newer lower-privilege row must
+  // never lower a user's effective role. With UNIQUE(role.user_id) this returns
+  // the single row; the ordering is defense-in-depth on an authorization primitive.
+  const [rows] = await pool.query(
+    `SELECT role_type FROM role WHERE user_id = ?
+      ORDER BY CASE role_type
+        WHEN 'super-admin' THEN 4
+        WHEN 'admin' THEN 3
+        WHEN 'clinician' THEN 2
+        WHEN 'patient' THEN 1
+        ELSE 0 END DESC,
+        id ASC
+      LIMIT 1`,
+    [userId]
+  );
+  return rows[0]?.role_type || null;
+}
+
+// A non-super-admin must never modify a super-admin account (privilege
+// escalation). Org membership + existence are already enforced upstream by
+// scopePatientParam("userId"); this only adds the role protection on top.
+// Returns true (and sends a 403) if the request must be blocked.
+async function blockedSuperAdminTarget(req, res, targetUserId) {
+  const targetRole = await getUserRoleType(targetUserId);
+  if (targetRole === "super-admin" && req.user.role_type !== "super-admin") {
+    res.status(403).json({
+      ok: false,
+      message: "You are not allowed to modify a super-admin account",
+    });
+    return true;
+  }
+  return false;
+}
+
 export async function getAllUsers(req, res) {
   try {
     const currentUserId = req.user.id;
@@ -33,32 +71,28 @@ export async function getAllUsers(req, res) {
 
     console.log("🔍 Role Type:", role_type);
     console.log("🔍 Org ID:", org_id);
-    console.log("🔍 Role Type === 'admin':", role_type === "admin");
+    console.log("🔍 Resolved org scope:", req.orgScope);
 
-    // ✅ Check if user is admin
-    if (role_type === "admin") {
-      console.log("✅ User is admin, proceeding...");
-
-      // ✅ Org Admin - has org_id
-      if (org_id) {
-        console.log("🔍 User is Org Admin, fetching org users...");
-        const users = await findOrgUsersWithRoles(org_id);
-        return res.status(200).json({
-          ok: true,
-          message: "Users fetched successfully",
-          users,
+    // Both org admins and super-admins may list users, but always within the
+    // single organization resolved by the orgScope middleware:
+    //   - admin        -> their own organization (req.orgScope === their org)
+    //   - super-admin  -> the organization they selected via ?organizationId=
+    // req.orgScope is authoritative; a client-supplied org is never trusted here.
+    if (role_type === "admin" || role_type === "super-admin") {
+      if (req.orgScope === undefined || req.orgScope === null) {
+        return res.status(400).json({
+          ok: false,
+          message: "No organization context resolved",
         });
       }
-      // ✅ Super Admin - no org_id
-      else {
-        console.log("🔍 User is Super Admin, fetching all users...");
-        const allUsers = await findAllUsers();
-        return res.status(200).json({
-          ok: true,
-          message: "All users fetched successfully (Super Admin)",
-          users: allUsers,
-        });
-      }
+
+      console.log("✅ Fetching users for org:", req.orgScope);
+      const users = await findOrgUsersWithRoles(req.orgScope);
+      return res.status(200).json({
+        ok: true,
+        message: "Users fetched successfully",
+        users,
+      });
     }
 
     console.log("❌ Access denied - Role check failed");
@@ -75,6 +109,9 @@ export async function updateUser(req, res) {
   try {
     const { userId } = req.params;
     const { name, email, phoneNumber, status, password } = req.body;
+
+    // A non-super-admin may not modify a super-admin account.
+    if (await blockedSuperAdminTarget(req, res, userId)) return;
 
     let is_active = null;
     if (status) {
@@ -125,6 +162,9 @@ export async function toggleUserStatus(req, res) {
       return res.status(400).json({ ok: false, message: "Invalid user ID" });
     }
 
+    // A non-super-admin may not modify a super-admin account.
+    if (await blockedSuperAdminTarget(req, res, parsedUserId)) return;
+
     const isActive = status === "Active";
     const success = await toggleUserStatusService(parsedUserId, isActive);
 
@@ -154,8 +194,15 @@ export async function deleteUser(req, res) {
       return res.status(400).json({ ok: false, message: "Invalid user ID" });
     }
 
-    // Skip self-delete check for now since no auth
-    // if (parsedUserId === req.user.id) { ... }
+    // Restore the self-delete guard now that req.user exists.
+    if (parsedUserId === Number(req.user.id)) {
+      return res
+        .status(400)
+        .json({ ok: false, message: "You cannot delete your own account" });
+    }
+
+    // A non-super-admin may not delete a super-admin account.
+    if (await blockedSuperAdminTarget(req, res, parsedUserId)) return;
 
     const success = await deleteUserService(parsedUserId);
     console.log("success", success);
