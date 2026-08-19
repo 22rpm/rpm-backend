@@ -3,29 +3,27 @@
 Tracked, NOT fixed on `hotfix/admin-routes-missing-auth`. Recorded during the
 privilege-escalation fix for the admin user-mutation and care-team routes.
 
-## 1. `role.user_id` needs a UNIQUE constraint
-- `role.user_id` is indexed `MUL`, not `UNIQUE`, so a user can accumulate
-  multiple role rows.
-- **This is not hypothetical — it triggers on the next role change.**
-  `services/admin.service.js:144` `updateUserRole` runs
-  `INSERT ... ON DUPLICATE KEY UPDATE role_type = ...` (`:148`). With no unique
-  key on `user_id`, the `ON DUPLICATE KEY` branch can never fire, so it will
-  **silently INSERT a second role row** the first time anyone changes a user's
-  role, rather than updating the existing one.
-- **Fix:** add `UNIQUE(role.user_id)` (one role per user) via migration, after a
-  data check/backfill to collapse any pre-existing duplicates. Current DB state:
-  5 role rows / 5 distinct users / 0 duplicates (clean today).
+## 1. `role.user_id` needs a UNIQUE constraint — RESOLVED (`43706f2`)
+- Added `UNIQUE(role.user_id)` via `20260819120000_add_unique_role_user_id.js`
+  (defensive dedup keeping the most-privileged row, then the constraint). This
+  makes `updateUserRole`'s `INSERT ... ON DUPLICATE KEY UPDATE` behave as intended.
 
-## 2. `getUserRoleType` should resolve most-privileged-wins, not newest-wins
-- `controllers/admin.controller.js:16` `getUserRoleType` currently takes the
-  most recent role row (`ORDER BY id DESC LIMIT 1`).
-- Combined with #1, this is a security hazard for
-  `blockedSuperAdminTarget` (`controllers/admin.controller.js:28`): if a
-  super-admin ever gets a newer `admin` role row, "newest wins" returns `admin`,
-  so the guard stops treating them as a super-admin and a plain admin could
-  modify/delete/reset-password the super-admin account. A stale/newer lower-priv
-  row must not be able to defeat the guard.
-- **Fix:** resolve the effective role as the **highest-privilege** role among the
-  user's rows (super-admin > admin > clinician > patient), not the newest.
-- **Left as-is for now** (per decision) — safe only because #1 hasn't triggered
-  yet; fix #1 and #2 together.
+## 2. `getUserRoleType` most-privileged-wins — RESOLVED (`43706f2`)
+- `getUserRoleType` and the new `findRoleByUserId` now order by privilege
+  (super-admin > admin > clinician > patient), not newest-wins. All three
+  session-issuing paths (login, verifyOtpController, refresh) resolve role by
+  `user_id`. `UNIQUE(users.username)` also added
+  (`20260819120100_add_unique_users_username.js`); settings username change now
+  returns 409 on conflict.
+
+## 3. OTP generation uses `Math.random()` — should be `crypto.randomInt`
+- Login OTP is generated with `Math.floor(100000 + Math.random() * 900000)`
+  (`controllers/auth.controller.js`, in the login SMS/email OTP path). `Math.random`
+  is not cryptographically secure — for a second factor on PHI it should be
+  `crypto.randomInt(100000, 1000000)`. One-line change. Not blocking.
+
+## 4. Production MySQL root credentials are `root`/`root` — rotate
+- Confirmed on the box today: prod MySQL uses `root`/`root`, stored in
+  `/home/ubuntu/22-rpm/rpm-backend/.env`. Needs credential rotation (a scoped
+  app user, not root) on a scheduled window. Not blocking a code merge, but a
+  standing infrastructure risk.
