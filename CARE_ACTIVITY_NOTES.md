@@ -68,6 +68,32 @@ file and the timer-service comment block together.
 
 ---
 
+## Patient worklist / enrollment schema notes (migrations 20260818*)
+
+### CPT 99453 episode assumption — changing it is a MIGRATION, not a column add
+- `rpm_device_setups` enforces one 99453 per patient per device type via
+  `UNIQUE(patient_id, device_type)`. This assumes **one lifelong RPM episode per
+  patient**.
+- If discharge/re-enroll **episodes** are ever modeled, 99453 becomes billable
+  again for a new episode. Supporting that requires adding `episode_id` to
+  `rpm_device_setups` **and to the unique key** — i.e. a schema migration that
+  rewrites the unique constraint, not just a nullable column add. Written here so
+  it's findable rather than remembered.
+
+### device_type keys are UNVERIFIED except 'bp' — confirm before non-BP enrollment
+- `device_types` is a lookup (chosen over ENUM and over VARCHAR+app-constraint):
+  adding a type is a data `INSERT`, it keeps FK integrity, and `dev_data_type`
+  holds the verified mapping to what the device actually sends.
+- Only **`bp`** is verified against real `dev_data` traffic (`SELECT DISTINCT
+  dev_type FROM dev_data` returns only `'bp'`) and is seeded `is_active = 1`,
+  `dev_data_type = 'bp'`.
+- `glucose`, `spo2`, `weight`, `peak_flow`, `temperature` are seeded
+  `is_active = 0`, `dev_data_type = NULL`. **The vendor's actual `dev_type`
+  strings for these are unknown.** Before enrolling a patient on anything other
+  than a BP cuff: capture real traffic from that device, set `dev_data_type` to
+  the confirmed string, and flip `is_active = 1`. The enrollment form must offer
+  only `is_active = 1` types.
+
 ## Known issues / TODOs
 
 ### GET /api/care/time-entries should filter by month server-side (Part 2 / billing)
@@ -107,13 +133,16 @@ file and the timer-service comment block together.
   case. Frontend should treat `time_entry` as "the entry currently linked to this
   call," and must not assume a correction always produced a new ledger row.
 
-### patient_calls.outcome — needs a constrained set (change B)
+### patient_calls.outcome — needs a constrained set — **BLOCKS BILLING ENGINE**
 - Currently `VARCHAR(255)` (`config/migrations/20260817120200_create_patient_calls.js`).
-- Free text can't be reported on, and the billing workflow will ask "how many
-  calls actually reached the patient." **Before production use**, migrate this to
-  a constrained set. **The real category list must be sourced from the lead
-  nurse** (e.g. reached / no answer / voicemail / callback requested / …) — do
-  not invent the values.
+- **Promoted from "before production" to a hard blocker:** the billing engine's
+  interactive-communication test (CPT 99457 requires >=1 *live* interactive
+  communication per month; data review alone does not qualify) detects a "reached"
+  call from `outcome`. Free text can't be evaluated reliably, so the engine cannot
+  determine that test until `outcome` is a constrained set.
+- **The real category list must be sourced from the lead nurse** (e.g. reached /
+  no answer / voicemail / callback requested / …) — do not invent the values.
+  Then migrate `outcome` to that set.
 
 ### alerts.user_id VARCHAR vs INT patient_id — timeline join hazard (change C)
 - `alerts.user_id` is `VARCHAR(255)`; all new tables use `INT UNSIGNED patient_id`.
