@@ -14,9 +14,8 @@ function httpError(status, message) {
   return e;
 }
 
-// "YYYY-MM" -> calendar-month window. (Note: 99454/99445 are technically per
-// 30-day period; we use the selected calendar month for consistency with the
-// worklist. The calendar-vs-30-day convention is a biller flag — see doc.)
+// "YYYY-MM" -> calendar-month window. CONFIRMED: the billing period is the
+// selected calendar month (not a rolling 30-day period).
 function monthWindow(month) {
   let y, m;
   if (typeof month === "string" && /^\d{4}-\d{2}$/.test(month)) {
@@ -40,10 +39,12 @@ function monthWindow(month) {
   };
 }
 
-// First band (most-days-first) whose minDays is met.
+// Device-SUPPLY code (99445/99454) from distinct transmission days. Returns the
+// matched band, or null when under the billable minimum (0-1 days). Does NOT
+// govern 99453, which is independent of transmission days.
 function deviceSupplyForDays(days) {
-  if (!days || days <= 0) return null;
-  for (const band of rules.deviceSupplyBands) {
+  if (!days || days < rules.deviceSupply.minBillableDays) return null;
+  for (const band of rules.deviceSupply.bands) {
     if (days >= band.minDays) return band;
   }
   return null;
@@ -147,19 +148,31 @@ async function getRpmNote({ patientId, orgScope, month }) {
       GROUP BY t.activity_category`,
     [patientId, orgScope, win.start, win.next]
   );
+  // Map each activity_category into the template's two TIME DOCUMENTATION
+  // buckets. Only Data Review + Interaction counts toward the 20-min 99457/
+  // 99458 threshold; Setup/Education backs 99453 (which is not time-gated).
+  const setupCats = new Set(rules.timeBuckets.setup_education);
+  const reviewCats = new Set(rules.timeBuckets.data_review_interaction);
   let setupSecs = 0;
-  let mgmtSecs = 0;
+  let reviewSecs = 0;
+  let otherSecs = 0;
   const byCategory = {};
   for (const row of timeRows) {
     const secs = Number(row.secs || 0);
     byCategory[row.activity_category] = Math.round(secs / 60);
-    const bucket = rules.categoryContribution[row.activity_category] || "management";
-    if (bucket === "setup") setupSecs += secs;
-    else mgmtSecs += secs;
+    if (setupCats.has(row.activity_category)) setupSecs += secs;
+    else if (reviewCats.has(row.activity_category)) reviewSecs += secs;
+    else {
+      // uncategorised (e.g. "other") -> counts toward Data Review + Interaction,
+      // but its presence is flagged so the provider can see it.
+      reviewSecs += secs;
+      otherSecs += secs;
+    }
   }
-  const setupMinutes = Math.round(setupSecs / 60);
-  const managementMinutes = Math.round(mgmtSecs / 60);
-  const totalMinutes = setupMinutes + managementMinutes;
+  const setupEducationMinutes = Math.round(setupSecs / 60);
+  const dataReviewMinutes = Math.round(reviewSecs / 60);
+  const uncategorizedMinutes = Math.round(otherSecs / 60);
+  const totalMinutes = setupEducationMinutes + dataReviewMinutes;
 
   // Communication — head-of-chain patient_calls in the month.
   const [calls] = await db.query(
@@ -188,14 +201,71 @@ async function getRpmNote({ patientId, orgScope, month }) {
     [patientId, orgScope, win.start, win.next]
   );
 
-  // Apply the configurable billing rules.
-  const deviceSupply = deviceSupplyForDays(daysWithReadings);
+  // ---- Apply the confirmed billing rules -------------------------------------
+  // Device SUPPLY (99445/99454). 0-1 days -> not billable, with a reason string
+  // instead of a blank. Independent of 99453.
+  const deviceSupplyBand = deviceSupplyForDays(daysWithReadings);
+  const deviceSupply = deviceSupplyBand
+    ? { code: deviceSupplyBand.code, days: daysWithReadings, reason: null }
+    : { code: null, days: daysWithReadings, reason: rules.deviceSupply.insufficientMessage };
+
+  // 99457 = TWO independent tests, both required (Quantix KEY RULE):
+  //   (a) 20+ minutes of Data Review + Interaction time
+  //   (b) >=1 LIVE interactive communication (phone/video/in person) this month
+  const testA = dataReviewMinutes >= rules.managementTime.firstUnit.minMinutes;
+
+  // (b) detection — interim modes because patient_calls.outcome is free text.
+  const mode = rules.interactiveRequirement.detection;
+  let testB; // true | false | null(unverifiable)
+  let testBBasis;
+  if (calls.length === 0) {
+    testB = false;
+    testBBasis = "no calls logged this month";
+  } else if (mode === "any_call") {
+    testB = true;
+    testBBasis = `${calls.length} call(s) logged (any-call mode)`;
+  } else if (mode === "outcome") {
+    const q = new Set(rules.interactiveRequirement.qualifyingOutcomes);
+    const hit = calls.some((c) => c.outcome && q.has(String(c.outcome).toLowerCase()));
+    testB = hit;
+    testBBasis = hit
+      ? "a call outcome indicates a live interaction"
+      : "no call outcome indicates a live interaction";
+  } else {
+    // "unverifiable": calls exist but free-text outcome can't confirm a live
+    // connection -> not auto-satisfied; provider must verify.
+    testB = null;
+    testBBasis = `${calls.length} call(s) logged, but outcome is free text — cannot confirm a live interaction; provider must verify`;
+  }
+  const interactive = {
+    test_a_minutes_met: testA,
+    test_b_live_interaction: testB,
+    test_b_basis: testBBasis,
+    detection_mode: mode,
+  };
+
+  // 99457 bills only when BOTH tests pass; unverifiable (null) is NOT a pass.
+  // 99458 is an add-on: one per full additional 20 min beyond the first 20.
+  const billable99457 = testA && testB === true;
   const managementCodes = [];
-  if (managementMinutes >= rules.managementTime.firstUnit.minMinutes)
+  let additionalUnits = 0;
+  if (billable99457) {
     managementCodes.push(rules.managementTime.firstUnit.code);
-  if (managementMinutes >= rules.managementTime.additionalUnit.minMinutes)
-    managementCodes.push(rules.managementTime.additionalUnit.code);
+    additionalUnits = Math.floor(
+      (dataReviewMinutes - rules.managementTime.firstUnit.minMinutes) /
+        rules.managementTime.additionalUnit.everyMinutes
+    );
+    for (let i = 0; i < additionalUnits; i++)
+      managementCodes.push(rules.managementTime.additionalUnit.code);
+  }
+
   const setupSupported = setups.length > 0;
+  // 99453 date of service = the setup event; fall back to enrollment date.
+  const setupDos =
+    (setups.find((s) => s.setup_date) || {}).setup_date || p.enrolled_at || null;
+
+  // Provider: single-clinician operating assumption; flag if more than one.
+  const multipleProviders = team.length > 1;
 
   // Missing-data / billing flags (§3.9) — never a refusal.
   const missing = [];
@@ -203,18 +273,37 @@ async function getRpmNote({ patientId, orgScope, month }) {
   if (!p.date_of_birth) missing.push("No date of birth on record");
   if (!p.mrn) missing.push("No MRN on record");
   if (!team.length) missing.push("No care-team provider assigned");
+  if (multipleProviders)
+    missing.push(
+      `Patient has ${team.length} care-team clinicians — confirm the billing provider (assumption is one per patient)`
+    );
   if (!consent.obtained) missing.push("Consent not on record");
   if (!devices.length) missing.push("No active device on record");
   if (!setupSupported) missing.push("No device-education (99453) record");
-  if (daysWithReadings === 0) missing.push("Zero transmission days this month");
-  if (managementMinutes < rules.managementTime.firstUnit.minMinutes)
+  if (daysWithReadings < rules.deviceSupply.minBillableDays)
     missing.push(
-      `Management time ${managementMinutes} min — under ${rules.managementTime.firstUnit.minMinutes} min (99457 not yet supported)`
+      `${daysWithReadings} transmission day(s) — ${rules.deviceSupply.insufficientMessage}; device supply (99445/99454) not billable this month (99453 unaffected)`
+    );
+  if (!testA)
+    missing.push(
+      `Data Review + Interaction time ${dataReviewMinutes} min — under ${rules.managementTime.firstUnit.minMinutes} min; 99457 test (a) not met`
+    );
+  if (testA && testB !== true)
+    missing.push(
+      testB === false
+        ? "99457 test (b) FAILED — no live interactive communication this month (data review alone does not qualify)"
+        : `99457 test (b) UNVERIFIABLE — ${testBBasis}`
+    );
+  if (uncategorizedMinutes > 0)
+    missing.push(
+      `${uncategorizedMinutes} min of uncategorised ("other") time counted toward Data Review + Interaction — review categorisation`
     );
 
   return {
     month: win.label,
     period: { start: win.start, end: win.end },
+    // CONFIRMED: date of service for the monthly codes is the last day of month.
+    date_of_service: win.end,
     patient: {
       id: p.id,
       name: p.name,
@@ -224,7 +313,8 @@ async function getRpmNote({ patientId, orgScope, month }) {
       enrolled_at: p.enrolled_at || null,
       program_status: p.program_status || null,
     },
-    provider: team, // [{id,name}] — biller decides which is the billing provider
+    // Single-clinician assumption; `multiple` flags the confirm-the-biller case.
+    provider: { clinicians: team, multiple: multipleProviders },
     consent,
     devices,
     device_education: setups,
@@ -243,19 +333,35 @@ async function getRpmNote({ patientId, orgScope, month }) {
     communication: {
       methods: calls.length ? ["phone"] : [],
     },
+    // Template TIME DOCUMENTATION section — two buckets. Only Data Review +
+    // Interaction counts toward 99457/99458.
     time_documentation: {
-      setup_minutes: setupMinutes,
-      management_minutes: managementMinutes,
+      setup_education_minutes: setupEducationMinutes,
+      data_review_interaction_minutes: dataReviewMinutes,
+      uncategorized_minutes: uncategorizedMinutes, // "other"; flagged in `missing`
       total_minutes: totalMinutes,
       by_category: byCategory,
     },
     billing: {
-      setup: setupSupported ? rules.setup.code : null,
-      device_supply: deviceSupply
-        ? { code: deviceSupply.code, days: daysWithReadings, pending: !!deviceSupply.pending }
-        : null,
-      management: managementCodes,
+      // 99453 — once per patient per device type; independent of transmission
+      // days. DOS is the setup event.
+      setup: setupSupported
+        ? { code: rules.setup.code, date_of_service: setupDos }
+        : { code: null, date_of_service: null },
+      // 99445/99454 — device supply by transmission-day band; DOS = month end.
+      device_supply: { ...deviceSupply, date_of_service: win.end },
+      // 99457 (+99458 add-ons) — both tests must pass; DOS = month end.
+      management: {
+        codes: managementCodes, // [] when not billable
+        minutes: dataReviewMinutes,
+        additional_units_99458: additionalUnits,
+        interactive, // test (a)/(b) detail incl. which failed
+        date_of_service: win.end,
+      },
     },
+    // Template attestation text — PENDING final compliance wording; sourced from
+    // config so the PDF layout is untouched when it's swapped.
+    attestation: rules.attestation,
     // READ-ONLY history for the month, shown beside the blank fields so the
     // signing provider can see what was documented without leaving the form.
     // This is explicitly NOT the assessment/summary — never folded into a
