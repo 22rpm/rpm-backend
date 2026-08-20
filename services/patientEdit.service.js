@@ -17,7 +17,23 @@ function httpError(status, message) {
 // Editable detail for the edit form. The profile row may not exist yet; return
 // nulls (with has_profile:false) so the form opens and PATCH upserts. Dates are
 // formatted to plain YYYY-MM-DD (no tz shift), as in the worklist.
-async function getPatientForEdit(patientId) {
+// care_team is returned as [{id, name, status}] — not bare ids — so the edit
+// form can show and preserve an assignment even when the clinician has dropped
+// out of the active roster (the checkbox list is the active-in-org roster; a
+// diff-based save would otherwise silently delete what it can't display).
+// status, relative to the patient's org (orgScope):
+//   active        — active clinician in this org (in the normal roster)
+//   deactivated   — user.is_active = 0 (an HR event)
+//   moved_org     — active, but now belongs to a different org (a scoping event)
+//   not_clinician — active, this org, but no longer holds the clinician role
+function careTeamStatus(m, orgScope) {
+  if (!m.is_active) return "deactivated";
+  if (Number(m.organization_id) !== Number(orgScope)) return "moved_org";
+  if (m.role_type !== "clinician") return "not_clinician";
+  return "active";
+}
+
+async function getPatientForEdit(patientId, orgScope) {
   const [u] = await db.query(
     `SELECT u.id, u.name
        FROM users u
@@ -39,7 +55,12 @@ async function getPatientForEdit(patientId) {
     [patientId]
   );
   const [team] = await db.query(
-    "SELECT doctor_id FROM patient_doctor_assignments WHERE patient_id = ?",
+    `SELECT u.id, u.name, u.is_active, u.organization_id, r.role_type
+       FROM patient_doctor_assignments pda
+       JOIN users u ON u.id = pda.doctor_id
+       LEFT JOIN role r ON r.user_id = u.id
+      WHERE pda.patient_id = ?
+      ORDER BY u.name`,
     [patientId]
   );
 
@@ -53,7 +74,11 @@ async function getPatientForEdit(patientId) {
     insurance_payer_id: p.insurance_payer_id ?? null,
     comments: p.comments ?? null,
     conditions: conds.map((c) => c.name),
-    care_team: team.map((t) => t.doctor_id),
+    care_team: team.map((m) => ({
+      id: m.id,
+      name: m.name,
+      status: careTeamStatus(m, orgScope),
+    })),
     has_profile: prof.length > 0,
   };
 }
@@ -83,19 +108,6 @@ async function updatePatient({ patientId, orgScope, actorId, data }) {
   }
 
   const careTeam = data.care_team;
-  if (careTeam.length) {
-    const [valid] = await db.query(
-      `SELECT u.id FROM users u JOIN role r ON r.user_id = u.id
-        WHERE u.id IN (?) AND r.role_type = 'clinician'
-          AND u.is_active = 1 AND u.organization_id = ?`,
-      [careTeam, orgScope]
-    );
-    if (valid.length !== new Set(careTeam).size)
-      throw httpError(
-        400,
-        "care_team must be active clinicians in this organization"
-      );
-  }
 
   const conn = await db.getConnection();
   try {
@@ -146,9 +158,29 @@ async function updatePatient({ patientId, orgScope, actorId, data }) {
       [patientId]
     );
     const existingIds = new Set(existing.map((r) => r.doctor_id));
-    const nextIds = new Set(careTeam);
-    const toRemove = [...existingIds].filter((id) => !nextIds.has(id));
-    const toAdd = [...nextIds].filter((id) => !existingIds.has(id));
+    const nextIds = [...new Set(careTeam)];
+    const toRemove = [...existingIds].filter((id) => !nextIds.includes(id));
+    const toAdd = nextIds.filter((id) => !existingIds.has(id));
+
+    // Only NEWLY added members must be active clinicians in this org. Members
+    // already assigned are preserved even if they have since been deactivated or
+    // moved orgs — those are shown (and kept checked) in the edit form, and
+    // removing one is an explicit uncheck that lands in toRemove, never a silent
+    // drop. (Alert routing keys off these assignments, so a silent drop could
+    // strand a patient's alerts — see ORG_CONTEXT_FOLLOWUPS.)
+    if (toAdd.length) {
+      const [valid] = await conn.query(
+        `SELECT u.id FROM users u JOIN role r ON r.user_id = u.id
+          WHERE u.id IN (?) AND r.role_type = 'clinician'
+            AND u.is_active = 1 AND u.organization_id = ?`,
+        [toAdd, orgScope]
+      );
+      if (valid.length !== toAdd.length)
+        throw httpError(
+          400,
+          "newly assigned care_team members must be active clinicians in this organization"
+        );
+    }
     if (toRemove.length) {
       await conn.query(
         "DELETE FROM patient_doctor_assignments WHERE patient_id = ? AND doctor_id IN (?)",

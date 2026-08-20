@@ -49,7 +49,8 @@ function validate(b) {
 async function getPatientForEdit(req, res) {
   try {
     const detail = await editService.getPatientForEdit(
-      Number(req.params.patientId)
+      Number(req.params.patientId),
+      req.orgScope
     );
     return res.status(200).json({ ok: true, patient: detail });
   } catch (err) {
