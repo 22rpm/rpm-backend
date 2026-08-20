@@ -753,13 +753,29 @@ const createDeviceDataService = async (
   };
 
   // minimal BP status calculator (keeps your previous behavior)
+  // Classify a BP reading. Boundaries are standard clinical ranges (AHA/ACC):
+  // >=180/>=120 crisis, >=140/>=90 stage-2 hypertension, <90/<60 low. Previously
+  // these used strict `>` with a 99 diastolic cutoff (`sVal > 140 || dVal > 99`),
+  // which classified 140/95 — clearly Stage 2 — as "Normal", and NaN defaulted to
+  // "Normal". A malformed reading is an ERROR state, never Normal: it must
+  // surface, not silently pass as a normal reading.
+  //
+  // NOTE: This label still gates alerting below via `bpStatus !== "Normal"` (the
+  // original design). That is a STOPGAP, not the intended end state: the alert
+  // path has three overlapping threshold mechanisms (this label; the hardcoded
+  // bands in determineTypeForClinician; and doctor_alert_settings, which is read
+  // but never applied — see SECURITY_FOLLOWUPS). Those need to collapse into one
+  // configurable evaluator; the clinical thresholds are the medical director's to
+  // set. An earlier version of this hotfix added a hardcoded >=160/>=100 gate,
+  // but that both introduced a third threshold and suppressed alerts in the
+  // 141-159 band, so it was reverted.
   const calculateBPStatus = (s, d) => {
     const sVal = Number(s);
     const dVal = Number(d);
-    if (Number.isNaN(sVal) || Number.isNaN(dVal)) return "Normal";
+    if (!Number.isFinite(sVal) || !Number.isFinite(dVal)) return "Error";
 
-    if (sVal > 180 || dVal > 120) return "Emergency";
-    if (sVal > 140 || dVal > 99) return "High";
+    if (sVal >= 180 || dVal >= 120) return "Emergency";
+    if (sVal >= 140 || dVal >= 90) return "High";
     if (sVal < 90 || dVal < 60) return "Low";
     return "Normal";
   };
@@ -814,15 +830,29 @@ const createDeviceDataService = async (
       alertCreated: false,
     };
 
-    // 4) If BP device and bpStatus is not Normal -> run test-alert logic
+    // 4) If BP device and bpStatus is an abnormal CLINICAL state -> run alert
+    // logic. With the corrected classifier this fires on >=140/>=90 (Stage 2),
+    // Emergency, and Low — so 140/95 alerts and the 141-159 band is no longer
+    // suppressed. This is the ORIGINAL design (alert when abnormal), not a new
+    // threshold; per-condition thresholds are pending the consolidation.
+    //
+    // "Error" (a malformed reading) is deliberately EXCLUDED: it is a data-quality
+    // state, not a clinical one. It's still persisted as bpStatus:"Error" (so it
+    // surfaces in the data instead of silently passing as "Normal"), but it must
+    // NOT fire a clinical BP alert — that would render as e.g. "BP alert
+    // (severity: low) - abc/95", telling a clinician the patient had a mild
+    // low-BP event when the cuff malfunctioned. A distinct device/data-quality
+    // alert is a fast-follow (see SECURITY_FOLLOWUPS).
     if (
       devType === "bp" &&
       processedData.bpStatus &&
-      processedData.bpStatus !== "Normal"
+      processedData.bpStatus !== "Normal" &&
+      processedData.bpStatus !== "Error"
     ) {
       console.log(
-        "🚨 BP Alert logic triggered from device data:",
-        processedData.bpStatus
+        "🚨 BP alert logic triggered:",
+        `${deviceData.systolic}/${deviceData.diastolic}`,
+        `[classified ${processedData.bpStatus}]`
       );
 
       // open connection to run transactional alert insertions and to fetch clinicians

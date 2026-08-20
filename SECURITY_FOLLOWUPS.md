@@ -69,3 +69,89 @@ privilege-escalation fix for the admin user-mutation and care-team routes.
     cover `/api/org/*` — so this variant also needs the callers (or the interceptor)
     updated, or a super-admin path-param fallback in `resolveOrgScope`. Bigger blast
     radius; not needed to close the vuln.
+
+## 7. Four divergent BP classifiers; ingest one drove alerts and was wrong
+- Blood-pressure readings are classified in **four** different, disagreeing
+  places:
+  1. `services/deviceData.service.js:766` — local `calculateBPStatus` inside
+     `createDeviceDataService`. **This is the ingest path and it gated alerting.**
+     It used `sVal > 140 || dVal > 99` (strict `>`, diastolic cutoff 99), so a
+     140/95 Stage-2 reading classified as `"Normal"`, and NaN defaulted to
+     `"Normal"`. Since the alert fired only when `bpStatus !== "Normal"`, those
+     readings produced **no alert at all**. **Fixed in `hotfix/bp-classification`**:
+     boundaries corrected to `>=180/>=120` (Emergency), `>=140/>=90` (High),
+     `<90/<60` (Low); NaN → `"Error"`; and alerting decoupled from the label onto
+     an explicit **placeholder** urgent threshold (SBP>=160 or DBP>=100, from the
+     biller template) pending the medical director's decision.
+  2. `services/deviceData.service.js:686` — module-level `calculateBPStatus`
+     (`>120 || >80` → High). Over-sensitive; not the ingest path.
+  3. `services/doctor.service.js:65` — local `getBPStatus` (display):
+     `<=139 && <=89` → warning, else critical.
+  4. `services/doctor.service.js:114` — module `getBPStatus` (display): `>140 ||
+     >90` → warning; has the same `>140` off-by-one (140/85 → normal).
+- **Display and alerting can disagree.** The number a clinician sees on the
+  vitals screen comes from the `doctor.service` classifiers; the number that
+  decided whether they were paged came from `deviceData.service:766`. A reading
+  can render **critical on screen while having generated no alert** — the two
+  code paths use different thresholds and neither is the single source of truth.
+- **Follow-up:** consolidate to ONE classifier and evaluate alert thresholds
+  from configuration, not a hardcoded string comparison, so display and alerting
+  cannot diverge. The `hotfix/bp-classification` change is a stopgap: it stops the
+  silent under-classification and the alert-suppression, but leaves the other
+  three variants and the display/alert split in place. Clinical thresholds
+  (abnormal flag vs urgent alert) are pending the medical director; a read-only
+  backfill audit (`bp_audit.sql`) quantifies readings already stored `"Normal"`
+  that are actually elevated.
+
+## 8. `doctor_alert_settings` is an inert control — configured, never applied
+- **Most user-visible of these problems:** clinicians have a per-clinician alert
+  threshold UI (Settings → Systolic/Diastolic High/Low, "Set as Default
+  (Recommended)") that writes real rows, and the alert path reads them — but the
+  configured VALUES are never used. A clinician setting Systolic High to 130 vs
+  200 changes nothing.
+- **The control and its writes:**
+  - Table `doctor_alert_settings` (`config/migrations/20251104115156_...`):
+    `doctor_id` UNIQUE, `systolic_high`/`systolic_low`/`diastolic_high`/
+    `diastolic_low` (defaults 140/90/90/60).
+  - Save endpoint `routes/alert.route.js:~2857` upserts the row; read endpoint
+    `~2766`. Frontend `rpm-dashboard-v1.0/src/pages/Settings.jsx` (~1128+) POSTs
+    to `/api/alerts/alert-settings`. "Set as Default" fills the form with
+    130/99/90/69 (a THIRD default set, disagreeing with both the migration's
+    140/90/90/60 and the load-fallback 130/99).
+- **Read at alert time but not applied** (`services/deviceData.service.js`):
+  - The recipient query LEFT JOINs the settings and selects the columns
+    (`:899`, `:912`, `:931`).
+  - Recipient filtering calls `determineTypeForClinician(vitals)` (`:972`) — with
+    the VITALS ONLY. That function (`:722`) classifies against **hardcoded** bands
+    (`sVal > 140`, `130-140`, `dVal > 99`, `90-99`, ...) and never receives or
+    compares the clinician's configured thresholds.
+  - The only thing read from the settings is a `hasSettings` boolean (`:978`):
+    in the else-branch (`:983`), if the reading does NOT cross the hardcoded band
+    AND the clinician HAS a row, they are **excluded**. So the sole functional
+    effect of saving settings is to **reduce** what a clinician receives — the
+    inverse of what the UI implies.
+- **Note:** `determineTypeForClinician` (`:722`) is a SECOND alert-time BP
+  classifier with the SAME `> 140` / `> 99` boundary bugs as the ingest one, and
+  it shapes the alert (recipients + type) after the gate. It is unfixed. (This is
+  the classifier the earlier stopgap missed; see #7 for the four-classifier list —
+  this is effectively a fifth threshold surface.)
+- **Production: 0 rows** (confirmed) — no clinician has ever saved settings, so
+  nobody relies on the inert control and the table can be reshaped freely with no
+  migration. Resolution is the consolidation design (one evaluator, one threshold
+  source): either wire this up for real or remove the UI so it stops implying a
+  control that does nothing.
+- **Severity mislabel (for consolidation):** with the classifier fix deployed, a
+  140/95 reading DOES page recipients — but `determineTypeForClinician` classifies
+  it severity **"low"** (its `sVal > 140` off-by-one puts 140 in the *moderate*
+  band, not extreme). So a Stage-2 reading reaches the clinician labeled low
+  severity (muted color, low-urgency sound). The alert fires — what matters for
+  the stopgap — but the severity is wrong, and it disagrees with the ingest
+  classifier's "High". Same root cause as #7: fold `determineTypeForClinician`
+  into the single evaluator so severity is computed once, correctly.
+- **Malformed-reading device alert (fast-follow):** the stopgap persists
+  `bpStatus:"Error"` for malformed readings but deliberately does NOT fire a
+  clinical BP alert for them (it would render as a misleading low-severity
+  clinical event, e.g. "BP alert (severity: low) - abc/95"). A proper
+  device/data-quality alert type — visibly a device problem, with its own
+  rendering — should be added so a garbage-sending cuff surfaces to staff without
+  masquerading as a clinical reading.
