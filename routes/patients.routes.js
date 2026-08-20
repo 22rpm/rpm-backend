@@ -15,6 +15,7 @@ const {
   getPatientForEdit,
   updatePatient,
 } = require("../controllers/patientEdit.controller");
+const { getRpmNote } = require("../controllers/rpmNote.controller");
 
 const staffRoles = requireRole("clinician", "admin", "super-admin");
 
@@ -75,6 +76,17 @@ router.patch(
   resolveOrgScope,
   scopePatientParam("patientId"),
   updatePatient
+);
+
+// GET /api/patients/:patientId/rpm-note?month=YYYY-MM — read-only pre-fill for
+// the RPM monthly note. Computes what we have; never fills clinical judgment.
+router.get(
+  "/:patientId/rpm-note",
+  authRequired,
+  staffRoles,
+  resolveOrgScope,
+  scopePatientParam("patientId"),
+  getRpmNote
 );
 
 module.exports = router;
