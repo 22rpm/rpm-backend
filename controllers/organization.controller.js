@@ -604,7 +604,29 @@ async function getDoctorsByOrganization(req, res) {
     });
   }
 }
+// GET /api/org/me — the caller's OWN organization, id and name only.
+// Resolved from the authenticated user's id (req.user.id) joined to their
+// organization; the client supplies no org id, so there is no IDOR here (unlike
+// getDoctorsByOrganization / SECURITY_FOLLOWUPS #6). Super-admins have no home
+// org (organization_id NULL) -> organization: null; they use the org selector.
+async function getMyOrganization(req, res) {
+  try {
+    const [rows] = await db.query(
+      `SELECT o.id, o.name
+         FROM users u
+         JOIN organizations o ON o.id = u.organization_id
+        WHERE u.id = ? AND o.is_deleted = 0`,
+      [req.user.id]
+    );
+    return res.status(200).json({ ok: true, organization: rows[0] || null });
+  } catch (err) {
+    console.error("getMyOrganization error:", err);
+    return res.status(500).json({ ok: false, message: "Server error" });
+  }
+}
+
 module.exports = {
+  getMyOrganization,
   getOrganizationById,
   getDoctorsByOrganization,
   addOrganization,

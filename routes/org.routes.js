@@ -18,6 +18,12 @@ const {
 const superAdminOnly = requireRole("super-admin");
 const adminOrSuperAdmin = requireRole("admin", "super-admin");
 
+// GET /api/org/me — the caller's own organization (id + name only), for the
+// clinic-context top bar. Any authenticated user; returns only their own org
+// (derived from their token id, never a client-supplied org id). Static path,
+// registered before the param routes so it is never captured by :id.
+router.get("/me", authRequired, organizationController.getMyOrganization);
+
 router.post(
   "/organizations",
   authRequired,
