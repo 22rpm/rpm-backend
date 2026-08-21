@@ -133,16 +133,27 @@ file and the timer-service comment block together.
   case. Frontend should treat `time_entry` as "the entry currently linked to this
   call," and must not assume a correction always produced a new ledger row.
 
-### patient_calls.outcome — needs a constrained set — **BLOCKS BILLING ENGINE**
-- Currently `VARCHAR(255)` (`config/migrations/20260817120200_create_patient_calls.js`).
-- **Promoted from "before production" to a hard blocker:** the billing engine's
-  interactive-communication test (CPT 99457 requires >=1 *live* interactive
-  communication per month; data review alone does not qualify) detects a "reached"
-  call from `outcome`. Free text can't be evaluated reliably, so the engine cannot
-  determine that test until `outcome` is a constrained set.
-- **The real category list must be sourced from the lead nurse** (e.g. reached /
-  no answer / voicemail / callback requested / …) — do not invent the values.
-  Then migrate `outcome` to that set.
+### patient_calls.outcome — constrained set SHIPPED (was: BLOCKS BILLING ENGINE)
+- **Done.** Six canonical outcomes in `config/callOutcomes.js` (confirmed with the
+  lead nurse): `Reached patient`, `Reached caregiver`, `No answer`,
+  `Left voicemail`, `Wrong or disconnected number`, `Patient declined`. Only the
+  first two satisfy CPT 99457 test (b) (`QUALIFYING_OUTCOMES`). Enforced by a
+  CASE-SENSITIVE CHECK constraint (migration `20260823120000`); existing rows
+  normalised by that migration (bare "reached" → NULL with the original preserved
+  in `note`, since it doesn't say who was reached).
+- **The frontend lagged the migration** (the failure this brief fixed): the
+  call-logging form was still a free-text `<input>`, so a nurse either got a 400
+  (typed free text the CHECK rejects) or saved NULL (left blank) — and a NULL
+  outcome means 99457 silently doesn't bill. Fixed: `CareForms.jsx` `LogCallForm`
+  is now a required `<select>` populated from `enrollment-options`.
+- **`enrollment-options` now serves general FORM LOOKUPS**, not only enrollment —
+  it returns `call_outcomes` alongside payers/device types/clinicians so the six
+  values live in ONE file across both repos. The endpoint name under-describes it;
+  kept deliberately rather than renamed.
+- **Server-side NULL gap is still OPEN** (scoped out of the form change): the API
+  and the CHECK both still permit NULL, so "must pick one" holds only in the
+  browser. See `BILLING_FOLLOWUPS.md` §9 for what closing it involves and the
+  existing-NULL-row decision.
 
 ### alerts.user_id VARCHAR vs INT patient_id — timeline join hazard (change C)
 - `alerts.user_id` is `VARCHAR(255)`; all new tables use `INT UNSIGNED patient_id`.

@@ -62,15 +62,54 @@ does too is unconfirmed. Configured to REQUIRE it by default (conservative) in
 `config/rpmBillingRules.js` (`interactiveRequirement.appliesTo` includes 99470).
 Drop 99470 from that list if the biller says it's time-only.
 
-## 6. Date of service on the note itself — PENDING biller
+## 6. Date of service on the note itself — PENDING biller (Rosemary)
 The system computes a PER-CODE date of service ("date the threshold was met").
 The note shows a single primary date; the biller confirms which code's date
 should appear on the note. All per-code dates are in the endpoint's `billing`.
+- **Concrete instance:** for patient 48, Aug 2026, the note renders 99445 at DOS
+  `2026-08-02` (the date the 2nd transmission day was reached). If any prior guidance
+  or the biller expects a month-end DOS instead, these disagree — resolve which the
+  note should show before it goes to a provider/claim.
 
 ## 7. Reimbursement display — deliberately OFF
 National-average amounts are in config (`reimbursement`, `display:false`). §3.9
 keeps revenue separate from eligibility — nothing surfaces estimated revenue yet.
 Vary by locality; confirm local values before ever displaying.
+
+## 9. patient_calls.outcome — server-side NULL gap — OPEN (scoped out of the form fix)
+The call-logging FORM now requires an outcome (a `<select required>`), but the
+SERVER still accepts NULL: `controllers/callDoc.controller.js` validates
+`outcomeVal !== null && !CALL_OUTCOMES.includes(outcomeVal)` (NULL passes), the
+CHECK constraint permits NULL, and the column is `DEFAULT NULL`. So "must pick
+one" holds only in the browser — any other client (or a future mobile app) can
+still write NULL, and a NULL outcome means 99457 test (b) reads "not determined"
+and does not bill.
+
+**What closing it involves:**
+- **Decide the rule:** is `outcome` required for every call, or only when the
+  call carries billable time / is outbound? A pure `NOT NULL` is simplest but
+  also forces an outcome on rows where it may not apply.
+- **Existing NULL rows:** production has NONE today (patient_calls doesn't exist
+  on prod yet — see §8). On `rpm_db_v1` the test rows are NULL by design (the
+  migration nulled the ambiguous "reached" values and preserved the originals in
+  `note`). A `NOT NULL` migration would need those backfilled or superseded first
+  — they cannot be invented (that's exactly why they were nulled). Because this
+  is test data and prod is empty, a `NOT NULL` (or a CHECK requiring non-NULL for
+  new rows) could ship cleanly IF done before real prod call data accrues.
+- **Also add server validation** (`callDoc.controller.js`) rejecting NULL for the
+  chosen rule, so the API enforces what the form does. DB constraint over app
+  validation where possible (as elsewhere).
+- Until closed, the note's "NOT DETERMINED — outcome not recorded" wording is the
+  safeguard: a NULL is surfaced as missing evidence, never asserted as a failure.
+
+## 10. Quantix note billing-reference table + rate card — for Rosemary (not code)
+- The "Billing Codes Reference" table printed on the note (faithful to the Quantix
+  template) lists **99454** for device supply and **omits 99445 and 99470** — so
+  the note can show a computed 99445 above a table that doesn't contain it. The
+  template predates the 2026 codes. Ask whether Quantix has an updated version
+  before the note goes to a provider who reads the table as authoritative.
+- The CPT rate card lists 99454 as "16 days" where the rule is 16 **or more**, and
+  shows 99445 and 99454 at the same $52.11. Confirm.
 
 ## 8. Outcome migration (20260823120000) runs against an EMPTY table on prod — no dry-run needed
 Checked on prod (2026-08-20): `patient_calls` does NOT exist there (ERROR 1146)
