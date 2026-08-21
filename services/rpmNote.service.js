@@ -429,6 +429,12 @@ async function getRpmNote({ patientId, orgScope, month }) {
       calls, // the month's call log (direction / outcome / note / date)
     },
     missing,
+    // Manual checks the SYSTEM CANNOT perform — surfaced so the note never
+    // implies it verified something it didn't (or that it's a submittable claim).
+    compliance_checks: [
+      "No-conflicting-codes check is OUTSIDE this system: confirm no overlapping RTM or Home Health codes were billed for this same period before submission.",
+      "No ICD-10 diagnosis code on this note (not yet modelled). A diagnosis code is required on the claim — the biller must add it. This note is NOT a submittable claim on its own.",
+    ],
     // Clinical judgment is intentionally absent — the provider fills it.
     clinical: null,
   };
