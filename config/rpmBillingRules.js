@@ -11,10 +11,18 @@ module.exports = {
   // CONFIRMED. Billing period is the selected CALENDAR MONTH (not rolling 30d).
   period: "calendar_month",
 
-  // CONFIRMED. Date of service for the MONTHLY codes (99454/99445/99457/99458)
-  // is the last day of the selected month. (99453 is dated by the setup event —
-  // see `setup` and the service.)
-  dateOfService: "month_end",
+  // CONFIRMED. Date of service is PER CODE — "the date the threshold (days or
+  // minutes) was met" (2026 claim guidance), NOT month-end. Different codes in
+  // the same month can therefore carry different dates of service:
+  //   99445 -> date the 2nd distinct transmission day occurred
+  //   99454 -> date the 16th distinct transmission day occurred
+  //   99470 -> date cumulative management minutes first reached 10
+  //   99457 -> date cumulative management minutes first reached 20
+  //   99458 (nth) -> date cumulative minutes first reached 20 + n*20
+  //   99453 -> the setup/education event date
+  // The service computes all of these; the biller confirms which appears on the
+  // note itself. (Month-end fallback only if a threshold date can't be derived.)
+  dateOfService: "threshold_met",
 
   // A1. CONFIRMED. Device-SUPPLY code by DISTINCT transmission days in the
   // month. 0-1 days is NOT billable for supply — the note says so explicitly
@@ -32,24 +40,37 @@ module.exports = {
     ],
   },
 
-  // A2. CONFIRMED. Management time (cumulative minutes in the month).
-  //   20+ min           -> 99457 (first unit) — but see interactiveRequirement
-  //   each additional 20 -> 99458 (add-on to 99457)
+  // A2. CONFIRMED. Management time by cumulative Data Review + Interaction
+  // minutes in the month. No longer "20+ or nothing":
+  //   10-19 -> 99470
+  //   20-39 -> 99457
+  //   40-59 -> 99457 + 1x 99458
+  //   60+   -> 99457 + one 99458 per additional 20 min, no cap
   managementTime: {
-    firstUnit: { minMinutes: 20, code: "99457" },
-    additionalUnit: { everyMinutes: 20, code: "99458" },
+    // Mutually-exclusive base tier — the highest threshold met wins. 99470 and
+    // 99457 never bill together.
+    tiers: [
+      { minMinutes: 20, code: "99457" },
+      { minMinutes: 10, code: "99470" },
+    ],
+    // Add-on: one 99458 per full additional 20 min beyond the first 20. Only
+    // stacks on the 99457 base (never on 99470). No cap.
+    additionalUnit: { everyMinutes: 20, code: "99458", base: "99457" },
   },
 
-  // A2b. CONFIRMED — Quantix KEY RULE. 99457 is TWO independent tests, BOTH
-  // required:
-  //   (a) 20+ minutes of management time (managementTime.firstUnit), AND
+  // A2b. CONFIRMED — Quantix KEY RULE. The management code is TWO independent
+  // tests, BOTH required:
+  //   (a) enough minutes for the tier (10 for 99470, 20 for 99457), AND
   //   (b) at least one LIVE interactive communication with the patient/caregiver
   //       that month (phone, video, or in person). Data review alone does NOT
   //       satisfy (b).
-  // A patient can pass (a) and fail (b); the note must state WHICH test failed.
+  // A patient can pass (a) and fail (b); the note states WHICH test failed.
   // 99458 is an add-on to 99457, so it only applies when 99457 is billable.
   interactiveRequirement: {
-    appliesTo: "99457",
+    // Which base codes require (b). 99457 CONFIRMED requires it. 99470 is set to
+    // require it by default (conservative) — PENDING biller confirmation on
+    // whether 99470 is time-only. Drop "99470" from this list if time-only.
+    appliesTo: ["99457", "99470"],
     // Interim detection of (b) from patient_calls. patient_calls.outcome is
     // currently FREE TEXT (constrained-outcome set is still a TODO), so we
     // cannot reliably tell "reached" from "no answer". Modes:
@@ -71,6 +92,24 @@ module.exports = {
   // it. Enforced by rpm_device_setups UNIQUE(patient_id, device_type). Its date
   // of service is the setup event (setup_date, falling back to enrolled_at).
   setup: { code: "99453" },
+
+  // Reimbursement — CONFIGURABLE national averages (per our RPM reference).
+  // These VARY BY LOCALITY and are stored for planning only. §3.9: keep revenue
+  // SEPARATE from eligibility — do NOT display estimated revenue anywhere yet.
+  reimbursement: {
+    currency: "USD",
+    basis: "national_average",
+    display: false, // gate: nothing surfaces estimated revenue until turned on
+    note: "national averages; vary by locality; not for display",
+    amounts: {
+      "99453": 21.71, // initial setup and configuration
+      "99454": 52.11, // monthly device monitoring, 16+ days
+      "99445": 52.11, // monthly device monitoring, 2-15 days
+      "99470": 26.05, // 10 minutes of RPM time
+      "99457": 51.77, // 20 minutes of RPM time
+      "99458": 41.42, // each additional 20 minutes (no limit)
+    },
+  },
 
   // Provider on the note. CONFIRMED operating assumption: one main clinician per
   // patient. If a patient has >1 care-team clinician, FLAG it rather than

@@ -50,6 +50,19 @@ function deviceSupplyForDays(days) {
   return null;
 }
 
+// Date of service = "the date the threshold was met". Given ordered {date,secs}
+// contributions, return the date at which the running total first reaches
+// thresholdMinutes (or null if never). Used for per-code minute-threshold DOS.
+function dateThresholdMet(contribs, thresholdMinutes) {
+  const need = thresholdMinutes * 60;
+  let acc = 0;
+  for (const c of contribs) {
+    acc += c.secs;
+    if (acc >= need) return c.date;
+  }
+  return null;
+}
+
 async function getRpmNote({ patientId, orgScope, month }) {
   const win = monthWindow(month);
 
@@ -106,16 +119,16 @@ async function getRpmNote({ patientId, orgScope, month }) {
     [patientId]
   );
 
-  // Monitoring: distinct transmission days (any device) + BP/HR summary (bp).
-  const [[dayRow]] = [
-    await db.query(
-      `SELECT COUNT(DISTINCT DATE(created_at)) AS days
-         FROM dev_data
-        WHERE user_id = ? AND created_at >= ? AND created_at < ?`,
-      [patientId, win.start, win.next]
-    ),
-  ].map((r) => r[0]);
-  const daysWithReadings = Number(dayRow.days) || 0;
+  // Monitoring: distinct transmission days (ordered, any device). The count sets
+  // the device-supply band; the ordered dates give its threshold-met DOS.
+  const [txDays] = await db.query(
+    `SELECT DISTINCT DATE_FORMAT(created_at, '%Y-%m-%d') AS d
+       FROM dev_data
+      WHERE user_id = ? AND created_at >= ? AND created_at < ?
+      ORDER BY d`,
+    [patientId, win.start, win.next]
+  );
+  const daysWithReadings = txDays.length;
   const num = (x) => (x === null || x === undefined ? null : Number(x));
 
   const [[v]] = [
@@ -138,35 +151,39 @@ async function getRpmNote({ patientId, orgScope, month }) {
     ),
   ].map((r) => r[0]);
 
-  // Time: head-of-chain time_entries in the month, grouped by category.
+  // Time: head-of-chain time_entries in the month, individual rows ordered by
+  // start (so the running total gives the management threshold-met DOS).
   const [timeRows] = await db.query(
-    `SELECT t.activity_category, SUM(t.duration_seconds) AS secs
+    `SELECT t.activity_category,
+            DATE_FORMAT(t.started_at, '%Y-%m-%d') AS d,
+            t.duration_seconds AS secs
        FROM time_entries t
        LEFT JOIN time_entries s ON s.supersedes = t.id
       WHERE s.id IS NULL AND t.patient_id = ? AND t.organization_id = ?
         AND t.started_at >= ? AND t.started_at < ?
-      GROUP BY t.activity_category`,
+      ORDER BY t.started_at, t.id`,
     [patientId, orgScope, win.start, win.next]
   );
   // Map each activity_category into the template's two TIME DOCUMENTATION
-  // buckets. Only Data Review + Interaction counts toward the 20-min 99457/
-  // 99458 threshold; Setup/Education backs 99453 (which is not time-gated).
+  // buckets. Only Data Review + Interaction counts toward the management tier;
+  // Setup/Education backs 99453 (which is not time-gated).
   const setupCats = new Set(rules.timeBuckets.setup_education);
   const reviewCats = new Set(rules.timeBuckets.data_review_interaction);
   let setupSecs = 0;
   let reviewSecs = 0;
   let otherSecs = 0;
   const byCategory = {};
+  const reviewContribs = []; // ordered {date,secs} for the review bucket
   for (const row of timeRows) {
     const secs = Number(row.secs || 0);
-    byCategory[row.activity_category] = Math.round(secs / 60);
+    byCategory[row.activity_category] =
+      (byCategory[row.activity_category] || 0) + Math.round(secs / 60);
     if (setupCats.has(row.activity_category)) setupSecs += secs;
-    else if (reviewCats.has(row.activity_category)) reviewSecs += secs;
     else {
-      // uncategorised (e.g. "other") -> counts toward Data Review + Interaction,
-      // but its presence is flagged so the provider can see it.
+      // review-bucket categories, plus uncategorised ("other")
       reviewSecs += secs;
-      otherSecs += secs;
+      reviewContribs.push({ date: row.d, secs });
+      if (!reviewCats.has(row.activity_category)) otherSecs += secs;
     }
   }
   const setupEducationMinutes = Math.round(setupSecs / 60);
@@ -202,19 +219,28 @@ async function getRpmNote({ patientId, orgScope, month }) {
   );
 
   // ---- Apply the confirmed billing rules -------------------------------------
-  // Device SUPPLY (99445/99454). 0-1 days -> not billable, with a reason string
-  // instead of a blank. Independent of 99453.
+  // Device SUPPLY (99445/99454). DOS = the date the day-count crossed the band
+  // threshold (2nd distinct day for 99445, 16th for 99454). Independent of 99453.
   const deviceSupplyBand = deviceSupplyForDays(daysWithReadings);
+  const deviceSupplyDos = deviceSupplyBand
+    ? (txDays[deviceSupplyBand.minDays - 1] || {}).d || null
+    : null;
   const deviceSupply = deviceSupplyBand
-    ? { code: deviceSupplyBand.code, days: daysWithReadings, reason: null }
-    : { code: null, days: daysWithReadings, reason: rules.deviceSupply.insufficientMessage };
+    ? { code: deviceSupplyBand.code, days: daysWithReadings, reason: null, date_of_service: deviceSupplyDos }
+    : {
+        code: null,
+        days: daysWithReadings,
+        reason: rules.deviceSupply.insufficientMessage,
+        date_of_service: null,
+      };
 
-  // 99457 = TWO independent tests, both required (Quantix KEY RULE):
-  //   (a) 20+ minutes of Data Review + Interaction time
-  //   (b) >=1 LIVE interactive communication (phone/video/in person) this month
-  const testA = dataReviewMinutes >= rules.managementTime.firstUnit.minMinutes;
+  // Management base tier (mutually exclusive): 10-19 -> 99470, 20+ -> 99457.
+  const tiers = rules.managementTime.tiers;
+  const baseTier = tiers.find((t) => dataReviewMinutes >= t.minMinutes) || null;
+  const minTier = tiers[tiers.length - 1].minMinutes; // 10
+  const testA = !!baseTier; // enough minutes for SOME tier
 
-  // (b) detection — interim modes because patient_calls.outcome is free text.
+  // (b) live interactive detection — from patient_calls (mode-dependent).
   const mode = rules.interactiveRequirement.detection;
   let testB; // true | false | null(unverifiable)
   let testBBasis;
@@ -233,31 +259,47 @@ async function getRpmNote({ patientId, orgScope, month }) {
       ? "a call outcome indicates a live interaction"
       : "no call outcome indicates a live interaction";
   } else {
-    // "unverifiable": calls exist but free-text outcome can't confirm a live
-    // connection -> not auto-satisfied; provider must verify.
     testB = null;
     testBBasis = `${calls.length} call(s) logged, but outcome is free text — cannot confirm a live interaction; provider must verify`;
   }
+
+  // Does the CHOSEN base code require (b)? Per-code + configurable (99457 yes;
+  // 99470 default-yes pending biller).
+  const requiresInteractive = baseTier
+    ? rules.interactiveRequirement.appliesTo.includes(baseTier.code)
+    : false;
   const interactive = {
     test_a_minutes_met: testA,
     test_b_live_interaction: testB,
     test_b_basis: testBBasis,
+    test_b_required: requiresInteractive,
     detection_mode: mode,
   };
 
-  // 99457 bills only when BOTH tests pass; unverifiable (null) is NOT a pass.
-  // 99458 is an add-on: one per full additional 20 min beyond the first 20.
-  const billable99457 = testA && testB === true;
+  // Billable when a tier is reached AND (if that code requires it) (b) passes.
+  // 99458 add-ons stack only on the 99457 base. Per-instance threshold-met DOS.
+  const billableBase = testA && (!requiresInteractive || testB === true);
   const managementCodes = [];
+  const managementDetails = []; // per instance: { code, date_of_service }
   let additionalUnits = 0;
-  if (billable99457) {
-    managementCodes.push(rules.managementTime.firstUnit.code);
-    additionalUnits = Math.floor(
-      (dataReviewMinutes - rules.managementTime.firstUnit.minMinutes) /
-        rules.managementTime.additionalUnit.everyMinutes
-    );
-    for (let i = 0; i < additionalUnits; i++)
-      managementCodes.push(rules.managementTime.additionalUnit.code);
+  if (billableBase) {
+    managementCodes.push(baseTier.code);
+    managementDetails.push({
+      code: baseTier.code,
+      date_of_service: dateThresholdMet(reviewContribs, baseTier.minMinutes) || win.end,
+    });
+    if (baseTier.code === rules.managementTime.additionalUnit.base) {
+      const every = rules.managementTime.additionalUnit.everyMinutes; // 20
+      additionalUnits = Math.floor((dataReviewMinutes - baseTier.minMinutes) / every);
+      for (let k = 1; k <= additionalUnits; k++) {
+        managementCodes.push(rules.managementTime.additionalUnit.code);
+        managementDetails.push({
+          code: rules.managementTime.additionalUnit.code,
+          date_of_service:
+            dateThresholdMet(reviewContribs, baseTier.minMinutes + k * every) || win.end,
+        });
+      }
+    }
   }
 
   const setupSupported = setups.length > 0;
@@ -287,24 +329,35 @@ async function getRpmNote({ patientId, orgScope, month }) {
     );
   if (!testA)
     missing.push(
-      `Data Review + Interaction time ${dataReviewMinutes} min — under ${rules.managementTime.firstUnit.minMinutes} min; 99457 test (a) not met`
+      `Data Review + Interaction time ${dataReviewMinutes} min — under ${minTier} min; no management code (99470/99457) supported`
     );
-  if (testA && testB !== true)
+  if (testA && requiresInteractive && testB !== true)
     missing.push(
       testB === false
-        ? "99457 test (b) FAILED — no live interactive communication this month (data review alone does not qualify)"
-        : `99457 test (b) UNVERIFIABLE — ${testBBasis}`
+        ? `${baseTier.code} test (b) FAILED — no live interactive communication this month (data review alone does not qualify)`
+        : `${baseTier.code} test (b) UNVERIFIABLE — ${testBBasis}`
     );
   if (uncategorizedMinutes > 0)
     missing.push(
       `${uncategorizedMinutes} min of uncategorised ("other") time counted toward Data Review + Interaction — review categorisation`
     );
 
+  // Per-code date of service = "the date the threshold was met" (not month-end).
+  // The note shows one Date of Service; the biller confirms which. Until then the
+  // top-level value is the PRIMARY billable code's date; every code carries its
+  // own date under `billing`.
+  const primaryDos =
+    (managementDetails[0] && managementDetails[0].date_of_service) ||
+    deviceSupplyDos ||
+    (setupSupported ? setupDos : null) ||
+    win.end;
+
   return {
     month: win.label,
     period: { start: win.start, end: win.end },
-    // CONFIRMED: date of service for the monthly codes is the last day of month.
-    date_of_service: win.end,
+    // PRIMARY date of service; per-code dates are under `billing` (biller
+    // confirms which appears on the note itself).
+    date_of_service: primaryDos,
     patient: {
       id: p.id,
       name: p.name,
@@ -349,15 +402,19 @@ async function getRpmNote({ patientId, orgScope, month }) {
       setup: setupSupported
         ? { code: rules.setup.code, date_of_service: setupDos }
         : { code: null, date_of_service: null },
-      // 99445/99454 — device supply by transmission-day band; DOS = month end.
-      device_supply: { ...deviceSupply, date_of_service: win.end },
-      // 99457 (+99458 add-ons) — both tests must pass; DOS = month end.
+      // 99445/99454 — device supply by transmission-day band; DOS = the date the
+      // day-count crossed the band threshold.
+      device_supply: deviceSupply, // includes code, days, reason, date_of_service
+      // 99470/99457 (+99458 add-ons). base_code is the mutually-exclusive tier;
+      // codes[] stays a flat string list (99458 may repeat); code_details carries
+      // the per-instance threshold-met date of service.
       management: {
-        codes: managementCodes, // [] when not billable
+        codes: managementCodes,
+        code_details: managementDetails,
+        base_code: baseTier ? baseTier.code : null,
         minutes: dataReviewMinutes,
         additional_units_99458: additionalUnits,
-        interactive, // test (a)/(b) detail incl. which failed
-        date_of_service: win.end,
+        interactive, // test (a)/(b) detail incl. which failed + whether (b) required
       },
     },
     // Template attestation text — PENDING final compliance wording; sourced from
