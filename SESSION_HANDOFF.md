@@ -167,3 +167,72 @@ The RPM monthly-note generator, end to end, plus its dependencies:
   cross-clinic protections.
 - iOS app hardcodes rmtrpm.duckdns.org — breaks if that domain is retired.
 - No Security Risk Analysis on file. Standing legal violation. Highest-value item.
+
+## Session close — 21 Aug 2026, ~1am
+
+### Completed tonight
+- MIGRATION RECONCILIATION. main is now the clean 45-file base. Proven by a
+  scratch-schema replay: created an empty database, ran all 45 migrations, and
+  diffed the result against rpm_db_v1. Only difference was redundant FK-backing
+  indexes MySQL creates on existing tables but not fresh ones — benign. The MRN
+  migration's ALTER genuinely executed for the first time. knex migrate:latest
+  works normally again. Use the "scratch" env in knexfile.js to repeat this
+  before any production migration run.
+- Caught two silent-revert risks: origin/main and feature/care-activity were both
+  missing the BP classifier fix that's deployed to production. Found by comparing
+  md5 hashes of deviceData.service.js, not by trusting reports. All now match
+  prod at 37e5fb634d2c6d46ccdeb0a32258e246.
+- ALL BILLING RULES CONFIRMED (see BILLING_FOLLOWUPS.md and RPM_NOTE_POLICY.md).
+- RPM NOTE GENERATOR built and verified working end to end.
+
+### Confirmed billing rules — no longer pending
+Period: calendar month (Medicare 2026 reporting preference).
+Device supply by distinct transmission days: 0-1 not billable, 2-15 -> 99445,
+16+ -> 99454. Both reimburse $52.11.
+Management by minutes: 10-19 -> 99470 ($26.05), 20-39 -> 99457 ($51.77),
+40+ -> 99457 + 99458 units ($41.42 each, no cap).
+99453 setup ($21.71) once per patient per device type, INDEPENDENT of
+transmission days.
+Date of service: the date each threshold was met, per code — not month-end.
+99457 is TWO independent tests: 20+ minutes AND at least one live interactive
+communication. Data review alone does not qualify.
+E-signature confirmed acceptable — it's how providers already sign.
+Attestation wording: Quantix template text, verbatim, still pending compliance.
+
+### Alert thresholds — confirmed, built, NOT deployed
+Classification from AHA, urgent line from Quantix template section 8.
+On branch feature/bp-evaluator, deliberately separate so it deploys as a
+conscious change: it REDUCES paging. Production today pages on everything
+>=140/90. Under the new evaluator, 140-160/90-100 flags but does not page.
+That's the intended fix for alert fatigue, but anyone relying on those pages
+should be told before it ships.
+OPEN: hypotension threshold. AHA covers only hypertension. The evaluator
+currently pages on <90/<60, preserving today's behavior, pending a decision
+from the medical director.
+
+### Where I stopped
+Reviewing John Smith's generated RPM note in the browser. It renders correctly —
+Quantix template reproduced faithfully, BP range 113/72 to 157/98, average
+135/84, 5 transmission days, 39 minutes, clinical sections correctly blank with
+a "provider" badge, and the month's call log shown as read-only reference.
+Had not yet scrolled to the billing determination and signature sections. Expect
+99445 (5 days) and 99457 (39 min), with the interactive-communication test
+FAILING because the outcome migration nulled the ambiguous "reached" values.
+
+### Still open
+- Husnain: S3/PHI document storage. Blocks PDF persistence. rpm_notes.document_key
+  is nullable and ready.
+- Medical director: hypotension paging threshold.
+- Me: rotate Twilio and MySQL root credentials; Wajahat's GitHub PAT still live
+  on his account.
+- Deferred by choice: ICD-10 codes, place of service, provider NPI — schemas
+  proposed in BILLING_FOLLOWUPS.md, not built. Without them the note is not a
+  submittable claim on its own; the biller adds the diagnosis code.
+- Branch deletions, deliberately held. Retirement list in the branch audit.
+- NOTHING from this week is deployed. Production is on 32 migrations; the
+  care-activity set is 13 migrations and a large body of code away from live.
+
+### Read these alongside this file
+SECURITY_FOLLOWUPS.md, BILLING_FOLLOWUPS.md, MIGRATION_FOLLOWUPS.md,
+FRONTEND_FOLLOWUPS.md, CARE_ACTIVITY_NOTES.md, RPM_NOTE_POLICY.md,
+ALERT_THRESHOLD_DESIGN.md, BRANCH_REVIEW_2026-08-17.md
