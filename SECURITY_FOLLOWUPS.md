@@ -155,3 +155,32 @@ privilege-escalation fix for the admin user-mutation and care-team routes.
   device/data-quality alert type — visibly a device problem, with its own
   rendering — should be added so a garbage-sending cuff surfaces to staff without
   masquerading as a clinical reading.
+
+## 7/8 consolidation — BUILT on `feature/bp-evaluator` (`4166892`), not yet deployed
+One evaluator (`services/bpClassifier.js`) that both display and alerting call.
+Confirmed thresholds (medical director + Quantix §8): classification AHA
+(Normal/Elevated/Stage 1/Stage 2/Crisis, + Low, + Error); paging separate —
+Crisis→emergency, SBP>160 OR DBP>100→urgent (strict >), Stage 1/2 at/below
+160/100 flag but don't page, Error/Normal/Elevated→none. Folded in
+`determineTypeForClinician` and the dead module-level `calculateBPStatus`;
+retired `doctor_alert_settings` (4 vestigial LEFT JOINs dropped). Unit-tested
+16/16. **Deploy as its OWN change** — the 140-160/90-100 band moves from paging
+to flag-only (the alert-fatigue fix), so anyone relying on those pages must know
+first.
+
+**Open — for the medical director:**
+- **Hypotension threshold.** AHA's categories only cover HYPERTENSION, so <90/<60
+  is an open clinical question. The evaluator currently classifies it "Low" and
+  **pages** (preserving today's behavior) pending the MD's decision on whether/at
+  what threshold low BP should page. Add to the MD threshold list alongside the
+  hypertension thresholds.
+- **Per-patient overrides (§3.5).** The evaluator accepts a per-patient override
+  of the URGENT paging line (never the AHA classification); no store/UI exists yet
+  and nobody configures them. Wire when the MD wants per-patient thresholds — this
+  replaces the retired `doctor_alert_settings` control cleanly.
+
+## Other BP paths — audit for the evaluator (fast-follow)
+The consolidation covered the primary ingest (`createDeviceDataService`). Audit
+`triggerBPAlert`, `createBPDataService`, and `saveGenericDeviceDataService` in
+`deviceData.service.js` to route through `bpClassifier` too, so no path keeps its
+own thresholds or the old status vocabulary.
