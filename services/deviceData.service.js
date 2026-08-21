@@ -680,30 +680,12 @@ const {
   getUserSocketId,
 } = require("../socket/socketServer");
 const twilioService = require("../services/twillio.service");
+const { classifyBP } = require("./bpClassifier");
 
 // Service
 
-const calculateBPStatus = (systolic, diastolic) => {
-  const sys = parseInt(systolic);
-  const dia = parseInt(diastolic);
-
-  // Low BP
-  if (sys < 90 || dia < 60) {
-    return "Low";
-  }
-  // Normal BP
-  else if (sys <= 120 && dia <= 80) {
-    return "Normal";
-  }
-  // High BP
-  else if (sys > 120 || dia > 80) {
-    return "High";
-  }
-  // Default fallback
-  else {
-    return "Normal";
-  }
-};
+// (Removed the module-level calculateBPStatus — the old `sys > 120 -> High`
+// classifier. It had no callers and is superseded by services/bpClassifier.js.)
 const createDeviceDataService = async (
   userId,
   devId,
@@ -718,67 +700,11 @@ const createDeviceDataService = async (
     deviceData,
   });
 
-  // helper reused from your test-alert logic
-  const determineTypeForClinician = (vitals) => {
-    if (!vitals) return null;
-    const sVal = Number.parseInt(vitals.systolic, 10);
-    const dVal = Number.parseInt(vitals.diastolic, 10);
-    if (Number.isNaN(sVal) && Number.isNaN(dVal)) return null;
-
-    const sExtremeHigh = !Number.isNaN(sVal) && sVal > 140;
-    const sModerateHigh = !Number.isNaN(sVal) && sVal >= 130 && sVal <= 140;
-    const sExtremeLow = !Number.isNaN(sVal) && sVal < 90;
-    const sModerateLow = !Number.isNaN(sVal) && sVal >= 90 && sVal <= 99;
-
-    const dExtremeHigh = !Number.isNaN(dVal) && dVal > 99;
-    const dModerateHigh = !Number.isNaN(dVal) && dVal >= 90 && dVal <= 99;
-    const dExtremeLow = !Number.isNaN(dVal) && dVal < 60;
-    const dModerateLow = !Number.isNaN(dVal) && dVal >= 60 && dVal <= 69;
-
-    const anyHighBand =
-      sExtremeHigh || sModerateHigh || dExtremeHigh || dModerateHigh;
-    const anyLowBand =
-      sExtremeLow || sModerateLow || dExtremeLow || dModerateLow;
-
-    if ((sExtremeHigh || sModerateHigh) && (dExtremeLow || dModerateLow))
-      return "abnormal";
-    if ((dExtremeHigh || dModerateHigh) && (sExtremeLow || sModerateLow))
-      return "abnormal";
-
-    if (sExtremeHigh || dExtremeHigh || sExtremeLow || dExtremeLow)
-      return "high";
-    if (anyHighBand || anyLowBand) return "low";
-
-    return null;
-  };
-
-  // minimal BP status calculator (keeps your previous behavior)
-  // Classify a BP reading. Boundaries are standard clinical ranges (AHA/ACC):
-  // >=180/>=120 crisis, >=140/>=90 stage-2 hypertension, <90/<60 low. Previously
-  // these used strict `>` with a 99 diastolic cutoff (`sVal > 140 || dVal > 99`),
-  // which classified 140/95 — clearly Stage 2 — as "Normal", and NaN defaulted to
-  // "Normal". A malformed reading is an ERROR state, never Normal: it must
-  // surface, not silently pass as a normal reading.
-  //
-  // NOTE: This label still gates alerting below via `bpStatus !== "Normal"` (the
-  // original design). That is a STOPGAP, not the intended end state: the alert
-  // path has three overlapping threshold mechanisms (this label; the hardcoded
-  // bands in determineTypeForClinician; and doctor_alert_settings, which is read
-  // but never applied — see SECURITY_FOLLOWUPS). Those need to collapse into one
-  // configurable evaluator; the clinical thresholds are the medical director's to
-  // set. An earlier version of this hotfix added a hardcoded >=160/>=100 gate,
-  // but that both introduced a third threshold and suppressed alerts in the
-  // 141-159 band, so it was reverted.
-  const calculateBPStatus = (s, d) => {
-    const sVal = Number(s);
-    const dVal = Number(d);
-    if (!Number.isFinite(sVal) || !Number.isFinite(dVal)) return "Error";
-
-    if (sVal >= 180 || dVal >= 120) return "Emergency";
-    if (sVal >= 140 || dVal >= 90) return "High";
-    if (sVal < 90 || dVal < 60) return "Low";
-    return "Normal";
-  };
+  // BP classification AND the paging decision now come from ONE evaluator
+  // (services/bpClassifier.js). It replaces the two classifiers that used to live
+  // here (determineTypeForClinician + a local calculateBPStatus) and does not
+  // read doctor_alert_settings (retired — it was inert). Thresholds are the
+  // medical director's / Quantix's, set in that module.
 
   let connection;
   try {
@@ -795,21 +721,20 @@ const createDeviceDataService = async (
       );
     }
 
-    // 2) compute BP status if needed
+    // 2) classify BP if needed (single evaluator). bpStatus stores the AHA
+    // classification; bpEval also carries the paging decision used by the gate.
     let processedData = { ...deviceData };
+    let bpEval = null;
     if (
       devType === "bp" &&
       deviceData.systolic != null &&
       deviceData.diastolic != null
     ) {
-      const bpStatus = calculateBPStatus(
-        deviceData.systolic,
-        deviceData.diastolic
-      );
-      processedData = { ...deviceData, bpStatus };
+      bpEval = classifyBP(deviceData.systolic, deviceData.diastolic);
+      processedData = { ...deviceData, bpStatus: bpEval.classification };
       console.log(
-        "📊 Calculated BP status =",
-        bpStatus,
+        "📊 BP evaluated =",
+        `${bpEval.classification} / ${bpEval.alert_level} (pages=${bpEval.pages})`,
         `for ${deviceData.systolic}/${deviceData.diastolic}`
       );
     }
@@ -830,29 +755,17 @@ const createDeviceDataService = async (
       alertCreated: false,
     };
 
-    // 4) If BP device and bpStatus is an abnormal CLINICAL state -> run alert
-    // logic. With the corrected classifier this fires on >=140/>=90 (Stage 2),
-    // Emergency, and Low — so 140/95 alerts and the 141-159 band is no longer
-    // suppressed. This is the ORIGINAL design (alert when abnormal), not a new
-    // threshold; per-condition thresholds are pending the consolidation.
-    //
-    // "Error" (a malformed reading) is deliberately EXCLUDED: it is a data-quality
-    // state, not a clinical one. It's still persisted as bpStatus:"Error" (so it
-    // surfaces in the data instead of silently passing as "Normal"), but it must
-    // NOT fire a clinical BP alert — that would render as e.g. "BP alert
-    // (severity: low) - abc/95", telling a clinician the patient had a mild
-    // low-BP event when the cuff malfunctioned. A distinct device/data-quality
-    // alert is a fast-follow (see SECURITY_FOLLOWUPS).
-    if (
-      devType === "bp" &&
-      processedData.bpStatus &&
-      processedData.bpStatus !== "Normal" &&
-      processedData.bpStatus !== "Error"
-    ) {
+    // 4) Page only when the evaluator says so (alert_level urgent/emergency):
+    // SBP > 160 OR DBP > 100 (urgent), Crisis (emergency), and Low (pages,
+    // pending the medical director's low threshold). Stage 1 / Stage 2 at or
+    // below 160/100 are FLAGGED for review but do NOT page — this is the
+    // authorized change that addresses alert fatigue. Error (malformed) never
+    // pages; it is still persisted as bpStatus:"Error" so it surfaces in data.
+    if (devType === "bp" && bpEval && bpEval.pages) {
       console.log(
         "🚨 BP alert logic triggered:",
         `${deviceData.systolic}/${deviceData.diastolic}`,
-        `[classified ${processedData.bpStatus}]`
+        `[${bpEval.classification} / ${bpEval.alert_level}]`
       );
 
       // open connection to run transactional alert insertions and to fetch clinicians
@@ -891,11 +804,9 @@ const createDeviceDataService = async (
 
       if (drIdsFromOpts) {
         const [rows] = await connection.query(
-          `SELECT u.id, u.name, u.email, u.phoneNumber, role.role_type,
-                  das.systolic_high, das.systolic_low, das.diastolic_high, das.diastolic_low
+          `SELECT u.id, u.name, u.email, u.phoneNumber, role.role_type
            FROM users u
            JOIN role ON u.id = role.user_id
-           LEFT JOIN doctor_alert_settings das ON u.id = das.doctor_id
            WHERE u.id IN (?) AND role.role_type = 'clinician' AND u.is_active = true`,
           [drIdsFromOpts]
         );
@@ -904,11 +815,9 @@ const createDeviceDataService = async (
         // try to fetch clinicians assigned to this patient from common assignment tables (best-effort)
         try {
           const [rowsAssigned] = await connection.query(
-            `SELECT u.id, u.name, u.email, u.phoneNumber, role.role_type,
-                    das.systolic_high, das.systolic_low, das.diastolic_high, das.diastolic_low
+            `SELECT u.id, u.name, u.email, u.phoneNumber, role.role_type
              FROM users u
              JOIN role ON u.id = role.user_id
-             LEFT JOIN doctor_alert_settings das ON u.id = das.doctor_id
              JOIN patient_doctor pd ON pd.doctor_id = u.id
              WHERE pd.patient_id = ? AND role.role_type = 'clinician' AND u.is_active = true`,
             [userId]
@@ -923,11 +832,9 @@ const createDeviceDataService = async (
           const patient = patientRows[0];
           if (patient && patient.organization_id) {
             const [rowsOrg] = await connection.query(
-              `SELECT u.id, u.name, u.email, u.phoneNumber, role.role_type,
-                      das.systolic_high, das.systolic_low, das.diastolic_high, das.diastolic_low
+              `SELECT u.id, u.name, u.email, u.phoneNumber, role.role_type
                FROM users u
                JOIN role ON u.id = role.user_id
-               LEFT JOIN doctor_alert_settings das ON u.id = das.doctor_id
                WHERE u.organization_id = ? AND role.role_type = 'clinician' AND u.is_active = true`,
               [patient.organization_id]
             );
@@ -935,11 +842,9 @@ const createDeviceDataService = async (
           } else {
             // final fallback: all active clinicians
             const [rowsAll] = await connection.query(
-              `SELECT u.id, u.name, u.email, u.phoneNumber, role.role_type,
-                      das.systolic_high, das.systolic_low, das.diastolic_high, das.diastolic_low
+              `SELECT u.id, u.name, u.email, u.phoneNumber, role.role_type
                FROM users u
                JOIN role ON u.id = role.user_id
-               LEFT JOIN doctor_alert_settings das ON u.id = das.doctor_id
                WHERE role.role_type = 'clinician' AND u.is_active = true`
             );
             clinicianRows = rowsAll;
@@ -956,32 +861,10 @@ const createDeviceDataService = async (
 
       console.log("🎯 Primary assigned doctor:", primaryDoctor);
 
-      // filter clinicians based on their settings and derived vitals
-      const cliniciansToAlert = [];
-      const clinicianTypeMap = {};
-      const vitals = {
-        systolic: processedData.systolic,
-        diastolic: processedData.diastolic,
-      };
-      clinicianRows.forEach((clin) => {
-        // determineTypeForClinician uses measured bands
-        const derived = determineTypeForClinician(vitals);
-        if (derived) {
-          cliniciansToAlert.push(clin);
-          clinicianTypeMap[clin.id] = derived;
-        } else {
-          // fallback: if clinician has no specific thresholds saved, include them
-          const hasSettings =
-            clin.systolic_high ||
-            clin.systolic_low ||
-            clin.diastolic_high ||
-            clin.diastolic_low;
-          if (!hasSettings) {
-            cliniciansToAlert.push(clin);
-            clinicianTypeMap[clin.id] = "low"; // conservative default
-          }
-        }
-      });
+      // The evaluation is patient-level (one reading -> one classification), so
+      // every candidate clinician is a recipient. doctor_alert_settings is
+      // retired: no per-clinician threshold filtering (it never applied anyway).
+      const cliniciansToAlert = clinicianRows.slice();
 
       console.log("📣 Final cliniciansToAlert:", cliniciansToAlert.length);
 
@@ -999,15 +882,9 @@ const createDeviceDataService = async (
         return serviceResponse;
       }
 
-      // choose overall alert type by priority
-      const priority = { abnormal: 3, high: 2, low: 1 };
-      let overallType = null;
-      for (const clin of cliniciansToAlert) {
-        const t = clinicianTypeMap[clin.id] || "low";
-        if (!overallType) overallType = t;
-        else if (priority[t] > priority[overallType]) overallType = t;
-      }
-      if (!overallType) overallType = "low";
+      // Alert severity comes from the evaluator: "emergency" (Crisis) or
+      // "urgent" (>160/>100, or Low pending the MD low threshold).
+      const overallType = bpEval.alert_level;
 
       // Insert alert + assignments in transaction
       await connection.beginTransaction();
@@ -1078,7 +955,7 @@ const createDeviceDataService = async (
               primary_assigned_doctor_name:
                 primaryDoctor?.name || "Unknown Doctor",
               primary_assigned_doctor_email: primaryDoctor?.email || "N/A",
-              derived_type: clinicianTypeMap[recipient_id] || overallType,
+              derived_type: overallType,
             },
             patient: patientDetails,
             assigned_doctor: primaryDoctor
@@ -1092,7 +969,12 @@ const createDeviceDataService = async (
             unread_count: parseInt(unreadCount) || 0,
             timestamp: new Date(),
             server_time: new Date().toISOString(),
-            vital_data: vitals,
+            vital_data: {
+              systolic: processedData.systolic,
+              diastolic: processedData.diastolic,
+              classification: bpEval?.classification,
+              alert_level: bpEval?.alert_level,
+            },
           };
 
           let sent = false;
@@ -1623,7 +1505,7 @@ const createDeviceDataService = async (
 //               primary_assigned_doctor_name:
 //                 primaryDoctor?.name || "Unknown Doctor",
 //               primary_assigned_doctor_email: primaryDoctor?.email || "N/A",
-//               derived_type: clinicianTypeMap[recipient_id] || overallType,
+//               derived_type: overallType,
 //             },
 //             patient: patientDetails, // ✅ Use full patient details
 //             // ✅ NEW: Include assigned doctor details
