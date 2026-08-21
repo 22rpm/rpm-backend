@@ -119,10 +119,13 @@ The RPM monthly-note generator, end to end, plus its dependencies:
   rpm_notes.document_key is nullable and ready to backfill once storage exists.
 - **Biller** — nothing further. All RPM billing rules are confirmed (incl. 99445
   short-period as 2-15 days). The earlier "99445 spec sent to Husnain" item is closed.
-- Internal TODO (ours, not blocked on anyone): constrain patient_calls.outcome to a
-  fixed set. Until then the 99457 test-(b) live-interaction check runs in
-  "unverifiable" mode (any month with calls but free-text outcomes is flagged for the
-  provider to confirm rather than auto-billed). One config line flips it to automatic.
+- patient_calls.outcome — DONE, not a TODO any more. The constrained set shipped
+  (`config/callOutcomes.js`, case-sensitive CHECK, migration `20260823120000`),
+  `rpmBillingRules.js` `detection: "outcome"` (99457 test-(b) is now AUTOMATIC —
+  Reached patient/caregiver qualifies), and the call form is a required select.
+  Remaining: the server-side NULL gap (API/CHECK still permit NULL) — see
+  `BILLING_FOLLOWUPS.md` §9. A NULL outcome renders "test (b) NOT DETERMINED —
+  outcome not recorded" (missing evidence), never "FAILED".
 
 ## Known landmines
 - **Second BP classifier still buggy.** The ingest classifier is fixed/deployed, but
