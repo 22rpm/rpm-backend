@@ -5,6 +5,8 @@
 // CMS revises these annually, so they must be changeable without a deploy.
 // Target remains a billing_rules DB table; this module is the interim single
 // source, kept OUT of the computation logic.
+const { QUALIFYING_OUTCOMES } = require("./callOutcomes");
+
 module.exports = {
   // CONFIRMED. Billing period is the selected CALENDAR MONTH (not rolling 30d).
   period: "calendar_month",
@@ -55,10 +57,12 @@ module.exports = {
     //                    do NOT auto-pass; require provider confirmation. Zero
     //                    calls is still a hard fail. (interim default)
     //   "any_call"     - any logged call counts (optimistic; risks over-billing)
-    //   "outcome"      - read outcome against qualifyingOutcomes (once the set
-    //                    is constrained — flip to this then)
+    //   "outcome"      - read outcome against qualifyingOutcomes
+    // The constrained outcome set now exists (config/callOutcomes.js). FLIP this
+    // to "outcome" as part of the existing-row data migration (so historical
+    // calls are normalised before exact-match evaluation runs against them).
     detection: "unverifiable",
-    qualifyingOutcomes: ["reached", "completed", "spoke", "connected"],
+    qualifyingOutcomes: QUALIFYING_OUTCOMES, // ["Reached patient","Reached caregiver"]
   },
 
   // A3. CONFIRMED. Setup/education. Billable ONCE per patient per device type,
@@ -93,13 +97,12 @@ module.exports = {
   // FLAGGED on the note so the provider can see uncategorised time exists.
   uncategorized: { category: "other", bucket: "data_review_interaction" },
 
-  // Attestation. This is the Quantix template's OWN wording, used VERBATIM (not
-  // authored by engineering). `pending` = awaiting formal compliance sign-off on
-  // acceptability + whether e-signature is allowed; the text is here (not in the
-  // PDF layout) so it can be swapped without touching the PDF when compliance
-  // finalizes it.
+  // Attestation. The Quantix template's OWN wording, used VERBATIM (not authored
+  // by engineering). CONFIRMED Aug 2026: e-signature is acceptable (it is how
+  // providers already sign) and this is the approved wording. Kept in config so
+  // it can still be swapped without touching the PDF layout.
   attestation: {
-    pending: true,
+    pending: false,
     text:
       "I have reviewed the patient's remotely transmitted physiologic data, " +
       "interpreted the results, and communicated with the patient/caregiver as " +

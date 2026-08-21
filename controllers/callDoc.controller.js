@@ -11,6 +11,7 @@ const {
   validateStartedAt,
   validateDurationMinutes,
 } = require("../services/careValidation");
+const { CALL_OUTCOMES } = require("../config/callOutcomes");
 
 const DIRECTIONS = ["outbound", "inbound"];
 
@@ -50,8 +51,12 @@ function validateCallBody(body) {
 
   const reasonVal =
     typeof reason === "string" && reason.trim() !== "" ? reason.trim() : null;
+  // outcome is a constrained set (or null); detail belongs in `note`.
   const outcomeVal =
     typeof outcome === "string" && outcome.trim() !== "" ? outcome.trim() : null;
+  if (outcomeVal !== null && !CALL_OUTCOMES.includes(outcomeVal)) {
+    errors.push("outcome must be one of: " + CALL_OUTCOMES.join(", "));
+  }
 
   return {
     errors,

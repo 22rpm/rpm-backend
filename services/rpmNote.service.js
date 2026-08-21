@@ -225,8 +225,9 @@ async function getRpmNote({ patientId, orgScope, month }) {
     testB = true;
     testBBasis = `${calls.length} call(s) logged (any-call mode)`;
   } else if (mode === "outcome") {
+    // Exact match against the constrained outcome set (config/callOutcomes.js).
     const q = new Set(rules.interactiveRequirement.qualifyingOutcomes);
-    const hit = calls.some((c) => c.outcome && q.has(String(c.outcome).toLowerCase()));
+    const hit = calls.some((c) => c.outcome && q.has(c.outcome));
     testB = hit;
     testBBasis = hit
       ? "a call outcome indicates a live interaction"
