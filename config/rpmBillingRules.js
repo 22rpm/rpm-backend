@@ -78,11 +78,11 @@ module.exports = {
     //                    do NOT auto-pass; require provider confirmation. Zero
     //                    calls is still a hard fail. (interim default)
     //   "any_call"     - any logged call counts (optimistic; risks over-billing)
-    //   "outcome"      - read outcome against qualifyingOutcomes
-    // The constrained outcome set now exists (config/callOutcomes.js). FLIP this
-    // to "outcome" as part of the existing-row data migration (so historical
-    // calls are normalised before exact-match evaluation runs against them).
-    detection: "unverifiable",
+    //   "outcome"      - read outcome against qualifyingOutcomes (ACTIVE)
+    // The constrained outcome set exists (config/callOutcomes.js), is DB-enforced
+    // (case-sensitive CHECK), and existing rows were normalised by migration
+    // 20260823120000 — so exact-match detection is now reliable.
+    detection: "outcome",
     qualifyingOutcomes: QUALIFYING_OUTCOMES, // ["Reached patient","Reached caregiver"]
   },
 
