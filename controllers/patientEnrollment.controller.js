@@ -74,6 +74,8 @@ function validate(body) {
         errors.push("device.serial_number is required");
       if (b.device.assigned_at != null && !isValidDate(b.device.assigned_at))
         errors.push("device.assigned_at is not a valid date");
+      if (b.device.setup_date != null && !isValidDate(b.device.setup_date))
+        errors.push("device.setup_date is not a valid date");
       if (b.device.setup === true && b.consent == null)
         errors.push("device.setup requires the consent block (99453 needs consent)");
     }
@@ -124,6 +126,12 @@ async function enrollPatient(req, res) {
             device_type: b.device.device_type.trim(),
             serial_number: b.device.serial_number.trim(),
             assigned_at: b.device.assigned_at || todayISO(),
+            // 99453 setup date = the setup/education event. Defaults to the
+            // enrollment date (same appointment in the common case), editable;
+            // a device added later carries its own date. Falls back to
+            // assigned_at then today if enrollment date is somehow absent.
+            setup_date:
+              b.device.setup_date || enrolledAt || b.device.assigned_at || todayISO(),
             setup: b.device.setup === true,
           }
         : null,

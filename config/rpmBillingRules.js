@@ -93,13 +93,18 @@ module.exports = {
   // FLAGGED on the note so the provider can see uncategorised time exists.
   uncategorized: { category: "other", bucket: "data_review_interaction" },
 
-  // PENDING compliance: exact attestation wording + whether e-signature is
-  // acceptable. Kept here so the PDF layout never changes when the final text
-  // is swapped in. Do NOT treat as final.
+  // Attestation. This is the Quantix template's OWN wording, used VERBATIM (not
+  // authored by engineering). `pending` = awaiting formal compliance sign-off on
+  // acceptability + whether e-signature is allowed; the text is here (not in the
+  // PDF layout) so it can be swapped without touching the PDF when compliance
+  // finalizes it.
   attestation: {
     pending: true,
     text:
-      "[PENDING COMPLIANCE REVIEW — verbatim attestation wording from the " +
-      "Quantix template to be provided. Not for production use.]",
+      "I have reviewed the patient's remotely transmitted physiologic data, " +
+      "interpreted the results, and communicated with the patient/caregiver as " +
+      "indicated. All services documented herein were personally performed or " +
+      "directly supervised in accordance with applicable Medicare and payer " +
+      "guidelines.",
   },
 };

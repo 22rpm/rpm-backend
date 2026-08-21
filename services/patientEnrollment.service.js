@@ -205,7 +205,9 @@ async function enrollPatient({
           patientId,
           organizationId,
           device.device_type,
-          device.assigned_at,
+          // setup_date drives the 99453 date of service; defaulted to the
+          // enrollment date by the controller, editable per device.
+          device.setup_date || enrolledAt,
           actorId,
           consentId,
         ]
