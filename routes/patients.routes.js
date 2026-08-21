@@ -15,7 +15,11 @@ const {
   getPatientForEdit,
   updatePatient,
 } = require("../controllers/patientEdit.controller");
-const { getRpmNote } = require("../controllers/rpmNote.controller");
+const {
+  getRpmNote,
+  signRpmNote,
+  getSignedRpmNote,
+} = require("../controllers/rpmNote.controller");
 
 const staffRoles = requireRole("clinician", "admin", "super-admin");
 
@@ -87,6 +91,28 @@ router.get(
   resolveOrgScope,
   scopePatientParam("patientId"),
   getRpmNote
+);
+
+// GET /api/patients/:patientId/rpm-note/signed?month=YYYY-MM — current signed
+// head for the month (or null). Read-only.
+router.get(
+  "/:patientId/rpm-note/signed",
+  authRequired,
+  staffRoles,
+  resolveOrgScope,
+  scopePatientParam("patientId"),
+  getSignedRpmNote
+);
+
+// POST /api/patients/:patientId/rpm-note/sign — sign the note into the
+// append-only rpm_notes ledger (server-computed snapshot; hash-anchored).
+router.post(
+  "/:patientId/rpm-note/sign",
+  authRequired,
+  staffRoles,
+  resolveOrgScope,
+  scopePatientParam("patientId"),
+  signRpmNote
 );
 
 module.exports = router;

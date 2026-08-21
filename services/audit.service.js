@@ -57,6 +57,9 @@ const ACTIONS = {
   // Clinical workflow
   ALERT_RESOLVED: "alert.resolved",
   ASSIGNMENT_CREATE: "assignment.create",
+
+  // Billing documents
+  RPM_NOTE_SIGNED: "rpm_note.signed",
 };
 
 /**
@@ -139,4 +142,37 @@ function recordAsync(entry) {
   record(entry).catch(() => {});
 }
 
-module.exports = { record, recordAsync, ACTIONS };
+/**
+ * TRANSACTIONAL variant. Writes on the caller's connection and DELIBERATELY
+ * THROWS on failure, so the audit row commits or rolls back atomically with the
+ * caller's business write. Use only where the audit entry must not be able to
+ * succeed or fail independently — e.g. anchoring a signed-note hash. Unlike
+ * record(), it parses no req: pass explicit fields.
+ *
+ * @param {object} conn   an active mysql2 transaction connection
+ * @param {object} entry  { actorId, actorRole, action, entityType, entityId,
+ *                          organizationId, ipAddress, userAgent, metadata }
+ */
+async function recordInTx(conn, entry) {
+  if (!entry.action || !entry.entityType)
+    throw new Error("audit.recordInTx: action and entityType are required");
+  await conn.query(
+    `INSERT INTO audit_log
+        (actor_id, actor_role, action, entity_type, entity_id,
+         organization_id, ip_address, user_agent, metadata)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      entry.actorId ?? null,
+      String(entry.actorRole || "anonymous").slice(0, 50),
+      entry.action,
+      entry.entityType,
+      entry.entityId ?? null,
+      entry.organizationId ?? null,
+      entry.ipAddress ? String(entry.ipAddress).slice(0, 100) : null,
+      entry.userAgent ? String(entry.userAgent).slice(0, 512) : null,
+      entry.metadata ? JSON.stringify(entry.metadata) : null,
+    ]
+  );
+}
+
+module.exports = { record, recordAsync, recordInTx, ACTIONS };
