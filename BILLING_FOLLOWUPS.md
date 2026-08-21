@@ -71,3 +71,14 @@ should appear on the note. All per-code dates are in the endpoint's `billing`.
 National-average amounts are in config (`reimbursement`, `display:false`). §3.9
 keeps revenue separate from eligibility — nothing surfaces estimated revenue yet.
 Vary by locality; confirm local values before ever displaying.
+
+## 8. Outcome migration (20260823120000) runs against an EMPTY table on prod — no dry-run needed
+Checked on prod (2026-08-20): `patient_calls` does NOT exist there (ERROR 1146)
+and prod is on 32 migrations — the entire care-activity set has never been
+deployed. So when the care-activity migrations run on prod, `patient_calls` is
+created fresh and the outcome-constraint migration runs against an EMPTY table:
+there is no legacy free text to map, and the keyword mapping / NULL-preserve path
+is never exercised on real data. (It WAS exercised on `rpm_db_v1`, which has test
+rows — see the commit for that migration.) Nobody should worry about a prod
+free-text backfill: there isn't one. Real outcomes on prod will be constrained
+from day one because the CHECK constraint ships with the table.
