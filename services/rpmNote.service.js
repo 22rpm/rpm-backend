@@ -252,12 +252,27 @@ async function getRpmNote({ patientId, orgScope, month }) {
     testBBasis = `${calls.length} call(s) logged (any-call mode)`;
   } else if (mode === "outcome") {
     // Exact match against the constrained outcome set (config/callOutcomes.js).
+    // Three states, because on a billing document "the call didn't reach the
+    // patient" (evidence) and "nobody recorded what happened" (missing evidence)
+    // are DIFFERENT facts:
+    //   qualifying outcome present            -> PASS (true)
+    //   no qualifying, but a call has a NULL  -> NOT RECORDED / indeterminate (null)
+    //     outcome (blank on a logged call)       — never asserted as a failure
+    //   no qualifying, all outcomes recorded  -> FAILED (false)
     const q = new Set(rules.interactiveRequirement.qualifyingOutcomes);
-    const hit = calls.some((c) => c.outcome && q.has(c.outcome));
-    testB = hit;
-    testBBasis = hit
-      ? "a call outcome indicates a live interaction"
-      : "no call outcome indicates a live interaction";
+    const qualifying = calls.filter((c) => c.outcome && q.has(c.outcome));
+    const unrecorded = calls.filter((c) => !c.outcome); // NULL / blank outcome
+    if (qualifying.length) {
+      testB = true;
+      testBBasis = "a call reached the patient or caregiver";
+    } else if (unrecorded.length) {
+      testB = null; // NOT RECORDED — do not assert a failure
+      const dates = [...new Set(unrecorded.map((c) => c.date))].join(", ");
+      testBBasis = `outcome not recorded on the ${dates} call(s) — cannot determine a live interaction; record the outcome`;
+    } else {
+      testB = false; // recorded non-qualifying outcomes (No answer, etc.)
+      testBBasis = "no logged call reached the patient or caregiver (recorded outcomes are non-qualifying)";
+    }
   } else {
     testB = null;
     testBBasis = `${calls.length} call(s) logged, but outcome is free text — cannot confirm a live interaction; provider must verify`;
@@ -335,7 +350,9 @@ async function getRpmNote({ patientId, orgScope, month }) {
     missing.push(
       testB === false
         ? `${baseTier.code} test (b) FAILED — no live interactive communication this month (data review alone does not qualify)`
-        : `${baseTier.code} test (b) UNVERIFIABLE — ${testBBasis}`
+        : // testB === null: missing evidence, NOT a failure. Never state
+          // under-claiming as fact — this is what the whole investigation turned on.
+          `${baseTier.code} test (b) NOT DETERMINED — ${testBBasis}`
     );
   if (uncategorizedMinutes > 0)
     missing.push(

@@ -6,6 +6,7 @@
 // req.user.id — never from the body. Email is required for now (the users.email
 // nullability migration is deferred — see EMAIL_NULLABILITY_AUDIT.md).
 const enrollmentService = require("../services/patientEnrollment.service");
+const { CALL_OUTCOMES } = require("../config/callOutcomes");
 
 const PROGRAM_STATUSES = ["active", "pending", "discharged"];
 const CONSENT_METHODS = ["verbal", "written"];
@@ -166,14 +167,24 @@ async function enrollPatient(req, res) {
   }
 }
 
-// GET /api/patients/enrollment-options — payers + device types (global, active)
-// and the org-scoped clinician roster, for the enrollment form. Org comes from
-// req.orgScope (set by resolveOrgScope), never the client.
+// GET /api/patients/enrollment-options — form lookups: payers + device types
+// (global, active), the org-scoped clinician roster, and the constrained
+// call-outcome set. (The name now under-describes it — it serves general form
+// lookups, not only enrollment; kept rather than renamed. See CARE_ACTIVITY_NOTES.)
+// call_outcomes comes straight from config/callOutcomes.js so the six values live
+// in ONE file across both repos — the CHECK constraint is case-sensitive, so a
+// drifted hardcoded copy in the frontend would produce 400s.
 async function getEnrollmentOptions(req, res) {
   try {
     const { payers, device_types, clinicians } =
       await enrollmentService.getEnrollmentOptions(req.orgScope);
-    return res.status(200).json({ ok: true, payers, device_types, clinicians });
+    return res.status(200).json({
+      ok: true,
+      payers,
+      device_types,
+      clinicians,
+      call_outcomes: CALL_OUTCOMES,
+    });
   } catch (err) {
     console.error("getEnrollmentOptions error:", err);
     return res.status(500).json({ ok: false, message: "Server error" });
