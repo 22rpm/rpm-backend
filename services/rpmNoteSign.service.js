@@ -306,6 +306,22 @@ async function getSignedHead({ patientId, orgScope, month }) {
   const row = rows[0];
   if (!row) return null;
   const hashValid = verifyRow(row);
+
+  // Billing-relevant subset of the FROZEN snapshot, so the client can detect
+  // drift against the current live computation. Deliberately excludes comments,
+  // conditions, vitals text — only the values that drive the determination.
+  const content = typeof row.content === "string" ? JSON.parse(row.content) : row.content;
+  const comp = (content && content.computed) || {};
+  const billingSnapshot = {
+    days_with_readings: comp.monitoring?.days_with_readings ?? null,
+    data_review_interaction_minutes: comp.time_documentation?.data_review_interaction_minutes ?? null,
+    setup_code: comp.billing?.setup?.code ?? null,
+    device_supply_code: comp.billing?.device_supply?.code ?? null,
+    management_codes: comp.billing?.management?.codes ?? [],
+    test_a: comp.billing?.management?.interactive?.test_a_minutes_met ?? null,
+    test_b: comp.billing?.management?.interactive?.test_b_live_interaction ?? null,
+  };
+
   return {
     id: row.id,
     patient_id: row.patient_id,
@@ -319,6 +335,7 @@ async function getSignedHead({ patientId, orgScope, month }) {
     signed_at: toSecondIso(row.signed_at),
     content_hash: row.content_hash,
     hash_valid: hashValid,
+    billing_snapshot: billingSnapshot,
     document_key: row.document_key,
     supersedes: row.supersedes,
     correction_reason: row.correction_reason,
