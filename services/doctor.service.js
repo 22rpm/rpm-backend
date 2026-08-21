@@ -406,10 +406,15 @@ const getPatientDeviceDataService = async (
   let dateRangeMode = "";
 
   if (fromDate && toDate) {
-    // Custom date range mode
+    // Custom date range mode. SARGABLE half-open form (bare column) so an index
+    // on created_at can be used — DATE(created_at) BETWEEN forces a scan. toDate
+    // stays INCLUSIVE for all callers via DATE_ADD on the literal (not the
+    // column): created_at >= fromDate AND created_at < (toDate + 1 day). For a
+    // calendar month (fromDate=first, toDate=last) this is exactly the RPM note's
+    // `created_at >= first AND < first-of-next-month`.
     startDateString = fromDate;
     endDateString = toDate;
-    dateCondition = "AND DATE(created_at) BETWEEN ? AND ?";
+    dateCondition = "AND created_at >= ? AND created_at < DATE_ADD(?, INTERVAL 1 DAY)";
     dateParams = [fromDate, toDate];
     dateRangeMode = "custom";
   } else {
@@ -421,8 +426,9 @@ const getPatientDeviceDataService = async (
       // Today only - get data for the current day only
       startDateString = endDate.toISOString().split("T")[0];
       endDateString = endDate.toISOString().split("T")[0];
-      dateCondition = "AND DATE(created_at) = ?";
-      dateParams = [startDateString];
+      // Sargable single-day: created_at >= day AND created_at < day + 1.
+      dateCondition = "AND created_at >= ? AND created_at < DATE_ADD(?, INTERVAL 1 DAY)";
+      dateParams = [startDateString, startDateString];
       dateRangeMode = "today";
     } else if (days === 0) {
       // All time - no date filter
@@ -436,7 +442,8 @@ const getPatientDeviceDataService = async (
       startDate.setDate(startDate.getDate() - (days - 1));
       startDateString = startDate.toISOString().split("T")[0];
       endDateString = endDate.toISOString().split("T")[0];
-      dateCondition = "AND DATE(created_at) BETWEEN ? AND ?";
+      // Sargable half-open (endDate inclusive via DATE_ADD on the literal).
+      dateCondition = "AND created_at >= ? AND created_at < DATE_ADD(?, INTERVAL 1 DAY)";
       dateParams = [startDateString, endDateString];
       dateRangeMode = "days";
     }
