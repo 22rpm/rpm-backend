@@ -184,3 +184,28 @@ The consolidation covered the primary ingest (`createDeviceDataService`). Audit
 `triggerBPAlert`, `createBPDataService`, and `saveGenericDeviceDataService` in
 `deviceData.service.js` to route through `bpClassifier` too, so no path keeps its
 own thresholds or the old status vocabulary.
+
+## 9. `bpClassifier` is now COPIED into the frontend — #7 can re-diverge across repos — OPEN
+- The vitals rebuild (`feature/vitals-rebuild`, rpm-dashboard) colors readings by
+  classification, and the frontend cannot import the backend module — so
+  `services/bpClassifier.js` was COPIED to
+  `rpm-dashboard-v1.0/src/utils/bpClassifier.js` (ESM, from `4166892`). It is
+  correct today and it is byte-for-byte the canonical bands.
+- **Why this is a #7 landmine, not just a copy:** thresholds are still MOVING —
+  the hypotension (`<90/<60`) paging line is open with the medical director, and
+  CMS bands change. When someone edits the backend `bpClassifier` and forgets the
+  frontend copy, DISPLAY silently keeps the old bands while ALERTING uses the new
+  ones — the exact display-vs-alerting divergence of #7, now split ACROSS REPOS
+  where it is harder to spot (no shared file, no import to grep).
+- **Rule until resolved: anyone changing BP thresholds must change BOTH**
+  `rpm-backend/services/bpClassifier.js` AND
+  `rpm-dashboard-v1.0/src/utils/bpClassifier.js`. The header comment in each names
+  the other, but a comment is documentation, not enforcement.
+- **Resolution (pick one), so the copy stops being trust-based:**
+  1. Backend serves the classification WITH the readings (device-data returns each
+     reading's `bpClassifier` result), and the frontend colors by that value —
+     one classifier, no frontend copy. Preferred; also removes the deploy-
+     sequencing caveat (frontend correct only after the value ships).
+  2. A CI check that fails when the two files diverge (diff the copied region
+     against the canonical, or generate the frontend copy from the backend at
+     build time). Keeps the copy but makes drift loud instead of silent.
