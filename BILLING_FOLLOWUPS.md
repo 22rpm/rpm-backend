@@ -122,16 +122,27 @@ rows — see the commit for that migration.) Nobody should worry about a prod
 free-text backfill: there isn't one. Real outcomes on prod will be constrained
 from day one because the CHECK constraint ships with the table.
 
-## 11. Transmission-day count is bucketed in the SERVER SESSION timezone — DEPLOY GATE on the care-activity pair (latent off-by-one on a UTC-session prod)
+## 11. Transmission-day count is bucketed in the SERVER SESSION timezone — DEPLOY GATE on the care-activity pair — CONFIRMED prod = UTC, dev = Pacific
 
 **DEPLOY GATE — do NOT ship the RPM note billing (the care-activity pair) to prod
-until prod's session tz is confirmed.** Until it's known, the transmission-day
-count is NOT verified for prod, which means the 99445-vs-99454 device-supply
-determination is not verified for prod either. This is a gate, not a follow-up.
+until the fix below lands.** CONFIRMED (2026-08-22, run on the prod box):
 
-Confirm it read-only on the box (the app inherits the server's default session tz
-— `config/db.js` sets only the client-side `timezone:'Z'`, not the session tz — so
-the CLI's `@@session.time_zone` equals what the Node app uses):
+```
+session_tz SYSTEM | global_tz SYSTEM | system_tz UTC
+now_local 2026-08-22 22:46:20 | now_utc 2026-08-22 22:46:20   (identical -> UTC)
+```
+
+Prod's session is **UTC**; dev (`rpm_db_v1`) is **Pacific (PDT/PST)**. So prod
+buckets transmission days by **UTC calendar day** while dev buckets by **Pacific
+day** — the two environments disagree. **Every transmission-day count verified
+locally was verified under different bucketing than prod will use**, so the
+99445-vs-99454 device-supply determination is NOT verified for prod. Any reading
+after 5 PM Pacific counts on the next calendar day on prod, which can cross the
+99445 (>=2) / 99454 (>=16) threshold and shift month membership at the boundary.
+This is the confirmed bad case, not a latent risk. See the fix design below.
+
+The confirming command (read-only; the app inherits the server default session tz
+— `config/db.js` sets only the client-side `timezone:'Z'`, not the session tz):
 
 ```
 mysql -u root -proot -h 127.0.0.1 -e "SELECT @@session.time_zone AS session_tz, @@global.time_zone AS global_tz, @@system_time_zone AS system_tz, NOW() AS now_local, UTC_TIMESTAMP() AS now_utc;"
