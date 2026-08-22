@@ -122,7 +122,32 @@ rows — see the commit for that migration.) Nobody should worry about a prod
 free-text backfill: there isn't one. Real outcomes on prod will be constrained
 from day one because the CHECK constraint ships with the table.
 
-## 11. Transmission-day count is bucketed in the SERVER SESSION timezone — OPEN (latent off-by-one on a UTC-session prod)
+## 11. Transmission-day count is bucketed in the SERVER SESSION timezone — DEPLOY GATE on the care-activity pair (latent off-by-one on a UTC-session prod)
+
+**DEPLOY GATE — do NOT ship the RPM note billing (the care-activity pair) to prod
+until prod's session tz is confirmed.** Until it's known, the transmission-day
+count is NOT verified for prod, which means the 99445-vs-99454 device-supply
+determination is not verified for prod either. This is a gate, not a follow-up.
+
+Confirm it read-only on the box (the app inherits the server's default session tz
+— `config/db.js` sets only the client-side `timezone:'Z'`, not the session tz — so
+the CLI's `@@session.time_zone` equals what the Node app uses):
+
+```
+mysql -u root -proot -h 127.0.0.1 -e "SELECT @@session.time_zone AS session_tz, @@global.time_zone AS global_tz, @@system_time_zone AS system_tz, NOW() AS now_local, UTC_TIMESTAMP() AS now_utc;"
+```
+
+Interpreting the result:
+- **`NOW()` is 7–8h behind `UTC_TIMESTAMP()` (system_tz America/Los_Angeles / PDT /
+  PST)** → prod buckets by Pacific day like local; the counts we tested hold; #11
+  stays latent (still a portability risk, not currently biting).
+- **`NOW()` == `UTC_TIMESTAMP()` (session effectively UTC)** → prod buckets by UTC
+  day; any reading after 5 PM Pacific rolls to the next day, so the counts we
+  verified do NOT hold on prod and the fix below must land before shipping.
+- **Any OTHER offset (e.g. EST/EDT)** → neither Pacific nor UTC; still mis-buckets
+  vs the clinic's day. Only "server tz == the clinic's intended tz" is safe by
+  accident; the robust fix removes the dependence entirely.
+
 The device-supply codes 99445 (≥2 distinct transmission days) and 99454 (≥16)
 are driven by the transmission-day count in `rpmNote.service.getRpmNote`:
 
