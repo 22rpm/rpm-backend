@@ -46,7 +46,7 @@ async function getPatientForEdit(patientId, orgScope) {
   const [prof] = await db.query(
     `SELECT DATE_FORMAT(date_of_birth, '%Y-%m-%d') AS date_of_birth,
             DATE_FORMAT(enrolled_at, '%Y-%m-%d') AS enrolled_at,
-            program_status, insurance_payer_id, comments
+            program_status, insurance_payer_id, comments, mrn
        FROM patient_profiles WHERE user_id = ?`,
     [patientId]
   );
@@ -73,6 +73,7 @@ async function getPatientForEdit(patientId, orgScope) {
     program_status: p.program_status ?? null,
     insurance_payer_id: p.insurance_payer_id ?? null,
     comments: p.comments ?? null,
+    mrn: p.mrn ?? null,
     conditions: conds.map((c) => c.name),
     care_team: team.map((m) => ({
       id: m.id,

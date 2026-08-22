@@ -1191,7 +1191,7 @@ const express = require("express");
 const jwt = require("jsonwebtoken");
 const db = require("../config/db");
 const { authRequired } = require("../middleware/auth");
-const { resolveOrgScope } = require("../middleware/orgScope");
+const { resolveOrgScope, scopePatientParam } = require("../middleware/orgScope");
 const twilioService = require("../services/twillio.service");
 
 const {
@@ -3054,5 +3054,69 @@ router.post("/test/bp-alert", async (req, res) => {
     if (connection) connection.release();
   }
 });
+
+// Alerts for ONE patient — a REAL per-patient query, not a client-side filter of
+// the paginated /my-alerts. Filtering that list client-side would look complete
+// while silently dropping alerts (same failure shape as the limit=10 bug), and
+// "no alerts for this patient" is a clinical claim, so it must be a true query.
+// Gated exactly like the vitals endpoints: super-admin sees the org's; a clinician
+// must be assigned the patient (same check as verifyDoctorPatientAccess, inlined
+// to avoid a cross-module import). scopePatientParam confirms org membership first.
+router.get(
+  "/patients/:patientId",
+  authRequired,
+  resolveOrgScope,
+  scopePatientParam("patientId"),
+  async (req, res) => {
+    const patientId = req.params.patientId;
+    const isSuper = req.user.role_type === "super-admin";
+    let connection;
+    try {
+      connection = await db.getConnection();
+
+      if (!isSuper) {
+        const [assigned] = await connection.query(
+          "SELECT 1 FROM patient_doctor_assignments WHERE doctor_id = ? AND patient_id = ? LIMIT 1",
+          [req.user.id, patientId]
+        );
+        if (assigned.length === 0) {
+          return res
+            .status(403)
+            .json({ ok: false, message: "Access denied to patient alerts" });
+        }
+      }
+
+      // Return ALL of the patient's alerts (the requester is the patient's
+      // clinician or a super-admin). read_status/read_at reflect the requesting
+      // clinician's own assignment row (NULL if that alert was routed elsewhere);
+      // for a super-admin they are left NULL.
+      const [alerts] = await connection.query(
+        `SELECT alerts.id,
+                alerts.user_id       AS patient_id,
+                alerts.desc          AS description,
+                alerts.type,
+                alerts.created_at    AS alert_created_at,
+                aa.read_status,
+                aa.read_at
+           FROM alerts
+           LEFT JOIN alert_assignments aa
+             ON aa.alert_id = alerts.id
+            ${isSuper ? "" : "AND aa.doctor_id = ?"}
+          WHERE alerts.user_id = ?
+          ORDER BY alerts.created_at DESC`,
+        isSuper ? [patientId] : [req.user.id, patientId]
+      );
+
+      return res.json({ ok: true, alerts, total_alerts: alerts.length });
+    } catch (error) {
+      console.error("Error fetching patient alerts:", error);
+      return res
+        .status(500)
+        .json({ ok: false, message: "Server error", error: error.message });
+    } finally {
+      if (connection) connection.release();
+    }
+  }
+);
 
 module.exports = router;
