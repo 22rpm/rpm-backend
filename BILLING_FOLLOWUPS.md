@@ -139,7 +139,14 @@ locally was verified under different bucketing than prod will use**, so the
 99445-vs-99454 device-supply determination is NOT verified for prod. Any reading
 after 5 PM Pacific counts on the next calendar day on prod, which can cross the
 99445 (>=2) / 99454 (>=16) threshold and shift month membership at the boundary.
-This is the confirmed bad case, not a latent risk. See the fix design below.
+This is the confirmed bad case, not a latent risk.
+
+**Design + full timestamp inventory: [TZ_FIX_DESIGN.md](TZ_FIX_DESIGN.md).** The
+fix is several coordinated workstreams (session pin + `CONVERT_TZ` bucketing +
+`organizations.timezone` + app-wide display conversion + signed-note ledger
+handling) that must ship ATOMICALLY with the care-activity first prod deploy —
+notably because signing the first prod `rpm_note` freezes the session tz (changing
+it afterward invalidates the frozen `content_hash`). Not a later follow-up.
 
 The confirming command (read-only; the app inherits the server default session tz
 — `config/db.js` sets only the client-side `timezone:'Z'`, not the session tz):
