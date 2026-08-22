@@ -121,3 +121,75 @@ is never exercised on real data. (It WAS exercised on `rpm_db_v1`, which has tes
 rows — see the commit for that migration.) Nobody should worry about a prod
 free-text backfill: there isn't one. Real outcomes on prod will be constrained
 from day one because the CHECK constraint ships with the table.
+
+## 11. Transmission-day count is bucketed in the SERVER SESSION timezone — OPEN (latent off-by-one on a UTC-session prod)
+The device-supply codes 99445 (≥2 distinct transmission days) and 99454 (≥16)
+are driven by the transmission-day count in `rpmNote.service.getRpmNote`:
+
+```sql
+SELECT DISTINCT DATE_FORMAT(created_at, '%Y-%m-%d') AS d
+  FROM dev_data
+ WHERE user_id = ? AND created_at >= ? AND created_at < ?   -- start / next of month
+```
+
+Both the window bounds and `DATE_FORMAT(created_at)` are evaluated **server-side in
+the MySQL session timezone**. On `rpm_db_v1` that session is `SYSTEM = PDT`
+(evidence: `NOW()=15:28` vs `UTC_TIMESTAMP()=22:28`), so the query buckets by
+**Pacific calendar day**. Filter and bucket use the same tz, so the count is
+internally consistent, and it matches the vitals display (which shows the same
+Pacific wall-clock — see the tz work item in #12). Within this environment the
+count is correct, not accidental.
+
+**The defect:** the bucketing tz is the *deployment's* session tz, which is
+**unverified on prod** (SESSION_HANDOFF: prod tz not checked). `dev_data.created_at`
+stores a true UTC instant; on a **UTC-session prod** the same query buckets by
+**UTC calendar day**, so any reading taken **after 5 PM Pacific** (≥ 00:00 UTC)
+rolls to the next calendar day. That can:
+- change the DISTINCT-day count and cross a billing threshold (the 2nd day for
+  99445, the 16th for 99454), and
+- move a boundary reading into/out of the month window (`created_at >= start`).
+
+**Evidence against the documented fixture (patient 48, Aug 2026):** count = **5**
+in BOTH framings — distinct PDT days = 5, distinct true-UTC days = 5, with **0**
+readings in the danger window (reading hours present: 07, 08, 13, 14 PDT). So
+patient 48's `5 → 99445` is correct AND robust; it does NOT exercise the bug only
+because none of its readings sit after 5 PM Pacific. A patient who transmits in
+the evening (Pacific) would count differently on a UTC-session prod than on this
+PDT box.
+
+**Resolution:** the count must bucket by a FIXED, intended clinic timezone
+regardless of the server session — i.e. normalize `created_at` to that tz in the
+query (`CONVERT_TZ`), or fix the connection tz handling globally (#12) and derive
+days from true instants in a known tz. Do NOT ship the note billing to prod
+before the prod session tz is confirmed and this is pinned; on a UTC prod it is a
+silent off-by-one on device-supply codes.
+
+## 12. Connection timezone mismatch (`timezone:'Z'` vs server session PDT) — tz-consistency work item — OPEN
+Root cause behind #11 and the vitals graph/table timestamp behavior. `config/db.js`
+sets the mysql2 pool `timezone:'Z'` (driver assumes UTC), while the MySQL server
+session is `SYSTEM = PDT`. `dev_data.created_at` (TIMESTAMP) stores the correct UTC
+instant, but on readback the server returns the Pacific wall-clock string and the
+driver tags it UTC — so the app's JS `Date` is the **Pacific wall-clock mislabeled
+as UTC**, 7h off the true instant. Proven with an insert-read-delete probe on a
+`DEFAULT CURRENT_TIMESTAMP` row: real UTC `22:28`, app-received Date `15:28Z`
+(−7.00h). Real ingest ([deviceData.service.js:819](services/deviceData.service.js:819))
+writes no `created_at`, so it relies on that DEFAULT and lands the same way as the
+seeded rows — they agree.
+
+Consequences:
+- The vitals table/chart display the right Pacific wall-clock **by accident** —
+  two errors cancel (correct stored instant + driver mislabel, then displayed
+  without conversion via `getUTC*`). Converting UTC→Pacific would DOUBLE-shift and
+  be wrong (that trap was avoided; display left as `getUTC*` digits).
+- **The accidental correctness depends on the local server session being PDT and
+  will NOT port if prod's session is UTC** — there the same `getUTC*` display shows
+  UTC, and the #11 day-count buckets by UTC. The offset is **7h in summer (PDT),
+  8h in winter (PST)**, so date math near midnight can also flip by season.
+
+Proper fix (data layer, not display): make the driver and server session tz
+consistent (e.g. force `time_zone='+00:00'` on connect AND keep `timezone:'Z'`) so
+JS `Date` equals the true instant, then convert UTC→intended-clinic-tz at display.
+High blast radius — moves every timestamp consumer by the offset — so it requires
+its own change, a **prod tz audit**, and a check of what prod's existing rows
+actually store before touching anything. This is SESSION_HANDOFF's "establish what
+each env stores before fixing." Do not fold it into a feature branch.
