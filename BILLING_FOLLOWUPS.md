@@ -236,3 +236,22 @@ High blast radius — moves every timestamp consumer by the offset — so it req
 its own change, a **prod tz audit**, and a check of what prod's existing rows
 actually store before touching anything. This is SESSION_HANDOFF's "establish what
 each env stores before fixing." Do not fold it into a feature branch.
+
+## 13. The note buckets transmission days in Pacific but time/calls in UTC — same document — OPEN (pre-existing, NOT introduced by the tz fix)
+Independent finding surfaced by the tz inventory (TZ_FIX_DESIGN.md). On the RPM note
+TODAY, two sections bucket "day" in DIFFERENT timezones on the same document:
+- **Transmission days** come from `dev_data.created_at` — a **TIMESTAMP** column, so
+  `DATE_FORMAT(created_at)` buckets in the server SESSION tz (Pacific on dev).
+- **Time entries and calls** come from `time_entries.started_at` /
+  `patient_calls.started_at` — **DATETIME** columns, session-immune, holding a
+  literal UTC wall-clock (the writer serializes `new Date()` to a UTC string via the
+  pool's `timezone:'Z'`). So `DATE_FORMAT(started_at)` buckets in UTC.
+
+So the device-supply "days" (99445/99454) and the management "days" (time /
+communication) on one note can refer to different calendar days for the same
+events. **If anyone has been reconciling note figures by hand against raw data,
+this mixed-frame bucketing explains discrepancies they may have seen** — it is not
+a data-entry error. This is a pre-existing inconsistency, present before any tz
+work; the tz fix RESOLVES it (post-pin every column reads a UTC instant, so one
+`CONVERT_TZ('+00:00', clinic_tz)` buckets the whole note in one clinic-day frame).
+Recorded on its own so the discrepancy is attributable and closed by the same fix.

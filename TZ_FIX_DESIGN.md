@@ -179,3 +179,90 @@ needs clinic bucketing), so they cannot be shipped piecemeal.
 - **Ledger:** sign a note post-change, confirm it hash-verifies; confirm a dev
   pre-change note is handled (wiped), not surfaced as tamper.
 - **Prod pre-deploy:** the tz-tables check above.
+
+## Sequenced build plan
+
+### Two framings that shape the plan
+1. **Pinning is a no-op on prod — nothing currently in production changes.** Prod's
+   session is already UTC, so `SET time_zone='+00:00'` does nothing there. The only
+   environment that moves is **dev** (PDT→UTC), and that is test data. Read by
+   default, "pin the session tz" sounds like "every prod timestamp shifts 7h" — it
+   is NOT that. Prod's real change is narrower: `CONVERT_TZ` bucketing (UTC-day →
+   clinic-day) and the display conversion, both riding the not-yet-deployed
+   care-activity/org-context pair. Already-deployed prod surfaces (login/OTP,
+   current alerts) are untouched.
+2. **The ledger is a one-way door with a hard deadline.** Signing the first prod
+   `rpm_note` computes its `content_hash` under whatever session tz is live at that
+   moment, and signing freezes it — any later tz change invalidates every prior hash
+   (a permanent tamper false-positive on a billing document). **GATE: the tz fix
+   MUST be live before the first prod note is signed. No exceptions.** The hash
+   hardening (PR 1) is what makes this un-repeatable: after it, the column's tz
+   representation can never affect verification again.
+
+### Build / PR order (all on the care-activity + org-context pair; verified on dev)
+Care-activity has never deployed, so there is no incremental prod patching — every
+workstream is pre-deploy work that rides ONE atomic first release. Order is for
+reviewability and dev verification.
+
+- **PR 1 — Ledger hardening (no tz behavior change).** Store the exact signed ISO
+  string used in the hash as an immutable column; sign AND verify over that string,
+  not `toSecondIso(signed_at)`. Removes the ledger's dependence on the session tz
+  entirely, so nothing about tz timing can break verification afterward. Touches:
+  `rpmNoteSign.service` (sign + verify), a migration (add the column),
+  `rpmNote.controller`. Verify on dev: a note verifies under BOTH a PDT and a
+  force-UTC session. **Land first** so the ledger is safe regardless of the rest.
+- **PR 2 — Session pin to UTC.** `SET time_zone='+00:00'` on connect in the mysql2
+  pool. Dev-only effect (aligns dev to prod's UTC baseline); no-op on prod. Verify
+  on dev: the app connection shows `NOW()==UTC_TIMESTAMP()`, and a JS `Date` from a
+  TIMESTAMP column now equals the true instant (#12 mislabel gone). Touches:
+  `config/db.js`.
+- **PR 3 — Clinic-tz bucketing.** `organizations.timezone` migration (nullable,
+  `NULL`→`CLINIC_TZ`); one shared `windowFor(month, tz)` + `CONVERT_TZ('+00:00',
+  clinic_tz)` day expression; replace both duplicate `monthWindow`s and the vitals
+  `DATE(created_at)` filter; the frontend sends a month id, not date bounds. Depends
+  on PR 2 (created_at must read true UTC before CONVERT_TZ is correct). Verify on
+  dev: patient 48 = 5; the boundary fixture flips 1↔2; note-count == vitals days ==
+  worklist window. Touches: `rpmNote.service`, `patientWorklist.service`,
+  `doctor.service`, the new helper, a migration, the vitals/worklist frontend.
+- **PR 4 — App-wide display conversion.** One shared UTC→clinic formatter across
+  every surface in Inventory §5. Depends on PR 2. Verify on dev: vitals
+  table/chart/tiles, alerts, time log, note UI + history, worklist, PatientModal,
+  signed-note all show clinic time and agree. Touches the frontend broadly (feature
+  branches, not the deployed dashboard).
+- **PR 5 — Writes/compares audit.** Confirm the `new Date()`→TIMESTAMP writes and
+  `mfa_expires_at < new Date()` are correct post-pin; document the self-healing
+  cases (OTP 5-min; 60-day trust drifts ≤8h once). Mostly verification.
+
+### Migrations
+- `organizations.timezone` (nullable).
+- `rpm_notes` immutable signed-ISO column (PR 1).
+- **No prod data migration.** Prod has none of these tables yet — the care-activity
+  migrations create them fresh, already correct. The only data to handle is **dev
+  test data**: truncate dev `rpm_notes` (old-scheme hashes) around PR 1.
+
+### Runbook — the single atomic prod deploy
+1. **HARD GATE — load the MySQL tz tables on prod and verify:**
+   `mysql_tzinfo_to_sql /usr/share/zoneinfo | mysql -u root mysql`, then
+   `SELECT CONVERT_TZ(UTC_TIMESTAMP(),'UTC','America/Los_Angeles');` must return
+   **NON-NULL**. If NULL, STOP — `CONVERT_TZ` collapses every bucket silently.
+2. `mysqldump` prod (no backups exist), then run the care-activity migrations (they
+   create the tables + the two new columns).
+3. Deploy the tz-fixed care-activity + org-context code (PRs 1–5).
+4. **ORDERING GATE — steps 1–3 must complete before any clinician signs the first
+   prod note.** Violating it freezes a hash under the wrong tz and makes every later
+   verify a false tamper positive.
+
+### Verifiable BEFORE prod vs only AFTER
+- **Before (all on dev — after PR 2, dev IS a faithful UTC rehearsal of prod):**
+  ledger hardening (verify under both sessions), pin behavior, clinic bucketing
+  (patient 48 + boundary fixture), display conversion, cross-consistency. The
+  `scratch` replay env rehearses the migrations.
+- **Only after (prod):** the tz tables are actually loaded on prod (step 1 query);
+  the first real signed note verifies on prod; prod's note/vitals now render clinic
+  time. (Prod session = UTC is already confirmed, so the pin needs no prod check.)
+
+### Where the care-activity deploy sits
+It **is** the deploy — every workstream rides the care-activity/org-context pair's
+first prod release. Nothing tz-related ships separately, because prod has no
+care-activity tables to patch. The release is gated by the tz-tables load (runbook
+step 1) and bounded by the ledger deadline (must precede the first signed note).
