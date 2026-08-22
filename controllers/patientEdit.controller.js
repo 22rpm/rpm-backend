@@ -125,4 +125,22 @@ async function updatePatient(req, res) {
   }
 }
 
-module.exports = { getPatientForEdit, updatePatient };
+// GET /api/patients/:patientId/consent — read-only latest-wins consent record for
+// the vitals-header consent view. Org-scoped (matches getPatientForEdit, the header
+// endpoint it sits beside). `consent: null` means no consent on record.
+async function getPatientConsent(req, res) {
+  try {
+    const consent = await editService.getLatestConsent(
+      Number(req.params.patientId),
+      req.orgScope
+    );
+    return res.status(200).json({ ok: true, consent });
+  } catch (err) {
+    if (err && err.httpStatus)
+      return res.status(err.httpStatus).json({ ok: false, message: err.message });
+    console.error("getPatientConsent error:", err);
+    return res.status(500).json({ ok: false, message: "Server error" });
+  }
+}
+
+module.exports = { getPatientForEdit, updatePatient, getPatientConsent };

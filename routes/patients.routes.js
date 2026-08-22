@@ -14,6 +14,7 @@ const { getWorklist } = require("../controllers/patientWorklist.controller");
 const {
   getPatientForEdit,
   updatePatient,
+  getPatientConsent,
 } = require("../controllers/patientEdit.controller");
 const {
   getRpmNote,
@@ -69,6 +70,17 @@ router.get(
   resolveOrgScope,
   scopePatientParam("patientId"),
   getPatientForEdit
+);
+
+// GET /api/patients/:patientId/consent — read-only latest-wins consent record for
+// the vitals-header consent view. Org-scoped like GET /:patientId above.
+router.get(
+  "/:patientId/consent",
+  authRequired,
+  staffRoles,
+  resolveOrgScope,
+  scopePatientParam("patientId"),
+  getPatientConsent
 );
 
 // PATCH /api/patients/:patientId — upsert profile + conditions + care team.

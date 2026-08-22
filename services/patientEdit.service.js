@@ -209,4 +209,29 @@ async function updatePatient({ patientId, orgScope, actorId, data }) {
   }
 }
 
-module.exports = { getPatientForEdit, updatePatient };
+// Latest-wins consent row for the READ-ONLY consent view. patient_consents is an
+// append-only ledger — a withdrawal or re-consent is a new row — so the newest by
+// date (then id) is the current state. Returns null when there is no consent on
+// record (a billing-relevant state the caller must surface plainly, not as empty).
+// obtained_by / supervising_provider are resolved to names for display.
+async function getLatestConsent(patientId, orgScope) {
+  const [rows] = await db.query(
+    `SELECT c.status,
+            DATE_FORMAT(c.consent_date, '%Y-%m-%d') AS consent_date,
+            c.method,
+            c.notes,
+            c.document_key,
+            ob.name AS obtained_by_name,
+            sp.name AS supervising_provider_name
+       FROM patient_consents c
+       LEFT JOIN users ob ON ob.id = c.obtained_by
+       LEFT JOIN users sp ON sp.id = c.supervising_provider_id
+      WHERE c.patient_id = ? AND c.organization_id = ?
+      ORDER BY c.consent_date DESC, c.id DESC
+      LIMIT 1`,
+    [patientId, orgScope]
+  );
+  return rows[0] || null;
+}
+
+module.exports = { getPatientForEdit, updatePatient, getLatestConsent };
