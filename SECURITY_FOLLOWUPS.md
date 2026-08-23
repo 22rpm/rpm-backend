@@ -273,3 +273,23 @@ be cleaned up **first**:
 
 The security core is step (4)'s **ambiguity rejection**; the rest (unique phone,
 E.164, at-least-one) removes the conditions that make ambiguity possible.
+
+### #11.6 — a patient with neither USABLE phone nor email (for the record)
+The `CHECK(phone OR email)` enforces **presence** of a channel, not
+**deliverability**. A present-but-unusable value (wrong/disconnected number,
+mistyped or unmonitored inbox) still satisfies the CHECK, so "no usable channel"
+remains possible — and forcing a placeholder to pass enrollment is exactly how the
+`123456789` accounts were created. Design (does not block the current ten):
+- **Never satisfy the constraint with a fake.** Enrollment must not accept a
+  placeholder; when a patient has no usable contact it must offer an explicit path,
+  not a filler value.
+- **Device-only / no self-login (the RPM norm):** many patients never log in — the
+  cuff transmits and the clinician monitors. Enroll such a patient as device-only;
+  data flows via the device, access is staff-side. This is the common case and the
+  right default when there's no usable channel.
+- **Consented caregiver channel:** for patients who need portal access via a proxy,
+  route OTP to a caregiver's phone/email with documented consent.
+- **Admin break-glass:** an audited, admin-mediated verification for edge cases.
+So the CHECK guarantees a *stored* channel; deliverability + the no-usable-channel
+case are handled by an explicit enrollment branch (device-only or caregiver-proxy),
+never by a placeholder.
