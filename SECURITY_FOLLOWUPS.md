@@ -201,3 +201,75 @@ Impact and the real problem:
   use `pm2 restart --update-env` (or an ecosystem `env_file`) so the process env and
   `.env` can't diverge again; (3) a startup self-check that both providers
   authenticate would have caught this at boot.
+
+## 11. Auth identity: phone-mandatory, non-unique phone, first-match login resolution — design (phone OR email, each unique) — DESIGN ONLY, no code
+Context: `phoneNumber` was a **mandatory** enrollment field before real numbers
+existed, so ~10 prod test accounts all carry the fake `123456789` (data entry, not
+a mystery). The design must change to **phone OR email, at least one, each unique if
+present** — and the login resolver must **reject ambiguous matches, never pick one**.
+
+### The vulnerability (login resolver)
+`findUserByPhone` (services/user.service.js:91) resolves by a **suffix match**
+(`... LIKE '%<last-10-digits>'`), `ORDER BY id DESC`, and on multiple matches it
+**logs a warning and returns `rows[0]` anyway**. Called from
+`auth.controller.js:246` when the identifier looks like a phone. Two problems:
+1. **First-match resolution.** An ambiguous phone silently resolves to the newest
+   matching account. Today it's masked by the password check (bcrypt), but if two
+   patients ever legitimately share a number, login with the shared phone resolves
+   to the wrong account — a real account-confusion/takeover vector. **Ambiguity must
+   be REFUSED, never resolved by picking one.**
+2. **Suffix `LIKE` cross-match.** `'%tail'` matches *different* numbers that share a
+   10-digit suffix (different country code, extra leading digits). The suffix hack
+   exists precisely because stored phone formats are inconsistent.
+
+### Constraints today
+`users.email` UNIQUE **and NOT NULL**; `users.username` UNIQUE; `users.phoneNumber`
+**nullable, NO unique constraint**. So phone is non-unique (the 10 duplicates), and
+email being NOT NULL blocks phone-only patients.
+
+### What "at least one of phone/email, each unique if present" requires
+- **Schema (migration):**
+  - `email` → **nullable** (so a phone-only patient can exist); keep `UNIQUE(email)`
+    (MySQL allows multiple NULLs, so many phone-only rows are fine).
+  - Add `UNIQUE(phoneNumber)` (also NULL-tolerant → many email-only rows fine).
+  - Add `CHECK (phoneNumber IS NOT NULL OR email IS NOT NULL)` — at least one.
+  - **Normalize phone to E.164 canonical on write** and store canonical. Uniqueness
+    and exact-match are meaningless without this — it's what lets the resolver drop
+    the suffix `LIKE` for an exact match, and what makes `UNIQUE(phoneNumber)` real.
+  - `username` stays UNIQUE and always-present — it's the internal handle, distinct
+    from the phone/email *contact/login* identifiers.
+- **Enrollment validation:** require **≥1** of phone/email (phone no longer
+  mandatory); validate + normalize phone to E.164; validate email; pre-check for
+  duplicates and let the DB UNIQUE catch races. This is where the `123456789`
+  pattern stops being created.
+- **Login resolver:** exact-match on canonical phone (not suffix `LIKE`); **if >1
+  row matches, REFUSE** — return the generic `Invalid credentials`, audit
+  `reason: "ambiguous_identifier"`, never pick one. Keep the >1-refuse even after
+  `UNIQUE(phoneNumber)` makes >1 impossible — defense in depth. The email/username
+  resolvers already exact-match on unique columns.
+
+### OTP channel selection (one / other / both)
+Today the channel is tied to the **identifier type used** (phone→SMS, email/
+username→email), not to what the account actually has — so a username login for a
+patient with only a phone tries email → `sendOtpEmail(user.email=null)` → fails.
+New rule: derive the channel from the **resolved user's available contact**:
+- only phone → SMS; only email → email (regardless of how they identified);
+- both present → default to the channel matching the login identifier (phone-login
+  → SMS, email-login → email), or a stored per-user preference;
+- none → impossible under the new CHECK (and no longer the current 500).
+
+### The ten `123456789` accounts under the new constraint
+A `UNIQUE` index is **retroactive** — the migration **fails to create the index
+while duplicates exist**, so there is **no "enforce going forward only."** They must
+be cleaned up **first**:
+- They're test accounts and each already has a UNIQUE email → **set their fake
+  `phoneNumber` to NULL** (email remains as identity → satisfies the CHECK), or give
+  a real number where one is genuinely needed for SMS login.
+- **Sequence:** (1) clean up the 10 on prod (NULL the fake phones / set real);
+  (2) normalize all existing phones to E.164; (3) migration: `email` nullable +
+  `UNIQUE(phoneNumber)` + `CHECK(at least one)`; (4) ship the enrollment validation
+  + the exact-match/ambiguity-refusing resolver + the OTP-channel change. Steps 1–2
+  are a hard prerequisite — the constraint cannot ship over the duplicates.
+
+The security core is step (4)'s **ambiguity rejection**; the rest (unique phone,
+E.164, at-least-one) removes the conditions that make ambiguity possible.
