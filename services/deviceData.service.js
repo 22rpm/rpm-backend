@@ -781,17 +781,29 @@ const createDeviceDataService = async (
   };
 
   let connection;
+  let deviceWasNew = false;
   try {
-    // 1) ensure device exists
-    const [existingDevice] = await db.query(
-      "SELECT id FROM devices WHERE dev_id = ? AND user_id = ?",
-      [devId, userId]
-    );
-
-    if (!existingDevice || existingDevice.length === 0) {
-      await db.query(
-        "INSERT INTO devices (dev_id, user_id, dev_type) VALUES (?, ?, ?)",
+    // 1) ensure the device row exists — IDEMPOTENT UPSERT.
+    //    This replaces a non-atomic check-then-insert that raced under concurrent
+    //    POSTs (the app retries up to 3x on a 5s timeout) and threw
+    //    "Duplicate entry ... devices_dev_id_user_id_unique", which ABORTED the
+    //    dev_data insert below and silently LOST the reading. See
+    //    DATA_INTEGRITY_FINDINGS.md. ON DUPLICATE KEY makes concurrent creation
+    //    safe; affectedRows is 1 on insert (new device), 2 on update (existed).
+    //    Wrapped in its own try so a devices-table problem can NEVER lose a
+    //    reading — the dev_data write is the billing-critical part.
+    try {
+      const [devUpsert] = await db.query(
+        `INSERT INTO devices (dev_id, user_id, dev_type)
+         VALUES (?, ?, ?)
+         ON DUPLICATE KEY UPDATE dev_type = VALUES(dev_type)`,
         [devId, userId, devType]
+      );
+      deviceWasNew = devUpsert.affectedRows === 1;
+    } catch (deviceErr) {
+      console.warn(
+        "⚠️ device upsert failed; continuing to store the reading:",
+        deviceErr.message
       );
     }
 
@@ -826,7 +838,7 @@ const createDeviceDataService = async (
       devType,
       userId,
       deviceData: processedData,
-      deviceWasNew: !existingDevice || existingDevice.length === 0,
+      deviceWasNew,
       alertCreated: false,
     };
 
