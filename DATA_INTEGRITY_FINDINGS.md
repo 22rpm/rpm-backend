@@ -84,6 +84,38 @@ the reading cannot be tied to the specific enrolled cuff, which a device-supply
 (99453/99454) audit presumes. It is an attribution/audit gap, not a miscount.
 NOTE: Android is being tested next and this may be reproduced live.
 
+### `dev_id = 'bp_device_001'` (iOS) — WORSE than `'unknown'`
+iOS falls back to a **shared literal** when the connected device id is missing:
+`rpm-ios-app/BloodPressure.js:478` → `devId: currentDevice?.id || 'bp_device_001'`.
+This is worse than Android's `'unknown'` for three reasons:
+1. **It looks like a legitimate device id, not a null.** `'unknown'` self-identifies
+   as a fallback and can be filtered/flagged; `'bp_device_001'` masquerades as a
+   real device, so fallback readings are indistinguishable from real-cuff readings
+   in the data — you cannot detect or audit them after the fact.
+2. **Collides on `(dev_id, user_id)`.** Every iOS reading that hits the fallback for
+   a given patient maps to the same `(bp_device_001, user_id)` `devices` row, so a
+   patient with both real-cuff and fallback readings ends up with the cuff's data
+   **split across two device rows** (the real UUID and `bp_device_001`) — fragmented
+   attribution for one physical device.
+3. Same billing nuance as `'unknown'`: per-`user_id` transmission-day counts are
+   still correct, but device provenance is broken — and here it's broken *silently*,
+   because nothing marks the reading as fallback.
+
+**Scope — QUERY PROD (read-only; count + which patients):**
+```sql
+SELECT user_id, COUNT(*) n, MIN(created_at) first, MAX(created_at) last
+FROM dev_data WHERE dev_id = 'bp_device_001'
+GROUP BY user_id ORDER BY n DESC;
+-- and the masquerading devices rows:
+SELECT id, dev_id, user_id, dev_type, created_at FROM devices WHERE dev_id = 'bp_device_001';
+```
+Count/patients: **TBD — fill in from the prod query above.**
+
+Fix direction (with the Android `'unknown'` fix): capture the device UUID reliably
+on iOS (the native manager already persists `kSavedPeripheralUUIDKey`), and never
+POST a placeholder device id — reject/flag a reading that can't be tied to an
+enrolled device rather than stamping a real-looking literal.
+
 ## Recovery of the 28 lost readings — NOT POSSIBLE
 The controller entry log records only `{ userId, devId, devType }`
 (devicedata.controller.js:20) — **not `data`** — and there is no body-logging
