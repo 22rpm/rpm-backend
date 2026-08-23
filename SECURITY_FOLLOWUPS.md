@@ -155,3 +155,49 @@ privilege-escalation fix for the admin user-mutation and care-team routes.
   device/data-quality alert type — visibly a device problem, with its own
   rendering — should be added so a garbage-sending cuff surfaces to staff without
   masquerading as a clinical reading.
+
+## 9. Session cookies + JWTs logged in plaintext to prod logs — LIVE LEAK, redacted (`fix/device-upsert-idempotent`)
+Prod's pm2 `out` log printed **full session cookies in plaintext** — `token=` and
+`refresh_token=` JWTs — in the socket-auth handshake dump. The decoded payload
+carries the user's **name, email, phone, role_type, org_id**, so anyone with box or
+log access could lift a live session and impersonate that clinician **or patient**.
+Found while chasing the ingest bug.
+
+Leak sites (all value-leaking `console.log`s), now redacted to booleans/ids:
+- `socket/socketServer.js:234-235` — `socket.handshake.headers` (the `cookie`
+  header) and `socket.handshake.query` (a query `token`, used in prod per the
+  fallback) → now logs only which auth source is present.
+- `server.js:287-288` (`/rpm-be/test-socket`) — `req.headers.cookie` and full
+  `req.headers` → now logs `Cookie present: <bool>`.
+- `controllers/settings.controller.js:20` — `console.log("Decoded token:", decoded)`
+  (the whole JWT payload) → now logs `Token verified for user: <id>`.
+- Left as-is (not a value leak): `middleware/auth.js:113` logs cookie NAMES
+  (`Object.keys(req.cookies)`), not values.
+
+Follow-ups: rotate `JWT_SECRET` is NOT required (secrets weren't logged, tokens
+were — but those tokens are now in historical logs). **Consider the already-logged
+tokens compromised**: purge/rotate the affected pm2 logs, and note any token in
+them is valid until expiry (2h access; refresh longer). Longer term, a redaction
+layer on the logger so header/cookie objects can never be logged whole.
+
+## 10. Production OTP delivery was down (both channels) — RESOLVED (pm2 stale env)
+For an unknown period, **all** OTP delivery failed in production: Twilio SMS threw
+`username is required` and Gmail threw `BadCredentials` on every send. **Cause: pm2
+was carrying a stale environment from before the Twilio/Gmail keys were added to
+`.env`** — the running process never had them, so `dotenv` values existed on disk
+but not in the live process env. `pm2 restart --update-env` fixed it. **Both
+credentials were valid throughout — no rotation was needed** (the well-formed
+`.env` values plus the provider round-trip confirmed it; the `username is required`
+error was the tell — a missing SID at runtime, not a bad pair, which would 401).
+
+Impact and the real problem:
+- **Patients were affected too, not just clinicians** — patient login uses SMS OTP,
+  so patient logins requiring an OTP could not complete during the outage.
+- **Nothing surfaced the failure.** It was found *by accident* while chasing an
+  unrelated ingest bug in the logs. There is no alert, health check, or dashboard
+  for "OTP send is failing" — a core auth dependency was down silently.
+- Follow-ups: (1) add monitoring/alerting on OTP send failures (Twilio/Gmail send
+  errors → surface, don't just `console.log`); (2) deploys that touch `.env` must
+  use `pm2 restart --update-env` (or an ecosystem `env_file`) so the process env and
+  `.env` can't diverge again; (3) a startup self-check that both providers
+  authenticate would have caught this at boot.
