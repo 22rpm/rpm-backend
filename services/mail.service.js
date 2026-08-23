@@ -11,7 +11,7 @@ const transporter = nodemailer.createTransport({
 });
 
 async function sendOtpEmail(to, otp) {
-  console.log("OTP is", otp);
+  // REDACTED: never log the OTP value at any level (SECURITY_FOLLOWUPS #9).
 
   await transporter.sendMail({
     from: `"TwentyTwo RPM" <${process.env.GMAIL_USER}>`,

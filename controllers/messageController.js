@@ -72,7 +72,7 @@ class MessageController {
 
   async getUserConversations(req, res) {
     try {
-      console.log(req.user);
+      console.log("message ctx user:", req.user?.id ?? "none"); // REDACTED: id only
       const userId = req.user.id;
       console.log("Fetching conversations for userId:", userId);
       const conversations = await messageService.getUserConversations(userId);
@@ -111,7 +111,7 @@ class MessageController {
 
   async getPatients(req, res) {
     try {
-      console.log("getPatients called", req.user);
+      console.log("getPatients called by user:", req.user?.id ?? "none"); // REDACTED: id only
 
       // Get doctor ID from the authenticated user
       const doctorId = req.user.id;

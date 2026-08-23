@@ -109,12 +109,8 @@ async function addOrganization(req, res) {
     });
     console.log("Admin user created with ID:", userId);
 
-    // Assign admin role
-    console.log("Assigning admin role to user:", {
-      username,
-      userId,
-      role: "admin",
-    });
+    // Assign admin role (log id + role only — not the username value)
+    console.log("Assigning admin role to user:", { userId, role: "admin" });
     await organizationService.assignRole({
       username,
       userId,
@@ -412,8 +408,8 @@ async function resetPassword(req, res) {
     const hashedPassword = await bcrypt.hash(newPassword, 12);
     await organizationService.updateUserPassword(id, hashedPassword);
 
-    // Placeholder for sending email
-    console.log(`Password reset for ${email}. New password: ${newPassword}`);
+    // REDACTED: never log a plaintext password (or the email). SECURITY_FOLLOWUPS #9.
+    console.log(`Password reset initiated for user ${id}`);
 
     return res
       .status(200)

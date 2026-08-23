@@ -232,7 +232,8 @@ export async function getAssignedDoctors(req, res) {
       `SELECT organization_id FROM users WHERE id = ?`,
       [patientId]
     );
-    console.log("patientRows", patientRows);
+    // REDACTED: patientRows carry PII (name/email/phone) — log the count only.
+    console.log("patientRows count:", patientRows.length);
 
     if (patientRows.length === 0) {
       return res.status(404).json({
@@ -268,7 +269,7 @@ export async function updateDoctorAssignments(req, res) {
 
   const { addDoctorIds = [], removeDoctorIds = [] } = req.body;
   const assignedBy = req.user.id;
-  console.log("user req", req.user);
+  console.log("user req:", req.user?.id ?? "none"); // REDACTED: id only
 
   console.log("addDoctorIds", addDoctorIds);
   console.log("removeDoctorIds", removeDoctorIds);

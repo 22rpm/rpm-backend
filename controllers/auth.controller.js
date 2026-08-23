@@ -373,7 +373,10 @@ if (!user) {
       if (sendOtpEmail) {
         await sendOtpEmail(user.email, otp);
       } else {
-        console.log(`OTP for ${identifier}: ${otp}`);
+        // REDACTED: never log the OTP (or the identifier). SECURITY_FOLLOWUPS #9.
+        console.error(
+          `OTP generated for user ${user.id} but no email transport is configured`
+        );
       }
     } catch (mailErr) {
       console.error(`Email OTP failed for user ${user.id}:`, mailErr.message);
@@ -684,8 +687,8 @@ async function logout(req, res) {
 }
 
 async function register(req, res) {
-  // console.log("Before adding user - req.body:", req.body);
-  console.log("user dta", req.user);
+  // REDACTED: req.user is the decoded token (name/email/phone/role/org) — log id only.
+  console.log("register called by user:", req.user?.id ?? "none");
 
   try {
     // Extract doctor assignment fields before validation

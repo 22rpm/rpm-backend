@@ -180,6 +180,37 @@ tokens compromised**: purge/rotate the affected pm2 logs, and note any token in
 them is valid until expiry (2h access; refresh longer). Longer term, a redaction
 layer on the logger so header/cookie objects can never be logged whole.
 
+### Second pass — the first pass missed the auth/user-service path (found on prod after a live login)
+The first pass only covered the socket handler + `/rpm-be/test-socket` + the settings
+token log. The post-restart prod log then showed the **auth/user lookup path**
+leaking on every login — a **live OTP in plaintext, the bcrypt password hash, and
+the full user row**. The first check for OTP logging was clean only because nothing
+had triggered a login since the pm2 flush, so it proved nothing. Redacted (same
+rule — ids/booleans, never values; OTP never logged at any level):
+- `services/user.service.js` — `findUserByEmail` / `findUserByUsername` logged the
+  lookup value **and the returned row** (bcrypt hash + email + phone) → now `user
+  <id>` / `no match`.
+- `services/mail.service.js:14` — `console.log("OTP is", otp)` → removed.
+- `controllers/auth.controller.js` — the email-fallback `OTP for <id>: <otp>` →
+  removed (logs "no email transport" without the code); `register`'s `req.user`
+  dump → id only.
+- `services/otp.service.js` — `console.log(rows)` (otp_tokens rows include
+  `otp_code`) → `otp verify match: <bool>`.
+- `controllers/organization.controller.js:416` — **logged a generated plaintext
+  password** on reset (`New password: <pw>`) → removed (id only); admin-role log
+  drops the username value.
+- `controllers/admin.controller.js` — `patientRows` (PII) → count only; `req.user`
+  dump → id only.
+- `controllers/messageController.js` — two `req.user` dumps → id only.
+- `controllers/settings.controller.js:30` — `Fields to update` logged name/email/
+  phone VALUES → now booleans of which fields are present.
+- Left (dead code, not executed): commented OTP-log lines at
+  `auth.controller.js:193/202` — scrub if that block is ever revived.
+Lesson: the first pass grepped narrowly (headers/cookies); this pass swept
+user-row/password/OTP across all of `services/` + `controllers/`. Treat any OTP,
+hash, or user row already in the historical prod logs as exposed — flush after
+deploy.
+
 ## 10. Production OTP delivery was down (both channels) — RESOLVED (pm2 stale env)
 For an unknown period, **all** OTP delivery failed in production: Twilio SMS threw
 `username is required` and Gmail threw `BadCredentials` on every send. **Cause: pm2

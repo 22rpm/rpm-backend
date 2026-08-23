@@ -27,7 +27,13 @@ const updateSettingsController = async (req, res) => {
 
     const userId = decoded.id;
     const { name, username, email, phoneNumber } = req.body;
-    console.log("Fields to update:", { name, username, email, phoneNumber });
+    // REDACTED: log WHICH fields are present, not their values (name/email/phone are PII).
+    console.log("Fields to update:", {
+      name: name != null,
+      username: username != null,
+      email: email != null,
+      phoneNumber: phoneNumber != null,
+    });
 
     const result = await updateSettingsService(userId, {
       name,
