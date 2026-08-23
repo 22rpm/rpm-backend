@@ -109,12 +109,50 @@ GROUP BY user_id ORDER BY n DESC;
 -- and the masquerading devices rows:
 SELECT id, dev_id, user_id, dev_type, created_at FROM devices WHERE dev_id = 'bp_device_001';
 ```
-Count/patients: **TBD — fill in from the prod query above.**
+**Scope (prod, as of 2026-08): 17 readings, 5 patients, ONGOING (April→August), not
+historical:**
+| user | readings | span |
+|---|---|---|
+| 23 | 11 | 2026-04-01 → 2026-08-07 |
+| 34 | 2 | 2026-04-16 |
+| 32 | 2 | 2026-06-05 |
+| 25 | 1 | 2026-05-06 |
+| 33 | 1 | 2026-06-02 |
 
-Fix direction (with the Android `'unknown'` fix): capture the device UUID reliably
-on iOS (the native manager already persists `kSavedPeripheralUUIDKey`), and never
-POST a placeholder device id — reject/flag a reading that can't be tied to an
-enrolled device rather than stamping a real-looking literal.
+Six `devices` rows carry the literal (ids 16, 25, 26, 27, 34, 35). User 23 is the
+significant case — 11 fallback readings over four months; if any billed month has
+*only* fallback readings, that month has no real-device attribution to substantiate
+a 99454 device-supply claim on audit (per-month split query in the session log).
+
+### Why the fallback fires (root cause)
+The device identity is **re-read from a mutable ref at store time, not bound to the
+measurement.** `onMeasurementResult` (BloodPressure.js:785) — the native BLE result
+event — carries the reading values but **no device id**; the handler and
+`storeMeasurementData` both read `connectedDeviceRef.current` (804 / 475), and
+`onDeviceDisconnected` sets that ref to `null` (770). The Viatom cuff disconnects
+after each reading, and the app clears the ref + rescans on every disconnect
+(770-777) — so there is a structural **race between the result event and the
+disconnect event**. When the disconnect wins, the store reads a null ref →
+`'bp_device_001'`. This is a timing race inherent to "measure → disconnect → store,"
+which is why it recurs across five patients months apart, not a one-off.
+
+### Proposed behavior (a reading with no identifiable device must not invent one)
+Transmission-day counts key on `user_id`, so counts are unaffected by any choice
+here — this is purely **provenance**. Recommendation:
+1. **Primary — bind the peripheral UUID to the reading at measurement time.** Have
+   the native `onMeasurementResult` event include the producing peripheral's
+   `identifier.UUIDString` (the native manager knows `connectedPeripheral`), and use
+   `evt.deviceId` instead of the live ref. The id then travels *with* the reading and
+   a later disconnect can't erase it — this removes almost all fallbacks.
+2. **When genuinely unknown — store `dev_id = NULL` + an explicit unattributed flag**
+   (e.g. `data.deviceAttributed: false`). NOT reject (the BP reading is real; dropping
+   it is clinical data loss, the same class of bug as the devices-throw). NOT a
+   placeholder literal (masquerades as a real device, collides on `(dev_id,
+   user_id)`). NULL + flag preserves the reading, doesn't collide, and is
+   filterable/auditable as "provenance missing" rather than silently faked.
+3. **Backend:** tolerate a null/unattributed `dev_id` — store the `dev_data` row but
+   do NOT create a `devices` row for it (folds into the devices-upsert fix), and
+   surface unattributed readings for staff review rather than accepting silently.
 
 ## Recovery of the 28 lost readings — NOT POSSIBLE
 The controller entry log records only `{ userId, devId, devType }`
