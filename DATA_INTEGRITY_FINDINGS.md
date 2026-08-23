@@ -120,9 +120,26 @@ historical:**
 | 33 | 1 | 2026-06-02 |
 
 Six `devices` rows carry the literal (ids 16, 25, 26, 27, 34, 35). User 23 is the
-significant case — 11 fallback readings over four months; if any billed month has
-*only* fallback readings, that month has no real-device attribution to substantiate
-a 99454 device-supply claim on audit (per-month split query in the session log).
+significant case — 11 fallback readings over four months.
+
+**Audit gap does NOT materialize (checked 2026-08).** User 23 also has a real device
+(`7C46598B-…`, 73 readings Apr→Aug) plus a one-off third id (`2AC57657-…`, 1 reading
+2026-04-01). Every month has real-device readings, so device-supply attribution
+holds for all of them:
+
+| month | fallback | real-device |
+|---|---|---|
+| 2026-04 | 2 | 9 |
+| 2026-05 | 4 | 14 |
+| 2026-06 | 3 | 17 |
+| 2026-07 | 1 | 25 |
+| 2026-08 | 1 | 9 |
+
+No month is entirely fallback → the 99454 concern is real *in principle* but has not
+bitten. The fallback rate is also **declining** (≈2/11 → 1/10), consistent with an
+occasional race rather than a systematic failure. `2AC57657-…` appears once, on
+2026-04-01, at the same timestamp as her first `bp_device_001` reading — likely an
+earlier pairing; flagged, not chased.
 
 ### Why the fallback fires (root cause)
 The device identity is **re-read from a mutable ref at store time, not bound to the
