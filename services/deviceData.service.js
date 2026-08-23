@@ -826,11 +826,45 @@ const createDeviceDataService = async (
       );
     }
 
-    // 3) insert dev_data
-    const [insertResult] = await db.query(
-      "INSERT INTO dev_data (dev_id, user_id, dev_type, data) VALUES (?, ?, ?, ?)",
-      [devId, userId, devType, JSON.stringify(processedData)]
-    );
+    // 3) insert dev_data — IDEMPOTENT. `storeDeviceData` in the app retries up to
+    //    3x on a 5s timeout, so a slow-but-successful write is re-sent and, with a
+    //    plain INSERT, creates a SECOND identical row (prod has 14 such duplicate
+    //    events; see DATA_INTEGRITY_FINDINGS.md). Dedupe on the reading's OWN
+    //    identity — user + type + the client-stamped `timestamp`, which is
+    //    identical across a store call's retries but differs between two real
+    //    readings — NOT on created_at (server time, differs per attempt). Single
+    //    statement (INSERT ... SELECT ... WHERE NOT EXISTS), no SELECT-then-INSERT
+    //    round-trip. The HARD guarantee (a UNIQUE index) is a gated follow-up: it
+    //    needs the 14 existing prod duplicates removed first.
+    const readingTs =
+      processedData && processedData.timestamp != null
+        ? String(processedData.timestamp)
+        : null;
+
+    let insertResult;
+    if (readingTs) {
+      [insertResult] = await db.query(
+        `INSERT INTO dev_data (dev_id, user_id, dev_type, data)
+         SELECT ?, ?, ?, ?
+           FROM DUAL
+          WHERE NOT EXISTS (
+            SELECT 1 FROM dev_data
+             WHERE user_id = ? AND dev_type = ?
+               AND JSON_UNQUOTE(JSON_EXTRACT(data, '$.timestamp')) = ?
+          )`,
+        [devId, userId, devType, JSON.stringify(processedData), userId, devType, readingTs]
+      );
+    } else {
+      // No client timestamp to dedupe on — fall back to a plain insert.
+      [insertResult] = await db.query(
+        "INSERT INTO dev_data (dev_id, user_id, dev_type, data) VALUES (?, ?, ?, ?)",
+        [devId, userId, devType, JSON.stringify(processedData)]
+      );
+    }
+
+    // affectedRows === 0 means the NOT EXISTS matched — this POST is a duplicate
+    // of an already-stored reading (a retry). Do not re-alert on it (step 4).
+    const wasDuplicate = insertResult.affectedRows === 0;
 
     const serviceResponse = {
       insertId: insertResult.insertId,
@@ -839,6 +873,7 @@ const createDeviceDataService = async (
       userId,
       deviceData: processedData,
       deviceWasNew,
+      duplicate: wasDuplicate,
       alertCreated: false,
     };
 
@@ -856,6 +891,7 @@ const createDeviceDataService = async (
     // low-BP event when the cuff malfunctioned. A distinct device/data-quality
     // alert is a fast-follow (see SECURITY_FOLLOWUPS).
     if (
+      !wasDuplicate &&
       devType === "bp" &&
       processedData.bpStatus &&
       processedData.bpStatus !== "Normal" &&
