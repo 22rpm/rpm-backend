@@ -266,3 +266,48 @@ It **is** the deploy — every workstream rides the care-activity/org-context pa
 first prod release. Nothing tz-related ships separately, because prod has no
 care-activity tables to patch. The release is gated by the tz-tables load (runbook
 step 1) and bounded by the ledger deadline (must precede the first signed note).
+
+## Mobile (iOS) display + capture-vs-delivery — audited 2026-08-24 (mobile never audited before)
+
+The app is a SEPARATE display surface from the dashboard (#5), with its own defect,
+made structural by the durable outbox.
+
+**Symptom:** a 2:13 PM Pacific reading (backend received `data.timestamp =
+2026-08-24T21:13:57Z`, correct) displays in the app as **7:13 AM**.
+
+**BP — `BloodPressure.js:545-554` — DEFECTIVE.** `loadHistoricalData` maps date/time
+AND the sort key from `item.createdAt`, ignoring `item.data.timestamp`:
+```js
+date/time: new Date(item.createdAt).toLocaleTimeString()
+timestamp: item.createdAt          // also the sort key (557-560)
+```
+Two stacked errors:
+1. **Wrong field** — `createdAt` is the DB insert instant; `data.timestamp` is the
+   true captured UTC. `new Date(data.timestamp).toLocaleTimeString()` = **2:13 PM**.
+2. **Double conversion** — `createdAt` arrives as Pacific-wall-clock-mislabeled-UTC
+   (the #12 driver mislabel), and `toLocaleTimeString()` applies the device's −7h
+   AGAIN → **7:13 AM**. The dashboard renders the naive digits without a toLocale
+   round-trip (Pacific by accident); the app converts, so the mislabel surfaces —
+   this is why the app differs from the dashboard.
+
+**ECG — `ECG.js` — no server-backed reading list; nothing to fix now.** No
+createdAt/timestamp display path exists (consistent with "no pipeline; data stops
+at the phone"). When a pipeline is added, bind display + sort to the captured
+instant from day one.
+
+**Oxygen — `Oxygen.js:170,340-373` — OK, good pattern.** Displays and sorts from
+`startTs` (a capture-time field), NOT `createdAt` — so it does not exhibit the BP
+bug. Confirm `startTs` is the measurement time and, if Oxygen ever reads history
+from the backend, that it keys on `data.timestamp`/`startTs`, never `created_at`.
+
+**The outbox makes this structural, not cosmetic.** With the durable outbox
+(rpm-ios-app `fix/bp-auto-reconnect`), `created_at` is the DB **delivery** instant —
+an offline reading is POSTed on the next foreground drain, possibly a different
+DAY. So `created_at` is not merely tz-mislabeled; it is the wrong instant.
+`data.timestamp` is the only field that reflects when the reading was taken. Same
+reason the billing count must move off `created_at` — see BILLING_FOLLOWUPS #13.
+
+**Fix (mobile), independent of the backend pin:** map/sort BP from
+`item.data?.timestamp` (fallback `createdAt` for legacy rows). Even a perfectly
+pinned backend (#11/#12) still serves the wrong INSTANT if the app reads
+`created_at`, so this is a distinct, app-side change.

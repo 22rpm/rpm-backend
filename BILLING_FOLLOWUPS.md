@@ -255,3 +255,30 @@ a data-entry error. This is a pre-existing inconsistency, present before any tz
 work; the tz fix RESOLVES it (post-pin every column reads a UTC instant, so one
 `CONVERT_TZ('+00:00', clinic_tz)` buckets the whole note in one clinic-day frame).
 Recorded on its own so the discrepancy is attributable and closed by the same fix.
+
+## 13. Transmission-day count keys on `created_at` = DELIVERY time (iOS outbox) — OPEN
+#11 assumes `created_at` ≈ the reading instant and only worries about which calendar
+day it buckets to (tz). The iOS durable outbox (rpm-ios-app `fix/bp-auto-reconnect`)
+breaks that assumption: a reading is written to disk at capture but POSTed on the
+next foreground drain, so `created_at` is the **delivery** instant. An offline
+reading delivered the next day lands a transmission day on the WRONG day and can
+cross the 99445 (≥2) / 99454 (≥16) threshold, or move across the month-window
+boundary.
+
+**Not fixed by #11's resolution:** normalizing `created_at` to the clinic tz still
+buckets by delivery day. The count must key on `data.timestamp` (the captured UTC
+instant the client sends and the backend stores verbatim inside `data`), converted
+to the clinic tz:
+```sql
+SELECT DISTINCT DATE_FORMAT(
+  CONVERT_TZ(JSON_UNQUOTE(JSON_EXTRACT(data,'$.timestamp')), '+00:00', @clinic_tz),
+  '%Y-%m-%d') AS d
+  FROM dev_data
+ WHERE user_id = ? AND <window on data.timestamp, same clinic frame>
+```
+The window bounds (`>= start`, `< next`) must move to `data.timestamp` too. Legacy
+rows without `data.timestamp` fall back to `created_at`.
+
+This is a stronger argument for `data.timestamp` everywhere than the display bug:
+it is billing accuracy + compliance (a day billed is a day the reading was actually
+taken), not cosmetics. Supersedes the `created_at` approach in #11's resolution.
