@@ -311,3 +311,18 @@ reason the billing count must move off `created_at` — see BILLING_FOLLOWUPS #1
 `item.data?.timestamp` (fallback `createdAt` for legacy rows). Even a perfectly
 pinned backend (#11/#12) still serves the wrong INSTANT if the app reads
 `created_at`, so this is a distinct, app-side change.
+
+### Server-side coupling (created_at audit + deploy gate)
+The mobile display fix (use `data.timestamp`) has server-side siblings — every
+place that windows/buckets READINGS by `created_at` inherits the outbox's
+delivery-time problem: the transmission-day count (`rpmNote.service.js:125`), the
+note's BP summary + count (`rpmNote.service.js:149`), and the last-N-days readings
+window (`deviceData.service.js:2040`). Worklist and the note/time/call queries are
+NOT affected (they use `started_at` / note-creation time). See BILLING_FOLLOWUPS #13.
+
+**DEPLOY COUPLING:** the iOS outbox (`fix/bp-auto-reconnect`) INTRODUCED the
+divergence — before it, `created_at` was within seconds of the reading. So the
+outbox cannot ship before the backend moves these reading windows to
+`data.timestamp`, or every offline reading mis-buckets its transmission day. The
+outbox and the `data.timestamp` change are ONE release; gate the app release on
+the backend change being live.

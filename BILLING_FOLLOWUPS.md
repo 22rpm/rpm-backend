@@ -282,3 +282,40 @@ rows without `data.timestamp` fall back to `created_at`.
 This is a stronger argument for `data.timestamp` everywhere than the display bug:
 it is billing accuracy + compliance (a day billed is a day the reading was actually
 taken), not cosmetics. Supersedes the `created_at` approach in #11's resolution.
+
+### #13 — audit: the other reading-time-meant `created_at` sites (server-side)
+The "created_at is really delivery time" defect applies wherever a query
+windows/buckets READINGS by `created_at`:
+- `rpmNote.service.js:125` — transmission-day DISTINCT count. **Affected** (above).
+- `rpmNote.service.js:149` — the note's **BP summary** (MIN/MAX/AVG of sys/dia/bpm
+  AND the reading COUNT `n`) is `WHERE created_at >= ? AND < ?`. **Affected**: the
+  numbers on the signed note, and the count, shift with delivery timing — an
+  offline reading delivered next month drops out of this month's summary (or lands
+  in the wrong month).
+- `deviceData.service.js:2040/2049` — the "last N days" readings window feeding the
+  vitals month filter and the mobile history list. **Affected** (window by
+  delivery date).
+- Worklist (`patientWorklist.service.js`) — does NOT window readings by
+  `created_at` (uses `started_at` / note-creation time). **Not affected.**
+- Clinical notes / time_entries / patient_calls — use `started_at` or the note's
+  own `created_at`; those genuinely mean creation time. **Not affected.**
+All affected sites take the same fix: bucket/window on `data.timestamp`.
+
+### #13 — the outbox INTRODUCED this; it is NOT pre-existing
+Before the iOS durable outbox, the client POSTed the reading immediately, so
+`created_at` was within SECONDS of the measurement — keying billing on it was
+approximately right, and #11 correctly treated the only risk as tz bucketing near
+midnight. The outbox (a fix for LOST readings) made delivery time arbitrary: a
+reading captured offline is delivered hours or a day later, so `created_at` can be
+a full day off the measurement. Do NOT read #13 as a latent pre-existing issue and
+deprioritize it — a fix for lost readings created a billing-accuracy bug.
+
+### #13 — deploy coupling: outbox + day-count are ONE release
+Because the outbox is what makes `created_at` diverge from reading time, the outbox
+CANNOT ship to patients before the day-count (and BP-summary, and readings-window)
+move to `data.timestamp`. Shipping the outbox first would silently mis-bill
+transmission days for every offline reading. One deploy, not two:
+- iOS: `fix/bp-auto-reconnect` (outbox).
+- backend: the `data.timestamp` bucketing/windowing change (this item + #11).
+Gate the outbox app release on the backend change being live. (Mirrored in
+TZ_FIX_DESIGN.md.)
