@@ -351,3 +351,23 @@ review account sign in with a fixed code.
   ever concerned; both are low-sensitivity by construction.
 - **Do NOT:** widen to email/username matching, add an env flag that disables OTP
   globally, or copy a real patient's data into the review account.
+
+## 13. Codebase-wide patient-token IDOR audit — OPEN (not started)
+There is no systematic proof that every endpoint reachable by a PATIENT token
+scopes its reads to the caller. #6 already documents a live IDOR (cross-org
+clinician read on `getDoctorsByOrganization`); that returns doctor names, but it
+shows the class exists here. Reads verified so far: `getDeviceDataController`
+(getUserReadingData) scopes to `req.user.id` — a patient sees only their own
+readings.
+
+**Scope:** enumerate every route behind `authRequired`, and for each reachable by
+role `patient`, confirm the query is bound to `req.user.id`/org and rejects an
+attacker-supplied `user_id`/`patient_id`/`devId`. Priority on any handler taking
+an id from `req.params`/`req.query`/`req.body` (e.g. the `devId`-param store/read
+handlers) and returning device data or vitals.
+
+**Why it matters here + priority:** the Apple review account (#12) is a normal
+patient token, so it has exactly a patient's access — no more, no less. It does
+NOT widen this risk, but its credentials are committed, so any patient-token IDOR
+is now reachable with a known login. That makes this audit higher priority than
+before, though still independent of the review bypass itself.

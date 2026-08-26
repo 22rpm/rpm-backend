@@ -5,7 +5,9 @@
 -- App Review reviewer can log in (with the fixed OTP wired in auth.controller.js)
 -- and see a functional, populated app with NO real patient data.
 --
--- Run on PROD (rpm_db_v1). mysqldump FIRST — prod has no backups.
+-- Run on PROD database `rpm_db` (NOT rpm_db_v1 — that is the local dev DB).
+-- mysqldump FIRST — prod has no backups. The USE below pins the target so this
+-- cannot run against the wrong database.
 --
 -- STEP A — generate the bcrypt hash for the review password, in rpm-backend/:
 --   node -e "console.log(require('bcrypt').hashSync('AppReview!2026', 12))"
@@ -20,6 +22,8 @@
 -- assignments rows (so it links to no real clinician/patient and sees none). All
 -- names/emails/readings are fabricated.
 -- ============================================================================
+
+USE rpm_db;   -- prod database. NOT rpm_db_v1 (local).
 
 SET @pw := '$2b$12$REPLACE_WITH_BCRYPT_HASH_FROM_STEP_A';
 
