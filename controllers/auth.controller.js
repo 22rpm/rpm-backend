@@ -39,6 +39,26 @@ const twilioService = require("../services/twillio.service");
 
 const TRUST_DAYS = 60;
 
+// ── Apple App Review sign-in exception (PERMANENT) ──────────────────────────
+// App Review runs on Apple's own hardware and cannot receive our SMS/email OTP,
+// so a login-gated app is an automatic rejection. This lets ONE dedicated,
+// PHI-free review account sign in with a FIXED code, so a reviewer can get past
+// the OTP screen. It is used in exactly two places (both gated by this id):
+//   1. login()               — skip the SMS/email send for this account.
+//   2. verifyOtpController()  — accept APPLE_REVIEW_OTP for this account.
+//
+// Gated by IMMUTABLE user id, NOT email: an email compare is one typo or one DB
+// edit away from matching a real account. Fail-closed: the id only reaches these
+// checks after a successful user lookup (login validates the password first, and
+// verifyOtpController resolves the user by identifier). If the review account is
+// ever deleted, no request can produce this id (MySQL does not reuse auto-inc
+// ids), so the bypass silently does nothing. APPLE_REVIEW_USER_ID = 0 keeps it
+// DISABLED until the review account is seeded on prod (0 matches no real user).
+// Review-account ONLY — never widen this.
+// See SECURITY_FOLLOWUPS "Apple App Review OTP bypass".
+const APPLE_REVIEW_USER_ID = 0;       // TODO(prod): set to the seeded review user id
+const APPLE_REVIEW_OTP = "624019";    // fixed code handed to Apple in review notes
+
 // Treat an identifier as a phone number when it has no "@", contains only
 // phone-ish characters, and has 7-15 digits once punctuation is stripped.
 function looksLikePhone(identifier) {
@@ -335,6 +355,19 @@ if (!user) {
     }
 
     // ---- 6. Otherwise: send an OTP ----------------------------------------
+
+    // Apple review account (see APPLE_REVIEW_USER_ID note): no real SMS/email, so
+    // skip the send and just tell the app to show the OTP screen. The reviewer
+    // enters the fixed APPLE_REVIEW_OTP, which verifyOtpController accepts. Gated
+    // by immutable id; disabled while APPLE_REVIEW_USER_ID === 0.
+    if (user.id === APPLE_REVIEW_USER_ID) {
+      return res.status(200).json({
+        message: "OTP sent, please verify",
+        requiresOtp: true,
+        otpChannel: "email",
+      });
+    }
+
     // Cryptographically secure — this is a second factor on PHI, so not Math.random.
     const otp = String(crypto.randomInt(100000, 1000000));
     await createOtp(user.id, otp, "login");
@@ -530,7 +563,14 @@ const verifyOtpController = async (req, res) => {
 
     if (!user) return res.status(400).json({ error: "User not found" });
 
-    const valid = await verifyOtp(user.id, otp, "login");
+    // Apple review account (see APPLE_REVIEW_USER_ID note): accept the fixed code
+    // for this ONE account only. `user` was just resolved by identifier above, so
+    // this is fail-closed — if the review account is deleted, `user.id` can never
+    // equal APPLE_REVIEW_USER_ID here. Disabled while APPLE_REVIEW_USER_ID === 0.
+    const isReviewBypass =
+      user.id === APPLE_REVIEW_USER_ID && otp === APPLE_REVIEW_OTP;
+
+    const valid = isReviewBypass || (await verifyOtp(user.id, otp, "login"));
     if (!valid) {
       return res.status(400).json({ error: "Invalid or expired OTP" });
     }

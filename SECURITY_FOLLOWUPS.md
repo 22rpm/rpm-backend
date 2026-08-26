@@ -324,3 +324,30 @@ remains possible — and forcing a placeholder to pass enrollment is exactly how
 So the CHECK guarantees a *stored* channel; deliverability + the no-usable-channel
 case are handled by an explicit enrollment branch (device-only or caregiver-proxy),
 never by a placeholder.
+
+## 12. Apple App Review OTP bypass — INTENTIONAL, PERMANENT, scoped auth exception
+The iOS app is login-gated behind an SMS/email OTP. App Review runs on Apple's own
+hardware and cannot receive the OTP, so without an exception every submission is an
+automatic rejection. `controllers/auth.controller.js` therefore lets ONE dedicated
+review account sign in with a fixed code.
+
+- **Account:** user id **`<SET AFTER SEEDING>`** (the id printed by
+  `APPLE_REVIEW_SEED.sql`), a PHI-free PATIENT in its own isolated org
+  (`APPLEREVIEW`), no `patient_doctor_assignments`, only fabricated readings.
+- **Gate:** immutable **user id** (`APPLE_REVIEW_USER_ID`), never email — an email
+  compare is one typo / DB edit from matching a real account. Fixed code in
+  `APPLE_REVIEW_OTP`.
+- **Two touch points, both id-gated:** `login()` skips the OTP send for this id;
+  `verifyOtpController()` accepts `APPLE_REVIEW_OTP` for this id.
+- **Fail-closed:** the id only reaches these checks after a successful user lookup
+  (password validated in login; user resolved by identifier in verify). If the
+  account is deleted, no request can produce that id (MySQL does not reuse
+  auto-increment ids), so the bypass does nothing. `APPLE_REVIEW_USER_ID = 0`
+  keeps it fully disabled until the account is seeded and the id is set.
+- **Permanent:** Apple re-reviews on every release, so this stays. It is NOT a
+  temporary hack to remove after approval.
+- **Blast radius if the review credentials leak:** access to a fake, PHI-free,
+  fully isolated account. Rotate `APPLE_REVIEW_OTP` (and the account password) if
+  ever concerned; both are low-sensitivity by construction.
+- **Do NOT:** widen to email/username matching, add an env flag that disables OTP
+  globally, or copy a real patient's data into the review account.
