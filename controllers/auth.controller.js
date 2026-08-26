@@ -56,7 +56,7 @@ const TRUST_DAYS = 60;
 // DISABLED until the review account is seeded on prod (0 matches no real user).
 // Review-account ONLY — never widen this.
 // See SECURITY_FOLLOWUPS "Apple App Review OTP bypass".
-const APPLE_REVIEW_USER_ID = 0;       // TODO(prod): set to the seeded review user id
+const APPLE_REVIEW_USER_ID = 44;      // seeded prod review account (rpm_db user id 44)
 const APPLE_REVIEW_OTP = "624019";    // fixed code handed to Apple in review notes
 
 // Treat an identifier as a phone number when it has no "@", contains only
