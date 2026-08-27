@@ -188,6 +188,26 @@ class MessageController {
       });
     }
   }
+
+  // Clinician inbox — assignment + active gated conversations, newest first.
+  async getClinicianInbox(req, res) {
+    try {
+      const inbox = await messageService.getClinicianInbox(req.user.id);
+      res.json({ success: true, data: inbox });
+    } catch (error) {
+      res.status(500).json({ success: false, message: "Failed to get inbox", error: error.message });
+    }
+  }
+
+  // Total unread for the nav badge (DB-backed; survives reload).
+  async getUnreadCount(req, res) {
+    try {
+      const count = await messageService.getClinicianUnreadCount(req.user.id);
+      res.json({ success: true, count });
+    } catch (error) {
+      res.status(500).json({ success: false, message: "Failed to get unread count", error: error.message });
+    }
+  }
 }
 
 module.exports = new MessageController();

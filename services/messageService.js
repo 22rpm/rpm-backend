@@ -211,6 +211,44 @@ class MessageService {
       throw error;
     }
   }
+
+  // Clinician inbox: conversations with the clinician's ASSIGNED, ACTIVE patients
+  // only (assignment + active gate — same as vitals; a clinician must not see
+  // messages from patients who aren't theirs). Reuses the tested getUserConversations
+  // query, then filters + sorts newest-first. Unread counts are DB-backed (is_read),
+  // so they survive a page reload — not socket-only state.
+  //
+  // Orphan note (ORG_CONTEXT_FOLLOWUPS #6): deactivating a clinician doesn't clean up
+  // patient_doctor_assignments, so a message to a deactivated sole-assignee lands
+  // where nobody's inbox includes it. This gate doesn't create that, but inherits it.
+  async getClinicianInbox(clinicianId) {
+    const assignedRows = await db("patient_doctor_assignments as pda")
+      .join("users as u", "u.id", "pda.patient_id")
+      .where("pda.doctor_id", clinicianId)
+      .andWhere("u.is_active", true)
+      .pluck("pda.patient_id");
+    const assigned = new Set(assignedRows.map((id) => Number(id)));
+    if (assigned.size === 0) return [];
+
+    const all = await this.getUserConversations(clinicianId);
+    return all
+      .filter((c) => assigned.has(Number(c.other_user_id)))
+      .map((c) => ({
+        patient_id: c.other_user_id,
+        patient_name: c.other_user_name,
+        last_message: c.last_message,
+        last_message_time: c.last_message_time,
+        unread_count: Number(c.unread_count || 0),
+      }))
+      .sort((a, b) => new Date(b.last_message_time) - new Date(a.last_message_time));
+  }
+
+  // Total unread across the clinician's assigned patients — for the nav badge.
+  // DB-backed via the inbox, so it is correct after a reload.
+  async getClinicianUnreadCount(clinicianId) {
+    const inbox = await this.getClinicianInbox(clinicianId);
+    return inbox.reduce((sum, c) => sum + Number(c.unread_count || 0), 0);
+  }
 }
 
 module.exports = new MessageService();

@@ -9,6 +9,10 @@ router.use(authRequired);
 
 router.post('/send', messageController.sendMessage);
 router.get('/conversations', messageController.getUserConversations);
+
+// Clinician-side (assignment + active gated)
+router.get('/inbox', messageController.getClinicianInbox);
+router.get('/unread-count', messageController.getUnreadCount);
 router.get('/conversation/:userId', messageController.getConversation);
 router.get('/clinicians', messageController.getClinicians);
 
