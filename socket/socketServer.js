@@ -274,8 +274,13 @@ const initializeSocket = (server) => {
     try {
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
       socket.userId = decoded.id;
-      socket.userRole = decoded.role;
-      console.log("✅ Authenticated Socket User:", decoded.id, "Role:", decoded.role);
+      // The JWT carries the role under `role_type` on most login paths (the `role`
+      // key is only set on some); reading `decoded.role` alone left socket.userRole
+      // undefined for those tokens, so clinicians never matched the
+      // `userRole === 'clinician'` gate below and got no realtime delivery. Accept
+      // either field.
+      socket.userRole = decoded.role_type || decoded.role;
+      console.log("✅ Authenticated Socket User:", decoded.id, "Role:", socket.userRole);
       next();
     } catch (err) {
       console.log("❌ Invalid Token:", err.message);
