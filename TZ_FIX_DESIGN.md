@@ -326,3 +326,31 @@ outbox cannot ship before the backend moves these reading windows to
 `data.timestamp`, or every offline reading mis-buckets its transmission day. The
 outbox and the `data.timestamp` change are ONE release; gate the app release on
 the backend change being live.
+
+## Addendum — PatientHome "Synced N hours ago" (createdAt as served display time) — confirmed 2026-08-27
+
+PatientHome / Readings / the reading reminder read the Synced time from
+`res.data.data.createdAt` (the `dev_data.created_at` TIMESTAMP = outbox DELIVERY time),
+not the reading's baked `data.timestamp`. Two problems, both captured against a real
+row (id 353):
+
+- **Served value is tz-mislabeled on dev.** `/devices/data/latest` goes through
+  `config/db.js` (mysql2 `timezone:'Z'`) on a **SYSTEM (Pacific) session**. MySQL
+  converts the `created_at` TIMESTAMP to Pacific wall-clock on SELECT; mysql2 then
+  re-labels that as UTC. Captured: `created_at` served as `"2026-08-27T15:03:38.000Z"`
+  while the true instant is `"2026-08-27T22:03:38.014Z"` (`data.timestamp`; `data.time`
+  = "3:03:38 PM" Pacific). `Date.parse` reads 15:03Z → 7h early → "Synced 7 hours ago".
+  (Via `config/knex`, which sets no `timezone`, the same row reads back correct — so
+  the bug is the `config/db.js` path + the unpinned session. This is what fix (a),
+  pinning the session to UTC, resolves.)
+- **Wrong field even when the tz is right — this is a prod bug, not a dev artifact.**
+  `created_at` is the delivery time, not the reading time. On prod (UTC session) the
+  7h is invisible for an *immediately*-delivered reading — which is exactly why nobody
+  caught it — but a reading taken offline and delivered later shows the **delivery
+  time** on prod today.
+
+**iOS fix (rpm-ios-app `fix/bp-auto-reconnect` `4316125`):** `bpReading.js` reads
+`v.timestamp` (native `iso8601Now` — a UTC "…Z" string stored as JSON, immune to the
+TIMESTAMP tz mislabel), falling back to `createdAt` only for a legacy row. Backend
+still owes fix (a) (pin session to UTC) so any code using `created_at` as a display
+time is correct; until then, display must key off `data.timestamp`.
