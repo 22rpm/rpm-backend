@@ -152,12 +152,22 @@ class MessageService {
     }
   }
 
+  // The patient's care team: ONLY the clinicians assigned to THIS patient
+  // (patient_doctor_assignments) and still ACTIVE. The previous version ignored
+  // patientId and returned every clinician, so the patient app could route a
+  // message to an arbitrary clinician — misrouted PHI, not a UX detail. A
+  // deactivated assignee is excluded (is_active) so we never route to someone who
+  // can't see it; that surfaces as an empty result the caller must handle, rather
+  // than a silent orphan (see the deactivation gap, ORG_CONTEXT_FOLLOWUPS #6).
   async getCliniciansByPatient(patientId) {
     try {
       return await db("users")
         .select("users.id", "users.name", "users.email")
-        .leftJoin("role", "users.id", "role.user_id")
-        .where("role.role_type", "clinician");
+        .innerJoin("role", "users.id", "role.user_id")
+        .innerJoin("patient_doctor_assignments as pda", "users.id", "pda.doctor_id")
+        .where("role.role_type", "clinician")
+        .andWhere("pda.patient_id", patientId)
+        .andWhere("users.is_active", true);
     } catch (error) {
       console.log(error);
       throw error;
