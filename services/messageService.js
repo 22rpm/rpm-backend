@@ -231,15 +231,10 @@ class MessageService {
     if (assigned.size === 0) return [];
 
     const all = await this.getUserConversations(clinicianId);
+    // Same shape as getUserConversations (other_user_id / other_user_name /
+    // unread_count) so the dashboard can swap /conversations -> /inbox directly.
     return all
       .filter((c) => assigned.has(Number(c.other_user_id)))
-      .map((c) => ({
-        patient_id: c.other_user_id,
-        patient_name: c.other_user_name,
-        last_message: c.last_message,
-        last_message_time: c.last_message_time,
-        unread_count: Number(c.unread_count || 0),
-      }))
       .sort((a, b) => new Date(b.last_message_time) - new Date(a.last_message_time));
   }
 
