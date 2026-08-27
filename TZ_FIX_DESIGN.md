@@ -180,6 +180,34 @@ needs clinic bucketing), so they cannot be shipped piecemeal.
   pre-change note is handled (wiped), not surfaced as tamper.
 - **Prod pre-deploy:** the tz-tables check above.
 
+## Empirical verification (2026-08-27) — fixtures RUN, not reasoned; patient-48 baseline corrected
+Ran against the live dev DB (`rpm_db_v1`), read-only; no migration, nothing deployed.
+
+- **Dev tz tables were NOT loaded** (`CONVERT_TZ(x,'UTC','America/Los_Angeles')` → NULL,
+  `mysql.time_zone_name` = 0 rows). Loaded them (`mysql_tzinfo_to_sql /usr/share/zoneinfo
+  | mysql … mysql`; 599 zones). **Named-zone bucketing collapses to NULL without this —
+  worse than the original bug. Same load is a hard prod runbook gate (confirmed by
+  observation, not assumption).** A numeric offset is NOT an acceptable substitute — it is
+  DST-blind.
+- **Evening-reading fixture (RUN):** `2026-08-05 03:00Z` (8 PM PDT Aug 4) buckets UTC→08-05,
+  Pacific→**08-04**. `2026-01-11 04:00Z` (8 PM PST Jan 10) buckets UTC→01-11,
+  Pacific→**01-10**. Two readings 09:00+20:00 PDT same day → UTC 2 distinct days,
+  Pacific **1**. Named zone handles PDT and PST both; an offset can't.
+- **Patient 48, Aug 2026 — the old "5 days → 99445" anchor is STALE** (dev data reseeded;
+  readings now run through 2026-08-27). Current distinct-day count: **9 (UTC window+bucket,
+  = what prod does today / PR2-alone) vs 10 (Pacific window + CONVERT_TZ bucket, the
+  target).** The gap is real in his own data — ids 350–352 taken ~17:46 PDT Aug 26, stored
+  `2026-08-27 00:4xZ`, merge into Aug 27 under UTC and stay Aug 26 under Pacific. Both 9 and
+  10 are in the 99445 band [2,16), so the CODE does not flip this month — but the printed
+  count differs by environment and a patient at 15/16 days WOULD flip 99445↔99454.
+- **PR2-alone regresses bucketing to UTC.** Because `DATE_FORMAT(created_at)` under a
+  UTC-pinned session buckets UTC, PR2 without PR3 yields the wrong count (9). **PR2 and PR3
+  must land together**; PR2 is not independently shippable.
+- **Rehearsal TODO — re-baseline + a threshold-crossing anchor.** Patient 48 does not cross
+  the 16-day boundary, so he cannot prove a 99445↔99454 CODE flip. Construct/seed a
+  patient/month with 15 vs 16 distinct Pacific days (one straddling reading) so the rehearsal
+  proves the code flip, not just the count shift.
+
 ## Sequenced build plan
 
 ### Two framings that shape the plan
