@@ -1,5 +1,6 @@
 // controllers/messageController.js
 const messageService = require("../services/messageService");
+const notificationService = require("../services/notificationService");
 const { getIO } = require("../socket/socketServer");
 
 class MessageController {
@@ -27,6 +28,11 @@ class MessageController {
         senderId,
         receiverId,
       });
+
+      // Notify the patient's assigned physician (email/SMS). Fire-and-forget: it is
+      // debounced + fully logged and must never block or fail the message send. Only
+      // fires when the sender is a patient.
+      notificationService.notifyOnPatientMessage(senderId, receiverId).catch(() => {});
 
       res.status(201).json({
         success: true,
@@ -206,6 +212,50 @@ class MessageController {
       res.json({ success: true, count });
     } catch (error) {
       res.status(500).json({ success: false, message: "Failed to get unread count", error: error.message });
+    }
+  }
+
+  // Physician notification preferences (default ON for both channels).
+  async getNotificationPrefs(req, res) {
+    try {
+      res.json({ success: true, data: await notificationService.getPrefs(req.user.id) });
+    } catch (e) {
+      res.status(500).json({ success: false, error: e.message });
+    }
+  }
+  async updateNotificationPrefs(req, res) {
+    try {
+      const { message_email, message_sms } = req.body;
+      const data = await notificationService.setPrefs(req.user.id, { message_email, message_sms });
+      res.json({ success: true, data });
+    } catch (e) {
+      res.status(500).json({ success: false, error: e.message });
+    }
+  }
+
+  // Dashboard failure indicator: recent failed/undelivered/unroutable notifications.
+  async getNotificationFailures(req, res) {
+    try {
+      const [data, count] = await Promise.all([
+        notificationService.getRecentFailures({}),
+        notificationService.getFailureCount({}),
+      ]);
+      res.json({ success: true, count, data });
+    } catch (e) {
+      res.status(500).json({ success: false, error: e.message });
+    }
+  }
+
+  // Public Twilio StatusCallback: flips accepted -> delivered/undelivered by SID so an
+  // async SMS bounce (valid-but-wrong number) surfaces, not just synchronous errors.
+  async twilioStatusCallback(req, res) {
+    try {
+      const sid = req.body.MessageSid || req.body.SmsSid;
+      const status = req.body.MessageStatus || req.body.SmsStatus;
+      await notificationService.updateDeliveryByProviderRef(sid, status);
+      res.status(204).end();
+    } catch (e) {
+      res.status(200).end(); // never make Twilio retry on our error
     }
   }
 }

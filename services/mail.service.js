@@ -23,7 +23,27 @@ async function sendOtpEmail(to, otp) {
   });
 }
 
-module.exports = { sendOtpEmail };
+// Generic notification email. Returns a structured result (success/error) so the
+// caller can RECORD the outcome — a bare `await sendMail` that throws or quietly
+// no-ops is how Gmail went unnoticed for months.
+async function sendNotificationEmail(to, subject, html, text) {
+  try {
+    if (!to) return { success: false, error: "no recipient email" };
+    const info = await transporter.sendMail({
+      from: `"TwentyTwo RPM" <${process.env.GMAIL_USER}>`,
+      to,
+      subject,
+      text,
+      html,
+    });
+    return { success: true, messageId: info && info.messageId };
+  } catch (e) {
+    console.error(`❌ Failed to send notification email to ${to}:`, e.message);
+    return { success: false, error: e.message };
+  }
+}
+
+module.exports = { sendOtpEmail, sendNotificationEmail };
 
 // services/mail.service.js
 // const nodemailer = require("nodemailer");
