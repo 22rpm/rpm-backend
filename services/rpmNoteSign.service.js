@@ -202,9 +202,9 @@ async function signRpmNote({
       `INSERT INTO rpm_notes
          (patient_id, organization_id, billing_month, content, attestation_text,
           signature_name, signature_method, signed_by, signed_role,
-          signed_credential, signed_at, signed_ip, signed_user_agent,
+          signed_credential, signed_at, signed_at_iso, signed_ip, signed_user_agent,
           content_hash, correction_reason, supersedes)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         patientId,
         orgScope,
@@ -217,6 +217,10 @@ async function signRpmNote({
         String(actor.role || "").slice(0, 50),
         signedCredential,
         signedAt,
+        // The EXACT string the content_hash covers — verify reads this back
+        // instead of re-deriving it from the TIMESTAMP, so a session-tz change
+        // can never invalidate the hash. See migration 20260827120000.
+        signedAtIso,
         session?.ip || null,
         session?.userAgent || null,
         contentHash,
@@ -279,7 +283,10 @@ function verifyRow(row) {
     signatureMethod: row.signature_method,
     actor: { id: row.signed_by, role: row.signed_role },
     signedCredential: row.signed_credential,
-    signedAtIso: toSecondIso(row.signed_at),
+    // Prefer the immutable stored string (tz-independent); fall back to
+    // re-deriving from the TIMESTAMP only for legacy rows signed before
+    // migration 20260827120000 (dev test notes; none on prod).
+    signedAtIso: row.signed_at_iso || toSecondIso(row.signed_at),
     ip: row.signed_ip,
     userAgent: row.signed_user_agent,
     supersedes: row.supersedes,
@@ -332,7 +339,9 @@ async function getSignedHead({ patientId, orgScope, month }) {
     signed_by_name: row.signed_by_name,
     signed_role: row.signed_role,
     signed_credential: row.signed_credential,
-    signed_at: toSecondIso(row.signed_at),
+    // Same preference as verification: the exact signed instant, not the
+    // tz-round-tripped TIMESTAMP read-back.
+    signed_at: row.signed_at_iso || toSecondIso(row.signed_at),
     content_hash: row.content_hash,
     hash_valid: hashValid,
     billing_snapshot: billingSnapshot,
