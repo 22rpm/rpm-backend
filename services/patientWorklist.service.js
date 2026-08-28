@@ -9,6 +9,7 @@
 // permission boundary. A clinician may still request the whole clinic (§3.2);
 // org scoping (req.orgScope) is the only boundary and is applied by the caller.
 const db = require("../config/db");
+const tzq = require("../config/billingTz");
 
 // "YYYY-MM" -> { start:'YYYY-MM-01', next: first day of next month, label }.
 // Falls back to the current (UTC) month for missing/invalid input.
@@ -44,7 +45,19 @@ function groupBy(rows, key, mapFn) {
 }
 
 async function getWorklist({ orgScope, userId, month, mine }) {
-  const win = monthWindow(month);
+  const win = monthWindow(month); // calendar-month LABELS
+
+  // Clinic-tz month window, matching rpmNote.service so the worklist's monthly
+  // time totals cover the same clinic-local month as the note (TZ_FIX_DESIGN.md
+  // PR 3). Fail loud if the named-tz tables are missing rather than silently
+  // returning zero minutes.
+  const [orgRows] = await db.query(
+    "SELECT timezone FROM organizations WHERE id = ?",
+    [orgScope]
+  );
+  const clinicTz = tzq.resolveClinicTz(orgRows[0] && orgRows[0].timezone);
+  await tzq.assertClinicTz(db, clinicTz);
+  const L = tzq.monthLabels(month);
 
   // 1) Base patient rows (org-scoped). `mine` only adds an EXISTS filter.
   const params = [orgScope];
@@ -101,9 +114,9 @@ async function getWorklist({ orgScope, userId, month, mine }) {
       WHERE s.id IS NULL
         AND t.organization_id = ?
         AND t.patient_id IN (?)
-        AND t.started_at >= ? AND t.started_at < ?
+        AND ${tzq.monthWhereSql("t.started_at")}
       GROUP BY t.patient_id`,
-    [orgScope, ids, win.start, win.next]
+    [orgScope, ids, ...tzq.monthParams(L, clinicTz)]
   );
   // 5) Billing status for the month (billing_month is the first of the month).
   const [bills] = await db.query(

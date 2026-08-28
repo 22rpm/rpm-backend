@@ -7,6 +7,7 @@
 // plan, attestation) — those stay blank for the provider.
 const db = require("../config/db");
 const rules = require("../config/rpmBillingRules");
+const tzq = require("../config/billingTz");
 
 function httpError(status, message) {
   const e = new Error(message);
@@ -64,7 +65,21 @@ function dateThresholdMet(contribs, thresholdMinutes) {
 }
 
 async function getRpmNote({ patientId, orgScope, month }) {
-  const win = monthWindow(month);
+  const win = monthWindow(month); // calendar-month LABELS (period/DOS display)
+
+  // Clinic-timezone day-bucketing (TZ_FIX_DESIGN.md PR 3). A transmission "day"
+  // is the CLINIC's local day, not the server's — resolved from the org's tz
+  // (NULL -> app default). assertClinicTz FAILS LOUD if the MySQL named-tz tables
+  // are missing, so we never silently under-count instead of erroring. All the
+  // date-windowed queries below use L + clinicTz via tzq.monthWhereSql /
+  // dayBucketSql so the note can't mix tz frames (was BILLING_FOLLOWUPS #13).
+  const [orgRows] = await db.query(
+    "SELECT timezone FROM organizations WHERE id = ?",
+    [orgScope]
+  );
+  const clinicTz = tzq.resolveClinicTz(orgRows[0] && orgRows[0].timezone);
+  await tzq.assertClinicTz(db, clinicTz);
+  const L = tzq.monthLabels(month);
 
   // Patient + profile (mrn included; may be null).
   const [prows] = await db.query(
@@ -122,11 +137,11 @@ async function getRpmNote({ patientId, orgScope, month }) {
   // Monitoring: distinct transmission days (ordered, any device). The count sets
   // the device-supply band; the ordered dates give its threshold-met DOS.
   const [txDays] = await db.query(
-    `SELECT DISTINCT DATE_FORMAT(created_at, '%Y-%m-%d') AS d
+    `SELECT DISTINCT ${tzq.dayBucketSql("created_at")} AS d
        FROM dev_data
-      WHERE user_id = ? AND created_at >= ? AND created_at < ?
+      WHERE user_id = ? AND ${tzq.monthWhereSql("created_at")}
       ORDER BY d`,
-    [patientId, win.start, win.next]
+    [clinicTz, patientId, ...tzq.monthParams(L, clinicTz)]
   );
   const daysWithReadings = txDays.length;
   const num = (x) => (x === null || x === undefined ? null : Number(x));
@@ -146,8 +161,8 @@ async function getRpmNote({ patientId, orgScope, month }) {
          COUNT(*) AS n
        FROM dev_data
       WHERE user_id = ? AND dev_type = 'bp'
-        AND created_at >= ? AND created_at < ?`,
-      [patientId, win.start, win.next]
+        AND ${tzq.monthWhereSql("created_at")}`,
+      [patientId, ...tzq.monthParams(L, clinicTz)]
     ),
   ].map((r) => r[0]);
 
@@ -155,14 +170,14 @@ async function getRpmNote({ patientId, orgScope, month }) {
   // start (so the running total gives the management threshold-met DOS).
   const [timeRows] = await db.query(
     `SELECT t.activity_category,
-            DATE_FORMAT(t.started_at, '%Y-%m-%d') AS d,
+            ${tzq.dayBucketSql("t.started_at")} AS d,
             t.duration_seconds AS secs
        FROM time_entries t
        LEFT JOIN time_entries s ON s.supersedes = t.id
       WHERE s.id IS NULL AND t.patient_id = ? AND t.organization_id = ?
-        AND t.started_at >= ? AND t.started_at < ?
+        AND ${tzq.monthWhereSql("t.started_at")}
       ORDER BY t.started_at, t.id`,
-    [patientId, orgScope, win.start, win.next]
+    [clinicTz, patientId, orgScope, ...tzq.monthParams(L, clinicTz)]
   );
   // Map each activity_category into the template's two TIME DOCUMENTATION
   // buckets. Only Data Review + Interaction counts toward the management tier;
@@ -194,13 +209,13 @@ async function getRpmNote({ patientId, orgScope, month }) {
   // Communication — head-of-chain patient_calls in the month.
   const [calls] = await db.query(
     `SELECT c.direction, c.outcome, c.note,
-            DATE_FORMAT(c.started_at, '%Y-%m-%d') AS date
+            ${tzq.dayBucketSql("c.started_at")} AS date
        FROM patient_calls c
        LEFT JOIN patient_calls cs ON cs.supersedes = c.id
       WHERE cs.id IS NULL AND c.patient_id = ? AND c.organization_id = ?
-        AND c.started_at >= ? AND c.started_at < ?
+        AND ${tzq.monthWhereSql("c.started_at")}
       ORDER BY c.started_at`,
-    [patientId, orgScope, win.start, win.next]
+    [clinicTz, patientId, orgScope, ...tzq.monthParams(L, clinicTz)]
   );
 
   // Reference-only: provider clinical notes documented THIS MONTH (head of the
@@ -208,14 +223,14 @@ async function getRpmNote({ patientId, orgScope, month }) {
   // is NEVER folded into the assessment the provider signs. Labeled reference.
   const [priorNotes] = await db.query(
     `SELECT n.note_type, n.body, au.name AS author,
-            DATE_FORMAT(n.created_at, '%Y-%m-%d') AS date
+            ${tzq.dayBucketSql("n.created_at")} AS date
        FROM clinical_notes n
        LEFT JOIN clinical_notes ns ON ns.supersedes = n.id
        LEFT JOIN users au ON au.id = n.staff_user_id
       WHERE ns.id IS NULL AND n.patient_id = ? AND n.organization_id = ?
-        AND n.created_at >= ? AND n.created_at < ?
+        AND ${tzq.monthWhereSql("n.created_at")}
       ORDER BY n.created_at`,
-    [patientId, orgScope, win.start, win.next]
+    [clinicTz, patientId, orgScope, ...tzq.monthParams(L, clinicTz)]
   );
 
   // ---- Apply the confirmed billing rules -------------------------------------
