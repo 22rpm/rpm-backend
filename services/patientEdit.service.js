@@ -229,6 +229,7 @@ async function getLatestConsent(patientId, orgScope) {
   const [rows] = await db.query(
     `SELECT c.status,
             DATE_FORMAT(c.consent_date, '%Y-%m-%d') AS consent_date,
+            DATE_FORMAT(c.created_at, '%Y-%m-%d') AS recorded_at,
             c.method,
             c.notes,
             c.document_key,
