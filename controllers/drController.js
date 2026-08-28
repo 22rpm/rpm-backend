@@ -7,9 +7,7 @@ import {
   searchOrgPatientsService,
 } from "../services/doctor.service.js";
 import { getPatientVitalSignsService } from "../services/doctor.service.js";
-import { canAccessPatient } from "../services/patientAccess.js";
-
-const SUPER_ADMIN = "super-admin";
+import { canAccessPatient, isOrgWide } from "../services/patientAccess.js";
 
 export const getPatientVitalSignsController = async (req, res) => {
   try {
@@ -176,7 +174,7 @@ export const getAssignedPatientsController = async (req, res) => {
     // Super-admin sees every patient in the selected organization (req.orgScope);
     // a clinician sees only the patients assigned to them.
     const result =
-      doctor.role_type === SUPER_ADMIN
+      isOrgWide(doctor)
         ? await getOrgPatientsService(req.orgScope, limitInt, offset)
         : await getAssignedPatientsService(doctor.id, limitInt, offset);
 
@@ -205,12 +203,11 @@ export const searchAssignedPatientsController = async (req, res) => {
       });
     }
 
-    // Super-admin searches across the selected organization; a clinician
-    // searches only within their assigned patients.
-    const result =
-      doctor.role_type === SUPER_ADMIN
-        ? await searchOrgPatientsService(req.orgScope, search.trim())
-        : await searchAssignedPatientsService(doctor.id, search.trim());
+    // Org-wide roles (super-admin/admin/care_manager) search across the org
+    // scope; a clinician searches only within their assigned patients.
+    const result = isOrgWide(doctor)
+      ? await searchOrgPatientsService(req.orgScope, search.trim())
+      : await searchAssignedPatientsService(doctor.id, search.trim());
 
     res.status(200).json({
       success: true,
