@@ -193,20 +193,30 @@ Ran against the live dev DB (`rpm_db_v1`), read-only; no migration, nothing depl
   Pacific→**08-04**. `2026-01-11 04:00Z` (8 PM PST Jan 10) buckets UTC→01-11,
   Pacific→**01-10**. Two readings 09:00+20:00 PDT same day → UTC 2 distinct days,
   Pacific **1**. Named zone handles PDT and PST both; an offset can't.
-- **Patient 48, Aug 2026 — the old "5 days → 99445" anchor is STALE** (dev data reseeded;
-  readings now run through 2026-08-27). Current distinct-day count: **9 (UTC window+bucket,
-  = what prod does today / PR2-alone) vs 10 (Pacific window + CONVERT_TZ bucket, the
-  target).** The gap is real in his own data — ids 350–352 taken ~17:46 PDT Aug 26, stored
-  `2026-08-27 00:4xZ`, merge into Aug 27 under UTC and stay Aug 26 under Pacific. Both 9 and
-  10 are in the 99445 band [2,16), so the CODE does not flip this month — but the printed
-  count differs by environment and a patient at 15/16 days WOULD flip 99445↔99454.
-- **PR2-alone regresses bucketing to UTC.** Because `DATE_FORMAT(created_at)` under a
-  UTC-pinned session buckets UTC, PR2 without PR3 yields the wrong count (9). **PR2 and PR3
-  must land together**; PR2 is not independently shippable.
-- **Rehearsal TODO — re-baseline + a threshold-crossing anchor.** Patient 48 does not cross
-  the 16-day boundary, so he cannot prove a 99445↔99454 CODE flip. Construct/seed a
-  patient/month with 15 vs 16 distinct Pacific days (one straddling reading) so the rehearsal
-  proves the code flip, not just the count shift.
+- **Patient 48, Aug 2026 = 9 distinct days both ways (99445). Old "5" anchor is STALE**
+  (dev data reseeded; readings now run through 2026-08-27). CORRECTION (supersedes the
+  earlier "9 UTC vs 10 Pacific" claim in this doc's first draft): under the PINNED (UTC)
+  session — the only correct way to compute this — patient 48 is **9 days under both UTC
+  and Pacific bucketing**; there is no boundary divergence in his data. The earlier "10
+  Pacific" was a MEASUREMENT ARTIFACT of verifying on the UNPINNED dev (PDT) session: a
+  TIMESTAMP column reads back as PDT wall-clock there, and `CONVERT_TZ(col,'+00:00',tz)`
+  then shifts it a SECOND time, manufacturing a phantom Aug-26 day. ids 350–352 are
+  `2026-08-27 07:46–07:54Z` = **00:46 Pacific Aug 27** (early morning), not evening Aug 26.
+  9 is in the 99445 band [2,16); code = 99445.
+- **METHOD GATE — verify under a UTC session.** Any `CONVERT_TZ` check on a TIMESTAMP
+  column MUST run with `SET time_zone='+00:00'` (or through the pinned pool / config/db).
+  On an unpinned non-UTC session it double-converts and lies. Prod's box is UTC so its CLI
+  is safe, but prefix rehearsal verification queries with `SET time_zone='+00:00';` to be
+  robust. This is exactly the trap that produced the phantom 10.
+- **PR2 + PR3 still land together, but not because PR2 "regresses" patient 48.** For a
+  patient with NO straddling reading (like 48) UTC and Pacific bucketing agree, so PR2-alone
+  shows no count change for him. They must co-deploy because a patient WHO DOES straddle
+  (the fixture case) is mis-bucketed by PR2-alone (UTC), and because the display (PR4)
+  needs true-UTC input from the pin.
+- **Rehearsal TODO — a threshold-crossing anchor.** Patient 48 is 9 and does not straddle,
+  so he proves neither a code flip nor the boundary fix. Seed a patient/month with a reading
+  whose true UTC instant is on a different Pacific day AND that sits at 15 vs 16 distinct
+  Pacific days, to prove both the boundary fix and a 99445↔99454 code flip.
 
 ## Sequenced build plan
 
