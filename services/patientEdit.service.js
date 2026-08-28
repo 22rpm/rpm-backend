@@ -123,8 +123,12 @@ async function updatePatient({ patientId, orgScope, actorId, data }) {
     // MRN: if the key is present, honor it (including an explicit clear to null);
     // if absent (older client), keep the existing value rather than wiping it.
     const prevMrn = cur.length ? cur[0].mrn : null;
-    const newMrn =
-      data.mrn !== undefined ? (String(data.mrn).trim() || null) : prevMrn;
+    // undefined (key absent) -> keep existing; null or "" -> clear; else trim.
+    // Guard: String(null) is the literal "null", which must not be stored.
+    let newMrn;
+    if (data.mrn === undefined) newMrn = prevMrn;
+    else if (data.mrn === null) newMrn = null;
+    else newMrn = String(data.mrn).trim() || null;
 
     await conn.query(
       `INSERT INTO patient_profiles
