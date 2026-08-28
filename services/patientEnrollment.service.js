@@ -41,6 +41,7 @@ async function enrollPatient({
   programStatus,
   insurancePayerId,
   comments,
+  mrn,
   conditions,
   careTeam,
   consent,
@@ -136,9 +137,17 @@ async function enrollPatient({
 
     await conn.query(
       `INSERT INTO patient_profiles
-         (user_id, date_of_birth, enrolled_at, program_status, insurance_payer_id, comments)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [patientId, dateOfBirth, enrolledAt, programStatus, insurancePayerId, comments]
+         (user_id, date_of_birth, enrolled_at, program_status, insurance_payer_id, comments, mrn)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        patientId,
+        dateOfBirth,
+        enrolledAt,
+        programStatus,
+        insurancePayerId,
+        comments,
+        (mrn && String(mrn).trim()) || null,
+      ]
     );
 
     let conditionsCount = 0;

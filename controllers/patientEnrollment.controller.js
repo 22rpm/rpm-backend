@@ -36,6 +36,8 @@ function validate(body) {
   }
   if (b.enrolled_at != null && !isValidDate(b.enrolled_at))
     errors.push("enrolled_at is not a valid date");
+  if (b.mrn != null && String(b.mrn).trim().length > 64)
+    errors.push("mrn must be 64 characters or fewer");
 
   if (b.insurance_payer_id != null && !Number.isInteger(Number(b.insurance_payer_id)))
     errors.push("insurance_payer_id must be an integer");
@@ -110,6 +112,7 @@ async function enrollPatient(req, res) {
       programStatus,
       insurancePayerId: b.insurance_payer_id != null ? Number(b.insurance_payer_id) : null,
       comments: b.comments != null ? String(b.comments) : null,
+      mrn: b.mrn != null ? String(b.mrn) : null,
       conditions: Array.isArray(b.conditions) ? b.conditions.map((c) => c.trim()) : [],
       careTeam: Array.isArray(b.care_team) ? b.care_team.map(Number) : [],
       consent: b.consent
