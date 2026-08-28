@@ -15,6 +15,7 @@ const {
   getPatientForEdit,
   updatePatient,
   getPatientConsent,
+  recordConsent,
 } = require("../controllers/patientEdit.controller");
 const {
   getRpmNote,
@@ -81,6 +82,19 @@ router.get(
   resolveOrgScope,
   scopePatientParam("patientId"),
   getPatientConsent
+);
+
+// POST /api/patients/:patientId/consent — append a consent EVENT (latest-wins).
+// Tighter than the other patient writes: CLINICIAN (or super-admin) only, not
+// org admin — consent is a billing prerequisite and the attester must be
+// authorized. obtained_by is recorded as the logged-in user in the service.
+router.post(
+  "/:patientId/consent",
+  authRequired,
+  requireRole("clinician", "super-admin"),
+  resolveOrgScope,
+  scopePatientParam("patientId"),
+  recordConsent
 );
 
 // PATCH /api/patients/:patientId — upsert profile + conditions + care team.

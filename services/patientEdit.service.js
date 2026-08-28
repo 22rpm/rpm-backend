@@ -245,4 +245,50 @@ async function getLatestConsent(patientId, orgScope) {
   return rows[0] || null;
 }
 
-module.exports = { getPatientForEdit, updatePatient, getLatestConsent };
+// Append a new consent EVENT to the patient_consents ledger (latest-wins; never
+// UPDATE a prior row). obtained_by is the authenticated clinician, passed from
+// the controller as actorId — NEVER client-supplied, so the audit answer to
+// "who attested, and were they authorized" is unambiguous.
+async function recordConsent({
+  patientId,
+  orgScope,
+  actorId,
+  status,
+  consentDate,
+  method,
+  supervisingProviderId,
+  notes,
+}) {
+  const [res] = await db.query(
+    `INSERT INTO patient_consents
+       (patient_id, organization_id, status, consent_date, method,
+        obtained_by, supervising_provider_id, notes)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      patientId,
+      orgScope,
+      status,
+      consentDate,
+      method,
+      actorId,
+      supervisingProviderId ?? null,
+      notes ?? null,
+    ]
+  );
+  return {
+    id: res.insertId,
+    patient_id: patientId,
+    status,
+    consent_date: consentDate,
+    method,
+    obtained_by: actorId,
+    supervising_provider_id: supervisingProviderId ?? null,
+  };
+}
+
+module.exports = {
+  getPatientForEdit,
+  updatePatient,
+  getLatestConsent,
+  recordConsent,
+};

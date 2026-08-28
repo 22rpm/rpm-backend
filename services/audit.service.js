@@ -37,6 +37,7 @@ const ACTIONS = {
   // Enrollment date is a distinct compliance event (it drives billing periods),
   // searchable on its own rather than folded into patient.update.
   PATIENT_ENROLLMENT_CHANGE: "patient.enrollment_change",
+  PATIENT_CONSENT_RECORDED: "patient.consent_recorded",
   DOCTOR_CREATE: "doctor.create",
   ADMIN_CREATE: "admin.create",
   USER_DEACTIVATE: "user.deactivate",

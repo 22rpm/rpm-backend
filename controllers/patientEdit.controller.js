@@ -148,4 +148,72 @@ async function getPatientConsent(req, res) {
   }
 }
 
-module.exports = { getPatientForEdit, updatePatient, getPatientConsent };
+// POST /api/patients/:patientId/consent — append a consent EVENT (latest-wins).
+// Clinician-gated by the route middleware; obtained_by is set from req.user.id
+// in the service, never from the request body.
+async function recordConsent(req, res) {
+  try {
+    const b = req.body || {};
+    const errors = [];
+    if (!["obtained", "withdrawn"].includes(b.status))
+      errors.push("status must be 'obtained' or 'withdrawn'");
+    if (!b.consent_date || !isValidDate(b.consent_date))
+      errors.push("consent_date is required and must be a valid date");
+    if (!["verbal", "written"].includes(b.method))
+      errors.push("method must be 'verbal' or 'written'");
+    if (
+      b.supervising_provider_id != null &&
+      !Number.isInteger(Number(b.supervising_provider_id))
+    )
+      errors.push("supervising_provider_id must be an integer");
+    if (errors.length)
+      return res
+        .status(400)
+        .json({ ok: false, message: "Validation failed", errors });
+
+    const patientId = Number(req.params.patientId);
+    const consent = await editService.recordConsent({
+      patientId,
+      orgScope: req.orgScope,
+      actorId: req.user.id, // the authenticated clinician — never client input
+      status: b.status,
+      consentDate: b.consent_date,
+      method: b.method,
+      supervisingProviderId:
+        b.supervising_provider_id != null
+          ? Number(b.supervising_provider_id)
+          : null,
+      notes: b.notes != null ? String(b.notes).slice(0, 500) : null,
+    });
+
+    audit.recordAsync({
+      req,
+      action: audit.ACTIONS.PATIENT_CONSENT_RECORDED,
+      entityType: "patient",
+      entityId: patientId,
+      organizationId: req.orgScope,
+      metadata: {
+        consent_id: consent.id,
+        status: consent.status,
+        method: consent.method,
+        consent_date: consent.consent_date,
+        obtained_by: consent.obtained_by,
+        supervising_provider_id: consent.supervising_provider_id,
+      },
+    });
+
+    return res.status(201).json({ ok: true, consent });
+  } catch (err) {
+    if (err && err.httpStatus)
+      return res.status(err.httpStatus).json({ ok: false, message: err.message });
+    console.error("recordConsent error:", err);
+    return res.status(500).json({ ok: false, message: "Server error" });
+  }
+}
+
+module.exports = {
+  getPatientForEdit,
+  updatePatient,
+  getPatientConsent,
+  recordConsent,
+};
