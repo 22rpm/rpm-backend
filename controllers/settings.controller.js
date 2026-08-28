@@ -38,14 +38,20 @@ const updateSettingsController = async (req, res) => {
       return res.status(200).json({ message: "No changes applied" });
     }
 
-    // Generate new token with updated user data
+    // Generate new token with updated user data. Must match issueSession's
+    // payload shape: tokens carry role_type and org_id (NOT role). The old
+    // payload preserved decoded.role (undefined) and dropped org_id entirely —
+    // so after a settings change the user lost their role_type AND org_id, which
+    // breaks requireRole and resolveOrgScope (non-super-admins would 403).
     const newToken = jwt.sign(
       {
         id: result.id,
         name: result.name,
         username: result.username,
         email: result.email,
-        role: decoded.role, // Preserve role from original token
+        role_type: decoded.role_type,
+        org_id: decoded.org_id,
+        phoneNumber: result.phoneNumber ?? decoded.phoneNumber,
       },
       process.env.JWT_SECRET,
       { expiresIn: "1h" } // Adjust expiration as needed
