@@ -33,6 +33,8 @@ function validate(b) {
     !Number.isInteger(Number(b.insurance_payer_id))
   )
     errors.push("insurance_payer_id must be an integer");
+  if (b.mrn != null && String(b.mrn).trim().length > 64)
+    errors.push("mrn must be 64 characters or fewer");
   if (
     b.conditions != null &&
     (!Array.isArray(b.conditions) ||
@@ -78,6 +80,9 @@ async function updatePatient(req, res) {
       insurance_payer_id:
         b.insurance_payer_id != null ? Number(b.insurance_payer_id) : null,
       comments: b.comments || null,
+      // Pass mrn through RAW (not `|| null`) so the service can tell "absent,
+      // keep existing" (undefined) from "explicit clear" (""). See the service.
+      mrn: b.mrn,
       conditions: Array.isArray(b.conditions)
         ? b.conditions.map((c) => c.trim()).filter(Boolean)
         : [],

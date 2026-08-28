@@ -115,22 +115,28 @@ async function updatePatient({ patientId, orgScope, actorId, data }) {
     await conn.beginTransaction();
 
     const [cur] = await conn.query(
-      "SELECT DATE_FORMAT(enrolled_at, '%Y-%m-%d') AS enrolled_at FROM patient_profiles WHERE user_id = ?",
+      "SELECT DATE_FORMAT(enrolled_at, '%Y-%m-%d') AS enrolled_at, mrn FROM patient_profiles WHERE user_id = ?",
       [patientId]
     );
     const prevEnrolledAt = cur.length ? cur[0].enrolled_at : null;
     const newEnrolledAt = data.enrolled_at || prevEnrolledAt || null;
+    // MRN: if the key is present, honor it (including an explicit clear to null);
+    // if absent (older client), keep the existing value rather than wiping it.
+    const prevMrn = cur.length ? cur[0].mrn : null;
+    const newMrn =
+      data.mrn !== undefined ? (String(data.mrn).trim() || null) : prevMrn;
 
     await conn.query(
       `INSERT INTO patient_profiles
-         (user_id, date_of_birth, enrolled_at, program_status, insurance_payer_id, comments)
-       VALUES (?, ?, ?, ?, ?, ?)
+         (user_id, date_of_birth, enrolled_at, program_status, insurance_payer_id, comments, mrn)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
          date_of_birth = VALUES(date_of_birth),
          enrolled_at = VALUES(enrolled_at),
          program_status = VALUES(program_status),
          insurance_payer_id = VALUES(insurance_payer_id),
          comments = VALUES(comments),
+         mrn = VALUES(mrn),
          updated_at = NOW()`,
       [
         patientId,
@@ -139,6 +145,7 @@ async function updatePatient({ patientId, orgScope, actorId, data }) {
         data.program_status,
         data.insurance_payer_id ?? null,
         data.comments || null,
+        newMrn,
       ]
     );
 
