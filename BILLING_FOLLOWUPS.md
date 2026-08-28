@@ -207,6 +207,22 @@ days from true instants in a known tz. Do NOT ship the note billing to prod
 before the prod session tz is confirmed and this is pinned; on a UTC prod it is a
 silent off-by-one on device-supply codes.
 
+**Empirical (2026-08-27, real prod data on `rpm_db_scratch`, restored from the
+26th backup — 210 readings, 13 real patients): the defect is real but has NEVER
+FIRED in production.** Zero prod readings straddle the Pacific/UTC day boundary —
+`COUNT(*) WHERE DATE_FORMAT(created_at) <> DATE_FORMAT(CONVERT_TZ(created_at,
+'+00:00','America/Los_Angeles'))` returned **0**. Every real patient measures in
+the morning (Pacific), well clear of the ≥17:00 PT window where UTC bucketing
+rolls a reading to the next day. So UTC and Pacific bucketing currently produce
+the SAME distinct-day count for every prod patient, and no transmission day has
+ever been miscounted. This is **latent, not benign**: a single patient taking a
+reading after ~5 PM Pacific (e.g. a before-bed check) trips it, and near the 16th
+day it flips 99445↔99454. It's a reason the fix still matters — the exposure is
+one patient's habit away — NOT a reason to relax the deploy gate. (The
+patient-48 fixture that exercises the boundary lives only in local `rpm_db_v1`,
+not prod; to prove a code flip pre-deploy, seed a straddling reading — see
+TZ_FIX_DESIGN.md rehearsal TODO.)
+
 ## 12. Connection timezone mismatch (`timezone:'Z'` vs server session PDT) — tz-consistency work item — OPEN
 Root cause behind #11 and the vitals graph/table timestamp behavior. `config/db.js`
 sets the mysql2 pool `timezone:'Z'` (driver assumes UTC), while the MySQL server
