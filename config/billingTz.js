@@ -76,10 +76,14 @@ function monthParams(labels, tz) {
 async function assertClinicTz(db, orgTimezone) {
   const tz = resolveClinicTz(orgTimezone);
   const [rows] = await db.query(
-    "SELECT CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', ?) AS probe",
+    // probe: named-tz tables loaded? session_offset: does this connection render
+    // UTC? (0 for '+00:00' AND for SYSTEM==UTC like prod — robust to both).
+    "SELECT CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', ?) AS probe, " +
+      "TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(), NOW()) AS session_offset",
     [tz]
   );
-  if (!rows || !rows[0] || rows[0].probe == null) {
+  const row = rows && rows[0];
+  if (!row || row.probe == null) {
     const e = new Error(
       `Clinic timezone '${tz}' did not resolve: CONVERT_TZ returned NULL. The ` +
         `MySQL named-timezone tables are not loaded on this server, so billing ` +
@@ -88,6 +92,21 @@ async function assertClinicTz(db, orgTimezone) {
     );
     e.httpStatus = 500;
     e.code = "TZ_TABLES_NOT_LOADED";
+    throw e;
+  }
+  // The bucketing reads TIMESTAMP columns in the SESSION tz before CONVERT_TZ,
+  // so a non-UTC session double-shifts every reading and mis-counts transmission
+  // days (a silent wrong billing determination). The pool pins SET
+  // time_zone='+00:00' (config/db.js); refuse to bill if that isn't in effect.
+  if (row.session_offset !== 0) {
+    const e = new Error(
+      `DB session is not UTC (renders ${row.session_offset}s off UTC). Clinic-tz ` +
+        `day-bucketing double-shifts on a non-UTC session and mis-counts ` +
+        `transmission days. The mysql2 pool must pin SET time_zone='+00:00' ` +
+        `(config/db.js).`
+    );
+    e.httpStatus = 500;
+    e.code = "DB_SESSION_NOT_UTC";
     throw e;
   }
 }
