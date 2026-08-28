@@ -66,6 +66,32 @@ function monthParams(labels, tz) {
   return [labels.startLocal, tz, labels.nextLocal, tz];
 }
 
+// FAIL-LOUD guard. CONVERT_TZ returns NULL (it does NOT error) when the named
+// timezone can't be resolved — i.e. the MySQL named-tz tables aren't loaded. A
+// NULL bucket makes DATE_FORMAT NULL, and COUNT(DISTINCT ...) ignores NULLs, so
+// every transmission-day count silently collapses to 0 → no device-supply code →
+// a silent UNDER-BILL on a signed billing document. The tables missing is a
+// deploy-config error, not a data error, so any clinic-tz bucketing path MUST
+// call this first and refuse to produce a determination it can't trust.
+async function assertClinicTz(db, orgTimezone) {
+  const tz = resolveClinicTz(orgTimezone);
+  const [rows] = await db.query(
+    "SELECT CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', ?) AS probe",
+    [tz]
+  );
+  if (!rows || !rows[0] || rows[0].probe == null) {
+    const e = new Error(
+      `Clinic timezone '${tz}' did not resolve: CONVERT_TZ returned NULL. The ` +
+        `MySQL named-timezone tables are not loaded on this server, so billing ` +
+        `day-bucketing would silently under-count. Load them ` +
+        `(mysql_tzinfo_to_sql /usr/share/zoneinfo | mysql mysql) and retry.`
+    );
+    e.httpStatus = 500;
+    e.code = "TZ_TABLES_NOT_LOADED";
+    throw e;
+  }
+}
+
 module.exports = {
   CLINIC_TZ_DEFAULT,
   resolveClinicTz,
@@ -73,4 +99,5 @@ module.exports = {
   dayBucketSql,
   monthWhereSql,
   monthParams,
+  assertClinicTz,
 };
