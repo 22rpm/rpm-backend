@@ -132,10 +132,15 @@ router.get(
 
 // POST /api/patients/:patientId/rpm-note/sign — sign the note into the
 // append-only rpm_notes ledger (server-computed snapshot; hash-anchored).
+// SIGNING is clinician-only (physician/QHP) — the signature is the clinical
+// attestation that makes the note billable. NOT staffRoles: admin, super-admin,
+// and (future) care_manager can view and generate the note but must not sign.
+// Enforced again in the service (rpmNoteSign) so the ledger can't be signed by a
+// non-clinician even if this route is ever rewired.
 router.post(
   "/:patientId/rpm-note/sign",
   authRequired,
-  staffRoles,
+  requireRole("clinician"),
   resolveOrgScope,
   scopePatientParam("patientId"),
   signRpmNote

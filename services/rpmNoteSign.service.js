@@ -132,6 +132,14 @@ async function signRpmNote({
   isCorrection,
   correctionReason,
 }) {
+  // Clinician-only attestation (physician/QHP). Enforced at the route too; this
+  // is defense in depth so the append-only ledger can never record a
+  // non-clinician signature even if the route gate is rewired. signed_role is
+  // part of the hashed record, so a bad role would be a permanent, verifiable
+  // defect on a billing document — refuse it here.
+  if (!actor || actor.role !== "clinician")
+    throw httpError(403, "Only a clinician (physician/QHP) may sign an RPM note.");
+
   if (!signatureName || !String(signatureName).trim())
     throw httpError(400, "signature_name is required to sign");
 
