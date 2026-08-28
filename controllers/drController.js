@@ -1,6 +1,5 @@
 import pool from "../config/db.js";
 import {
-  verifyDoctorPatientAccess,
   getAssignedPatientsService,
   searchAssignedPatientsService,
   getUserWithLatestDeviceDataService,
@@ -8,6 +7,7 @@ import {
   searchOrgPatientsService,
 } from "../services/doctor.service.js";
 import { getPatientVitalSignsService } from "../services/doctor.service.js";
+import { canAccessPatient } from "../services/patientAccess.js";
 
 const SUPER_ADMIN = "super-admin";
 
@@ -16,18 +16,16 @@ export const getPatientVitalSignsController = async (req, res) => {
     const doctor = req.user;
     const { patientId } = req.params;
 
-    // Org scope (resolveOrgScope + scopePatientParam) has already confirmed this
-    // patient belongs to the request's organization. Super-admins view any
-    // patient in the selected clinic; clinicians additionally require an
-    // explicit assignment.
-    if (doctor.role_type !== SUPER_ADMIN) {
-      const hasAccess = await verifyDoctorPatientAccess(doctor.id, patientId);
-      if (!hasAccess) {
-        return res.status(403).json({
-          success: false,
-          message: "Access denied to patient data",
-        });
-      }
+    // Visibility via the shared model (services/patientAccess): org-wide roles
+    // (super-admin/admin/care_manager) see any patient in the org; a clinician
+    // must be assigned. The helper enforces the org boundary itself, so this is
+    // safe independent of scopePatientParam.
+    const allowed = await canAccessPatient(doctor, req.orgScope, patientId);
+    if (!allowed) {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied to patient data",
+      });
     }
 
     const vitalSigns = await getPatientVitalSignsService(patientId);
@@ -131,16 +129,15 @@ export const getPatientDeviceDataController = async (req, res) => {
       }
     }
 
-    // Org scope already confirmed this patient is in the request's organization.
-    // Clinicians additionally require an explicit assignment; super-admins do not.
-    if (doctor.role_type !== SUPER_ADMIN) {
-      const hasAccess = await verifyDoctorPatientAccess(doctor.id, patientId);
-      if (!hasAccess) {
-        return res.status(403).json({
-          success: false,
-          message: "Access denied to patient data",
-        });
-      }
+    // Visibility via the shared model (services/patientAccess): org-wide roles
+    // see any patient in the org; a clinician must be assigned. Enforces the org
+    // boundary itself.
+    const allowed = await canAccessPatient(doctor, req.orgScope, patientId);
+    if (!allowed) {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied to patient data",
+      });
     }
 
     const deviceData = await getPatientDeviceDataService(
