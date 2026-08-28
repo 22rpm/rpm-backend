@@ -223,6 +223,23 @@ patient-48 fixture that exercises the boundary lives only in local `rpm_db_v1`,
 not prod; to prove a code flip pre-deploy, seed a straddling reading — see
 TZ_FIX_DESIGN.md rehearsal TODO.)
 
+**Concrete wrong-number example — the fix (PR3) is itself pin-dependent (2026-08-27).**
+The clinic-tz bucketing `CONVERT_TZ(created_at,'+00:00',tz)` reads the TIMESTAMP
+column in the SESSION tz *before* converting, so it is correct ONLY on a UTC
+session. Running the exact device-supply day-count for patient 48 (Aug 2026):
+**UTC session → 9 distinct days (the truth); Pacific session → 10** — a phantom
+extra day from the double-shift. On prod (session already UTC) this is right; but
+if the `config/db.js` pin ever fails or a query runs on an unpinned connection,
+the determination silently returns 10 where the truth is 9 — a wrong billed
+count nobody would notice. This is exactly the class of failure the guard now
+prevents: `billingTz.assertClinicTz` asserts BOTH the named-tz tables are loaded
+AND `TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(), NOW()) == 0`, throwing
+`DB_SESSION_NOT_UTC` (500) rather than billing. Exercised through `getRpmNote`:
+with the pin forced to `-07:00`, the determination throws instead of returning a
+count. Corollary: PR3 must never ship without PR2's pin, and the note's
+period start/end are safe (pure JS calendar labels) but DOS and call-log dates
+are pin-dependent.
+
 ## 12. Connection timezone mismatch (`timezone:'Z'` vs server session PDT) — tz-consistency work item — OPEN
 Root cause behind #11 and the vitals graph/table timestamp behavior. `config/db.js`
 sets the mysql2 pool `timezone:'Z'` (driver assumes UTC), while the MySQL server
