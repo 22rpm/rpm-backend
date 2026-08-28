@@ -901,21 +901,35 @@ const createDeviceDataService = async (
         );
         clinicianRows = rows;
       } else {
-        // try to fetch clinicians assigned to this patient from common assignment tables (best-effort)
+        // Recipients = the patient's ASSIGNED clinician(s): a BP alert pages the
+        // physician responsible for that patient, not the whole org. This joined
+        // `patient_doctor` — a table that does NOT exist — so it threw every time
+        // and the catch silently fell back to org-wide, paging every clinician in
+        // the org for every patient. Corrected to patient_doctor_assignments (the
+        // real, authoritative table). See ALERT_FOLLOWUPS #1.
+        let rowsAssigned = [];
         try {
-          const [rowsAssigned] = await connection.query(
+          [rowsAssigned] = await connection.query(
             `SELECT u.id, u.name, u.email, u.phoneNumber, role.role_type,
                     das.systolic_high, das.systolic_low, das.diastolic_high, das.diastolic_low
              FROM users u
              JOIN role ON u.id = role.user_id
              LEFT JOIN doctor_alert_settings das ON u.id = das.doctor_id
-             JOIN patient_doctor pd ON pd.doctor_id = u.id
+             JOIN patient_doctor_assignments pd ON pd.doctor_id = u.id
              WHERE pd.patient_id = ? AND role.role_type = 'clinician' AND u.is_active = true`,
             [userId]
           );
-          clinicianRows = rowsAssigned;
         } catch (e) {
-          // fallback: clinicians in same organization as patient
+          rowsAssigned = []; // fall through to the org fallback below
+        }
+
+        if (rowsAssigned.length) {
+          clinicianRows = rowsAssigned;
+        } else {
+          // ORPHAN CASE — the patient has no assigned physician (ORG_CONTEXT #6),
+          // OR the assignment query errored. Fall through to org-wide
+          // DELIBERATELY: a safety alert must reach someone, never zero
+          // recipients. Org clinicians first, then all active clinicians.
           const [patientRows] = await connection.query(
             "SELECT id, organization_id FROM users WHERE id = ?",
             [userId]
