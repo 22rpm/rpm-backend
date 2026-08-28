@@ -113,10 +113,9 @@ class MessageController {
     try {
       console.log("getPatients called", req.user);
 
-      // Get doctor ID from the authenticated user
-      const doctorId = req.user.id;
-
-      const patients = await messageService.getPatients(doctorId);
+      // Visibility scoped by role in the service: org-wide roles see the org's
+      // patients (req.orgScope), a clinician sees their assigned patients.
+      const patients = await messageService.getPatients(req.user, req.orgScope);
 
       // Process health data and add status
       const processedPatients = patients.map((patient) => {

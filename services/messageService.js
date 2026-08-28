@@ -1,5 +1,6 @@
 // services/messageService.js
 const db = require("../config/knex");
+const { isOrgWide } = require("./patientAccess");
 
 class MessageService {
   async saveMessage(senderId, receiverId, message) {
@@ -163,20 +164,29 @@ class MessageService {
       throw error;
     }
   }
-  async getPatients(doctorId) {
+  async getPatients(user, orgScope) {
     try {
-      // First, get all patients assigned to this doctor
-      const patients = await db("users")
+      // Visibility model (services/patientAccess): org-wide roles
+      // (super-admin/admin/care_manager) see all patients in the org scope; a
+      // clinician sees only assigned patients. Previously assignment-only with NO
+      // org filter, so admin/care_manager saw an empty list and the query was
+      // unscoped by org.
+      let q = db("users")
         .select("users.id", "users.name", "users.email")
         .innerJoin("role", "users.id", "role.user_id")
-        .innerJoin(
-          "patient_doctor_assignments",
-          "users.id",
-          "patient_doctor_assignments.patient_id"
-        )
-        .where("role.role_type", "patient")
-        .where("patient_doctor_assignments.doctor_id", doctorId)
-        .orderBy("users.name");
+        .where("role.role_type", "patient");
+      if (isOrgWide(user)) {
+        q = q.where("users.organization_id", orgScope);
+      } else {
+        q = q
+          .innerJoin(
+            "patient_doctor_assignments",
+            "users.id",
+            "patient_doctor_assignments.patient_id"
+          )
+          .where("patient_doctor_assignments.doctor_id", user.id);
+      }
+      const patients = await q.orderBy("users.name");
 
       // For each patient, get their latest BP reading
       const patientsWithData = await Promise.all(
