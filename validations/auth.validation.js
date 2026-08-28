@@ -40,7 +40,7 @@ const registerSchema = Joi.object({
     "string.max": "Password cannot exceed 128 characters",
   }),
   role: Joi.string()
-    .valid("admin", "clinician", "patient", "super-admin")
+    .valid("admin", "clinician", "care_manager", "patient", "super-admin")
     .required()
     .messages({
       "any.required": "Role is required",

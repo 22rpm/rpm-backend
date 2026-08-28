@@ -28,9 +28,10 @@ async function findRoleByUserId(userId) {
   const [rows] = await db.query(
     `SELECT role_type FROM role WHERE user_id = ?
       ORDER BY CASE role_type
-        WHEN 'super-admin' THEN 4
-        WHEN 'admin' THEN 3
-        WHEN 'clinician' THEN 2
+        WHEN 'super-admin' THEN 5
+        WHEN 'admin' THEN 4
+        WHEN 'clinician' THEN 3
+        WHEN 'care_manager' THEN 2
         WHEN 'patient' THEN 1
         ELSE 0 END DESC,
         id ASC

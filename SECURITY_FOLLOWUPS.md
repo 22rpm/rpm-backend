@@ -155,3 +155,32 @@ privilege-escalation fix for the admin user-mutation and care-team routes.
   device/data-quality alert type — visibly a device problem, with its own
   rendering — should be added so a garbage-sending cuff surfaces to staff without
   masquerading as a clinical reading.
+
+## 9. Settings change silently degraded a user's permissions until re-login — FIXED (3a15ab9)
+
+**Access-control defect, not just a token bug.** `controllers/settings.controller.js`
+re-signed the session token after any profile/settings update, but built the
+payload as `{ id, name, username, email, role: decoded.role }` — and tokens are
+signed by `issueSession` with **`role_type`**, not `role`. So `decoded.role` was
+**undefined**, and the new token **also dropped `org_id` entirely** (issueSession
+includes it).
+
+**What it affected:** after a user changed any setting, their cookie was replaced
+with a token carrying **no `role_type` and no `org_id`**. From that point until
+they logged out and back in:
+- `requireRole` (`middleware/auth.js`) reads `req.user.role_type` → undefined →
+  **403 on every role-gated route** (enroll, worklist, note, sign, care activity,
+  admin, org).
+- `resolveOrgScope` (`middleware/orgScope.js`) locks non-super-admins to
+  `req.user.org_id` → missing → **403 / no org scope**, so they can't see their
+  own org's patients.
+
+Net: a clinician or admin who edited their profile silently lost access to the
+app's gated functionality — permissions degraded to near-nothing — with no error
+explaining why, recoverable only by re-login. Latent because settings changes are
+infrequent and re-login masks it.
+
+**Fix:** re-sign matching `issueSession` — `role_type` + `org_id` (+ phoneNumber).
+Found during the role-model scoping. Reinforces the standing inconsistency that
+tokens carry `role_type` while response bodies use `role` (also the dead socket
+gate — see ALERT_FOLLOWUPS #1 note).
