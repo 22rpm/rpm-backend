@@ -46,7 +46,31 @@ of all alerts becomes the care_manager's job via read-only visibility (role-mode
 step 5), not by paging everyone. Tell her before she notices alerts got quieter,
 not after.
 
-**Related, not fixed here:** `alert_assignments.doctor_id` still conflates "can
-read this alert" with "is an SMS/paging target"; org-staff (care_manager)
-visibility must be granted via org-scoped read queries, never by inserting
-assignment rows (that would page them). Tracked in the role-model work, step 5.
+**Related — RESOLVED for reads (role-model step 5):** `alert_assignments.doctor_id`
+still conflates "can read this alert" with "is an SMS/paging target". Org-staff
+(care_manager/admin) visibility is now granted via **org-scoped read queries** on
+`/alerts/my-alerts`, `/alerts/unread-count` and `/alerts/my-alerts/unread` — no
+assignment row is inserted, so an org-wide reader never becomes a paging target
+(asserted in testing: reading created zero `alert_assignments` rows). The
+underlying column still conflates the two axes; splitting it is a schema change
+and is NOT done.
+
+**Still open after step 5 — read-state for org-wide readers.** `read_status` /
+`read_at` live on `alert_assignments`, i.e. per assigned clinician. An org-wide
+reader has no assignment row, so:
+- `PATCH /alerts/:alert_id/read` returns **404** for them (no row to update);
+- `PATCH /alerts/mark-all-read` is a **silent no-op** (`UPDATE ... WHERE
+  doctor_id = <them>` matches nothing);
+- the `read_status` they see in a list is *some assigned clinician's* read state,
+  not their own.
+
+These write paths were deliberately left alone: the only way to make them work
+with today's schema is to insert an `alert_assignments` row, which is precisely
+what would page the reader. Per-reader read state needs its own table (e.g.
+`alert_reads(alert_id, user_id, read_at)`) — a schema decision, not a route fix.
+
+**Also open:** the org-wide read still JOINs `alert_assignments`, so an alert with
+**no** assignment row is invisible to everyone, org-wide roles included. After the
+routing fix above every alert should get at least one row (assigned → org
+clinicians → all active), but an org with zero active clinicians would produce
+orphan alerts that nobody can see.

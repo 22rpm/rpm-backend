@@ -1192,6 +1192,11 @@ const jwt = require("jsonwebtoken");
 const db = require("../config/db");
 const { authRequired } = require("../middleware/auth");
 const { resolveOrgScope, scopePatientParam } = require("../middleware/orgScope");
+// Role-model step 5: alert VISIBILITY reuses the same org-wide definition as
+// patient visibility (services/patientAccess) so "who is org-wide" lives in one
+// place. Visibility only — this never touches alert ROUTING/paging, which stays
+// assignment-based (see the header of services/patientAccess.js).
+const { isOrgWide } = require("../services/patientAccess");
 const twilioService = require("../services/twillio.service");
 
 const {
@@ -2385,7 +2390,7 @@ router.get("/unread-count", authRequired, resolveOrgScope, async (req, res) => {
 
     // Super-admin: unread count across the whole selected organization
     // (every alert whose patient belongs to req.orgScope).
-    if (req.user.role_type === "super-admin") {
+    if (isOrgWide(req.user)) {
       const [orgUnreadRows] = await connection.query(
         `SELECT COUNT(DISTINCT aa.id) as count
            FROM alert_assignments aa
@@ -2440,9 +2445,12 @@ router.get("/my-alerts", authRequired, resolveOrgScope, async (req, res) => {
   try {
     connection = await db.getConnection();
 
-    // Super-admin: every alert for patients in the selected organization,
-    // regardless of which clinician the alert was assigned to.
-    if (req.user.role_type === "super-admin") {
+    // Org-wide roles (super-admin / admin / care_manager): every alert for
+    // patients in the resolved organization, regardless of which clinician the
+    // alert was assigned to. Read-only widening — no alert_assignments row is
+    // created, so being able to SEE an alert never makes anyone a paging target
+    // (ALERT_FOLLOWUPS #1; role-model step 5).
+    if (isOrgWide(req.user)) {
       const [orgAlerts] = await connection.query(
         `SELECT alerts.id,
                 alerts.user_id as patient_id,
@@ -2543,12 +2551,53 @@ router.get("/my-alerts", authRequired, resolveOrgScope, async (req, res) => {
 });
 
 // Get only unread alerts for a clinician
-router.get("/my-alerts/unread", authRequired, async (req, res) => {
+//
+// Role-model step 5: this endpoint had NO org-wide branch at all — super-admin
+// hit the same "not a clinician" 403 as everyone else, which is inconsistent
+// with /my-alerts and /unread-count. It now mirrors them for org-wide roles.
+router.get("/my-alerts/unread", authRequired, resolveOrgScope, async (req, res) => {
   const clinician_id = req.user.id;
 
   let connection;
   try {
     connection = await db.getConnection();
+
+    // Org-wide roles: unread alerts across the resolved organization. Read-only;
+    // creates no alert_assignments row, so visibility never implies paging.
+    if (isOrgWide(req.user)) {
+      const [orgUnread] = await connection.query(
+        `SELECT alerts.id,
+                alerts.user_id as patient_id,
+                alerts.desc,
+                alerts.type,
+                alerts.created_at as alert_created_at,
+                alerts.updated_at as alert_updated_at,
+                alert_assignments.read_status,
+                alert_assignments.read_at,
+                alert_assignments.created_at as assigned_at,
+                alert_assignments.id as assignment_id,
+                alert_assignments.doctor_id,
+                patients.name as patient_name,
+                patients.email as patient_email,
+                patients.phoneNumber as patient_phone,
+                patients.organization_id as patient_organization_id
+           FROM alert_assignments
+           JOIN alerts ON alert_assignments.alert_id = alerts.id
+           JOIN users as patients ON alerts.user_id = patients.id
+          WHERE patients.organization_id = ?
+            AND alert_assignments.read_status = false
+          ORDER BY alerts.created_at DESC`,
+        [req.orgScope]
+      );
+
+      // Same response shape as the clinician branch below, so the frontend
+      // needs no role branching.
+      return res.json({
+        ok: true,
+        alerts: orgUnread,
+        count: orgUnread.length,
+      });
+    }
 
     // Verify the user is a clinician
     const [roleRows] = await connection.query(

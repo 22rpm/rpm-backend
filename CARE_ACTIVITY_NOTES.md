@@ -126,6 +126,37 @@ file and the timer-service comment block together.
   original author and don't record the corrector — so fold notes in when this is
   addressed.
 
+### Time attribution: the note doesn't say WHO logged the minutes (role-model step 5)
+- `time_entries.staff_user_id` records the actor correctly. But
+  `services/rpmNote.service.js` aggregates the month's time with **no reference to
+  it** — the query selects `activity_category`, a day bucket and
+  `duration_seconds` only.
+- So the generated note shows `Provider: <assigned clinician>`, then
+  undifferentiated minute totals (Setup/Education, Data Review + Interaction,
+  Total), then a physician signature block. **A care manager's minutes are
+  presented indistinguishably from the physician's own**, under the physician's
+  attestation.
+- Why it matters: the 99457/99458 family contemplates clinical-staff time
+  delivered under the billing practitioner's supervision as a distinct thing from
+  the practitioner's own time. A note that silently merges them misstates who
+  performed the work — exactly what an auditor reads the note to determine.
+  Confirm the billing requirement with the biller/compliance before choosing a
+  shape; the code position is what is documented here.
+- **Fix direction (no schema change needed for the minimum):** the actor is
+  already on the row, so the note service can `JOIN users` + `role` on
+  `staff_user_id` and split the TIME DOCUMENTATION buckets by role — e.g.
+  "Clinical staff time (under supervision): N min" vs "Physician/QHP time:
+  N min", with the supervising provider named. What IS missing is any recorded
+  supervision link: `patient_consents` has `supervising_provider_id`, but
+  `time_entries` has no equivalent, so "under whose supervision" would be
+  inferred from `patient_doctor_assignments` rather than recorded at the time the
+  work was done. If that inference is not acceptable for billing, a
+  `supervising_provider_id` column on `time_entries` is the durable fix.
+- Related: the note is generatable by care_manager/admin but **only a clinician
+  may sign it** (`RpmNote.jsx` — "Only a clinician (physician/QHP) may sign this
+  note"). That guard is correct and unchanged; it is also why the merged totals
+  matter — the signature attests to the whole document.
+
 ### Correction response `time_entry` field can be a carried-forward entry (Part 4 API note)
 - On a call correction with **no time change**, the response's `time_entry` is the
   **carried-forward** entry (the existing linked row), NOT a newly created one.
