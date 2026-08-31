@@ -90,3 +90,28 @@ what would page the reader. Per-reader read state needs its own table (e.g.
 routing fix above every alert should get at least one row (assigned → org
 clinicians → all active), but an org with zero active clinicians would produce
 orphan alerts that nobody can see.
+
+## 2. The all_clinicians socket gate was dead since written — FIXED (b650a03), with a correction to the "new pushes" framing
+
+The socket set `socket.userRole = decoded.role`, but tokens carry `role_type`
+(issueSession) — so `userRole` was always undefined and the
+`if (userRole === 'clinician') join('all_clinicians')` gate NEVER fired. The
+`new_alert_broadcast` channel (which emits to `all_clinicians`) therefore reached
+no one for its entire lifetime.
+
+**Correction to "realtime alert delivery never worked":** it did — via a
+*different* channel. The dashboard listens to BOTH `new_alert` (per-user) and
+`new_alert_broadcast` (all_clinicians). The per-user `new_alert` is emitted to
+`user_<doctor_id>` rooms, which every user joins on connect regardless of role —
+so connected recipients HAVE received realtime alerts. What never worked is only
+the all_clinicians BROADCAST channel.
+
+**Net user-facing change (for Kinza) — narrower, not new:** with the assignment
+reconciliation (#1), per-user recipients went from org-wide (every org clinician
+got a realtime `new_alert`) to the assigned physician. And the all_clinicians
+broadcast channel — dead anyway — is now removed. So a clinician will receive
+FEWER realtime pushes: only for their assigned patients, not every patient in the
+org. This reinforces the paging message in #1 (realtime AND SMS both narrow to
+the assigned physician); it is NOT clinicians suddenly getting pushes they never
+had. The socket gate is now correct (clinicians join, care_manager/admin do not),
+but `all_clinicians` has no emitters, so activating it changes nothing on its own.
