@@ -2088,13 +2088,10 @@ router.post("/test-alert", async (req, res) => {
           console.log(`   ✅ Method 2: Sent to socket ${recipientSocketId}`);
         }
 
-        // Method 3: Broadcast to all clinicians room (fallback)
-        io.to("all_clinicians").emit("new_alert_broadcast", {
-          ...alertData,
-          broadcast: true,
-          intended_for: recipient_id,
-        });
-        console.log(`   ✅ Method 3: Broadcast to all_clinicians room`);
+        // REMOVED: the all_clinicians "fallback" broadcast — Method 1 already
+        // delivers to the recipient's own room; broadcasting fanned every alert
+        // to every clinician (org-wide realtime leak). Must not exist now that
+        // the socket all_clinicians gate is live. See ALERT_FOLLOWUPS #1.
 
         // Method 4: Send to admins room - WITH ENHANCED DATA
         if (organizationAdmins.some((admin) => admin.id === recipient_id)) {
@@ -3180,7 +3177,8 @@ router.post("/test/bp-alert", async (req, res) => {
         console.log(`📡 Alert sent to doctor ${doctor_id}`);
       }
 
-      io.to("all_clinicians").emit("new_alert_broadcast", alertData);
+      // REMOVED: all_clinicians broadcast — the per-user emit above already
+      // reaches the assigned doctor; broadcasting leaked every alert org-wide.
       notifications.push({ doctor_id, connected });
     }
 

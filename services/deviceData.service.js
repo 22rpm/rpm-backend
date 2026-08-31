@@ -2401,13 +2401,12 @@ const triggerBPAlert = async (patient_id, bpStatus, systolic, diastolic) => {
           console.log(`   ✅ Method 2: Sent to socket ${doctorSocketId}`);
         }
 
-        // Method 3: Broadcast to all clinicians room (fallback)
-        io.to("all_clinicians").emit("new_alert_broadcast", {
-          ...alertData,
-          broadcast: true,
-          intended_for: doctor_id,
-        });
-        console.log(`   ✅ Method 3: Broadcast to all_clinicians room`);
+        // REMOVED: the all_clinicians "fallback" broadcast. Method 1 above
+        // already delivers to the responsible recipient's own room; the
+        // broadcast fanned every alert to every clinician (org-wide realtime
+        // leak). It was harmless only while the socket all_clinicians gate was
+        // dead — now that the gate is live, this must not exist. Org-wide staff
+        // get alert VISIBILITY via the read queries, not a realtime broadcast.
 
         if (sent) {
           notificationsSent++;

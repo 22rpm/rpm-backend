@@ -264,16 +264,16 @@ const initializeSocket = (server) => {
     try {
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
       socket.userId = decoded.id;
-      // NOTE: tokens carry role_type, not role — so this is always undefined and
-      // the clinician/all_clinicians gate below is currently DEAD. Do NOT "fix"
-      // it in isolation: activating all_clinicians re-arms the "Method 3"
-      // new_alert_broadcast fallbacks (deviceData.service ~2405, alert.route
-      // 2087/3037) that fan every alert out to every clinician — re-introducing
-      // the org-wide alerting just removed in ALERT_FOLLOWUPS #1. Fix this
-      // together with scoping those broadcasts in the alert-visibility work
-      // (role-model step 5).
-      socket.userRole = decoded.role;
-      console.log("✅ Authenticated Socket User:", decoded.id, "Role:", decoded.role);
+      // Tokens carry role_type (issueSession), not role — this read was
+      // undefined, so the all_clinicians gate below has been DEAD since it was
+      // written (realtime alert delivery to clinicians never worked). Now fixed
+      // to role_type. Safe ONLY because the new_alert_broadcast fallbacks that
+      // fanned alerts to all_clinicians were removed in the same change (see
+      // ALERT_FOLLOWUPS #1) — activating the gate no longer re-arms org-wide
+      // realtime alerting. care_manager/admin are role_type !== 'clinician', so
+      // they never join all_clinicians: visibility (read queries), not paging.
+      socket.userRole = decoded.role_type || decoded.role;
+      console.log("✅ Authenticated Socket User:", decoded.id, "Role:", socket.userRole);
       next();
     } catch (err) {
       console.log("❌ Invalid Token:", err.message);
