@@ -137,11 +137,19 @@ module.exports = {
   uncategorized: { category: "other", bucket: "data_review_interaction" },
 
   // Attestation. The Quantix template's OWN wording, used VERBATIM (not authored
-  // by engineering). CONFIRMED Aug 2026: e-signature is acceptable (it is how
-  // providers already sign) and this is the approved wording. Kept in config so
-  // it can still be swapped without touching the PDF layout.
+  // by engineering). Two SEPARATE compliance questions — do not conflate them:
+  //   1. e-signature acceptable?  CONFIRMED Aug 2026 (it is how providers already
+  //      sign). Settled.
+  //   2. is THIS wording approved?  NOT settled. The "personally performed or
+  //      directly supervised" clause is under compliance review — for care-manager
+  //      time under general supervision neither limb may hold. See
+  //      ATTESTATION_REVIEW_FOR_ROSEMARY.md. An earlier version of this comment
+  //      marked the wording "approved"; that appears to have over-applied the
+  //      e-signature confirmation (§4b of the review). pending is documentary
+  //      only (nothing reads it) — it does not change the text printed on a note.
+  // Kept in config so it can be swapped without touching the PDF layout.
   attestation: {
-    pending: false,
+    pending: true,
     text:
       "I have reviewed the patient's remotely transmitted physiologic data, " +
       "interpreted the results, and communicated with the patient/caregiver as " +

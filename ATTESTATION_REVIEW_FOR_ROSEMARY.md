@@ -21,6 +21,15 @@ So this is **unreleased wording**, not a live exposure. Nobody has signed it,
 and no historical record needs remediating. This review is happening at the
 right time: before the first signature, not after.
 
+**Re-verified 2026-08-31:** `rpm_notes` still holds **0 rows** on dev, and there
+is **no live `care_manager` user** (the role is code-complete but the only
+care-manager accounts to date were verification seeds, since removed). So the
+care-manager-time scenario in §3b has not yet occurred even once — it is entirely
+prospective. The `attestation.pending` flag in `config/rpmBillingRules.js` has
+been corrected from `false` to `true` so the code no longer represents this
+wording as compliance-approved (see §4b); this is documentary only and does not
+change the text printed on any note.
+
 *One caveat, stated so it is not overlooked.* Production is supposed to deploy
 from committed refs, but `SECURITY_FOLLOWUPS.md` #5 documents that the prod box
 has previously carried edits that existed nowhere in git. The evidence above is
@@ -126,6 +135,12 @@ The most likely reading is that the **e-signature** question was answered and th
 confirmation was over-applied to the wording as well, flipping `pending` to false
 for both. If so, this wording has never actually been signed off — which makes
 this review the first one, not a change to a prior decision.
+
+**Resolved on the code side (2026-08-31):** `attestation.pending` is now `true`
+and the config comment separates the two questions (e-signature: confirmed;
+wording: under review). Nothing in the code reads `pending`, so this is an
+honesty fix to the internal representation, not a behavior change — the note's
+printed text is untouched and still awaits your determination.
 
 **(c) No Quantix source document is in the repo or on the dev machine.** The
 wording cannot be checked against the guidance from here. Someone with the
