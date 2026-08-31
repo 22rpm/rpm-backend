@@ -153,12 +153,43 @@ class MessageService {
     }
   }
 
+  // Who a patient may message. Was UNSCOPED — every clinician in every org, a
+  // live cross-org exposure (a patient could message a clinician in another
+  // organization). Now: hard-bounded to the patient's OWN org; their assigned
+  // clinician(s) when an assignment exists, else all active clinicians in the
+  // org so an orphaned patient (ORG_CONTEXT #6) can still reach someone. Never
+  // cross-org. Recipients are clinicians only — patients message the responsible
+  // physician, not org staff.
   async getCliniciansByPatient(patientId) {
     try {
+      const patient = await db("users")
+        .select("organization_id")
+        .where("id", patientId)
+        .first();
+      if (!patient || patient.organization_id == null) return [];
+      const org = patient.organization_id;
+
+      const assigned = await db("users")
+        .select("users.id", "users.name", "users.email")
+        .innerJoin("role", "users.id", "role.user_id")
+        .innerJoin(
+          "patient_doctor_assignments",
+          "users.id",
+          "patient_doctor_assignments.doctor_id"
+        )
+        .where("patient_doctor_assignments.patient_id", patientId)
+        .where("role.role_type", "clinician")
+        .where("users.is_active", true)
+        .where("users.organization_id", org);
+      if (assigned.length) return assigned;
+
+      // Orphan fallback — org-scoped, never cross-org.
       return await db("users")
         .select("users.id", "users.name", "users.email")
-        .leftJoin("role", "users.id", "role.user_id")
-        .where("role.role_type", "clinician");
+        .innerJoin("role", "users.id", "role.user_id")
+        .where("role.role_type", "clinician")
+        .where("users.is_active", true)
+        .where("users.organization_id", org);
     } catch (error) {
       console.log(error);
       throw error;
