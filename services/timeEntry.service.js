@@ -18,6 +18,30 @@ const ACTIVITY_CATEGORIES = [
   "other",
 ];
 
+// Supervision link, resolved and STORED at write time (not inferred at read
+// time). Returns null when the actor is themselves a clinician — they performed
+// the work personally, there is no supervisor — and null when the patient has no
+// single assigned clinician, because inventing one would manufacture a
+// supervision claim nobody made. A null here means "not recorded", which the
+// note surfaces rather than papers over.
+async function resolveSupervisingProvider(
+  { patientId, staffUserId },
+  executor = db
+) {
+  const [[actor]] = await executor.query(
+    "SELECT role_type FROM role WHERE user_id = ? LIMIT 1",
+    [staffUserId]
+  );
+  if (actor && actor.role_type === "clinician") return null;
+
+  const [rows] = await executor.query(
+    "SELECT doctor_id FROM patient_doctor_assignments WHERE patient_id = ?",
+    [patientId]
+  );
+  // Exactly one assigned clinician, or we do not guess.
+  return rows.length === 1 ? rows[0].doctor_id : null;
+}
+
 // `executor` is the pool by default, or a transaction connection when a caller
 // (e.g. call documentation) needs these inserts inside a transaction.
 async function getEntryById(id, executor = db) {
@@ -42,11 +66,16 @@ async function createManualEntry(
   executor = db
 ) {
   const endedAt = new Date(startedAt.getTime() + durationSeconds * 1000);
+  const supervisingProviderId = await resolveSupervisingProvider(
+    { patientId, staffUserId },
+    executor
+  );
   const [result] = await executor.query(
     `INSERT INTO time_entries
        (patient_id, staff_user_id, organization_id, activity_category,
-        started_at, ended_at, duration_seconds, entry_method, status, note)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'manual', 'complete', ?)`,
+        started_at, ended_at, duration_seconds, entry_method, status, note,
+        supervising_provider_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'manual', 'complete', ?, ?)`,
     [
       patientId,
       staffUserId,
@@ -56,6 +85,7 @@ async function createManualEntry(
       endedAt,
       durationSeconds,
       note,
+      supervisingProviderId,
     ]
   );
   return getEntryById(result.insertId, executor);
@@ -88,6 +118,12 @@ async function findSupersededBy(id) {
 }
 
 // Insert a superseding correction row.
+//
+// The supervision link is CARRIED FORWARD from the row being corrected, never
+// re-resolved. Re-resolving would stamp the correction with today's assignment,
+// silently rewriting who supervised work performed months ago — the same class
+// of drift this column was added to eliminate. `staff_user_id` is preserved by
+// the caller for the same reason.
 async function createCorrection(
   {
     originalId,
@@ -102,11 +138,14 @@ async function createCorrection(
   executor = db
 ) {
   const endedAt = new Date(startedAt.getTime() + durationSeconds * 1000);
+  const original = await getEntryById(originalId, executor);
+  const carriedSupervisor = original ? original.supervising_provider_id : null;
   const [result] = await executor.query(
     `INSERT INTO time_entries
        (patient_id, staff_user_id, organization_id, activity_category,
-        started_at, ended_at, duration_seconds, entry_method, status, note, supersedes)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'manual', 'complete', ?, ?)`,
+        started_at, ended_at, duration_seconds, entry_method, status, note,
+        supersedes, supervising_provider_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'manual', 'complete', ?, ?, ?)`,
     [
       patientId,
       staffUserId,
@@ -117,6 +156,7 @@ async function createCorrection(
       durationSeconds,
       note,
       originalId,
+      carriedSupervisor,
     ]
   );
   return getEntryById(result.insertId, executor);

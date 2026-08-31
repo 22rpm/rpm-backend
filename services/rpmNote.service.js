@@ -168,12 +168,21 @@ async function getRpmNote({ patientId, orgScope, month }) {
 
   // Time: head-of-chain time_entries in the month, individual rows ordered by
   // start (so the running total gives the management threshold-met DOS).
+  // staff_user_id + the actor's role are selected so the note can attribute
+  // minutes to WHO performed them. Without this the note showed one
+  // undifferentiated total under the billing provider's name and signature,
+  // which is what a physician was being asked to attest to.
   const [timeRows] = await db.query(
     `SELECT t.activity_category,
             ${tzq.dayBucketSql("t.started_at")} AS d,
-            t.duration_seconds AS secs
+            t.duration_seconds AS secs,
+            t.staff_user_id,
+            su.name AS staff_name,
+            sr.role_type AS staff_role
        FROM time_entries t
        LEFT JOIN time_entries s ON s.supersedes = t.id
+       LEFT JOIN users su ON su.id = t.staff_user_id
+       LEFT JOIN role  sr ON sr.user_id = t.staff_user_id
       WHERE s.id IS NULL AND t.patient_id = ? AND t.organization_id = ?
         AND ${tzq.monthWhereSql("t.started_at")}
       ORDER BY t.started_at, t.id`,
@@ -188,11 +197,29 @@ async function getRpmNote({ patientId, orgScope, month }) {
   let reviewSecs = 0;
   let otherSecs = 0;
   const byCategory = {};
+  // Per-actor accumulation. Keyed by staff_user_id so two staff with the same
+  // display name never merge. `clinical_staff` vs `provider` is the split that
+  // matters for the attestation: a clinician's own minutes are personally
+  // performed, everyone else's are clinical-staff time under supervision.
+  const byActor = new Map();
   const reviewContribs = []; // ordered {date,secs} for the review bucket
   for (const row of timeRows) {
     const secs = Number(row.secs || 0);
     byCategory[row.activity_category] =
       (byCategory[row.activity_category] || 0) + Math.round(secs / 60);
+
+    const aid = row.staff_user_id == null ? "unknown" : String(row.staff_user_id);
+    if (!byActor.has(aid)) {
+      byActor.set(aid, {
+        staff_user_id: row.staff_user_id ?? null,
+        // A deleted/missing user row must not silently vanish from the note.
+        name: row.staff_name || (row.staff_user_id ? `User ${row.staff_user_id}` : "Unattributed"),
+        role: row.staff_role || null,
+        kind: row.staff_role === "clinician" ? "provider" : "clinical_staff",
+        seconds: 0,
+      });
+    }
+    byActor.get(aid).seconds += secs;
     if (setupCats.has(row.activity_category)) setupSecs += secs;
     else {
       // review-bucket categories, plus uncategorised ("other")
@@ -333,6 +360,25 @@ async function getRpmNote({ patientId, orgScope, month }) {
   }
 
   const setupSupported = setups.length > 0;
+  // Per-actor roll-ups. Minutes are rounded per actor (not per row) so the
+  // parts sum to a stable total; provider/clinical-staff is the split that
+  // matters for the attestation.
+  const actorBreakdown = [...byActor.values()]
+    .map((a) => ({
+      staff_user_id: a.staff_user_id,
+      name: a.name,
+      role: a.role,
+      kind: a.kind,
+      minutes: Math.round(a.seconds / 60),
+    }))
+    .sort((x, y) => y.minutes - x.minutes || String(x.name).localeCompare(String(y.name)));
+  const providerMinutes = actorBreakdown
+    .filter((a) => a.kind === "provider")
+    .reduce((n, a) => n + a.minutes, 0);
+  const clinicalStaffMinutes = actorBreakdown
+    .filter((a) => a.kind !== "provider")
+    .reduce((n, a) => n + a.minutes, 0);
+
   // 99453 date of service = the setup event; fall back to enrollment date.
   const setupDos =
     (setups.find((s) => s.setup_date) || {}).setup_date || p.enrolled_at || null;
@@ -349,6 +395,16 @@ async function getRpmNote({ patientId, orgScope, month }) {
   if (multipleProviders)
     missing.push(
       `Patient has ${team.length} care-team clinicians — confirm the billing provider (assumption is one per patient)`
+    );
+  // Attribution flags — the note is signed, so who did the work must be legible.
+  const unattributed = actorBreakdown.find((a) => a.staff_user_id == null);
+  if (unattributed && unattributed.minutes > 0)
+    missing.push(
+      `${unattributed.minutes} min of time has no recorded staff member — attribution unavailable`
+    );
+  if (clinicalStaffMinutes > 0)
+    missing.push(
+      `${clinicalStaffMinutes} min was performed by clinical staff, not the billing provider — confirm the supervision arrangement supports billing it`
     );
   if (!consent.obtained) missing.push("Consent not on record");
   if (!devices.length) missing.push("No active device on record");
@@ -427,6 +483,11 @@ async function getRpmNote({ patientId, orgScope, month }) {
       uncategorized_minutes: uncategorizedMinutes, // "other"; flagged in `missing`
       total_minutes: totalMinutes,
       by_category: byCategory,
+      // WHO performed the minutes. `by_actor` is the per-person breakdown;
+      // the two roll-ups are the split the attestation turns on.
+      by_actor: actorBreakdown,
+      provider_minutes: providerMinutes,
+      clinical_staff_minutes: clinicalStaffMinutes,
     },
     billing: {
       // 99453 — once per patient per device type; independent of transmission

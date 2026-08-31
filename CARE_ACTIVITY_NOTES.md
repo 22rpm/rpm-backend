@@ -126,7 +126,32 @@ file and the timer-service comment block together.
   original author and don't record the corrector — so fold notes in when this is
   addressed.
 
-### Time attribution: the note doesn't say WHO logged the minutes (role-model step 5)
+### Time attribution: WHO logged the minutes — RESOLVED (role-model step 5)
+- **Done.** The note now carries `time_documentation.by_actor` (per staff member:
+  name, role, `kind`, minutes) plus `provider_minutes` and
+  `clinical_staff_minutes` roll-ups, rendered as a "Time by staff member" table
+  above the signature block. `kind` is `provider` when the actor's role is
+  `clinician`, `clinical_staff` otherwise. Actors are keyed by `staff_user_id`,
+  so two staff sharing a display name never merge.
+- Two new entries appear in the note's `missing` flags: unattributed time (a row
+  whose `staff_user_id` no longer resolves) and a standing note when any
+  clinical-staff minutes are present, prompting confirmation that the supervision
+  arrangement supports billing them.
+- **Supervision is now recorded at write time**, not inferred at render time:
+  `time_entries.supervising_provider_id` (migration `20260831120000`), resolved
+  on insert from the patient's single assigned clinician, NULL when the actor is
+  themselves a clinician (performed personally) or when the patient has no single
+  assignment (we do not guess). Corrections **carry the link forward** from the
+  row they supersede rather than re-resolving, so a later reassignment cannot
+  rewrite who supervised historical work.
+- Existing rows were deliberately **not backfilled** — NULL means "not recorded",
+  which is true; backfilling from today's assignment would manufacture a
+  supervision claim nobody made.
+- **Still open:** the attestation wording above the signature says "personally
+  performed or *directly* supervised". See `ATTESTATION_REVIEW_FOR_ROSEMARY.md` —
+  flagged for compliance, deliberately unchanged.
+
+### (superseded) original write-up of the gap
 - `time_entries.staff_user_id` records the actor correctly. But
   `services/rpmNote.service.js` aggregates the month's time with **no reference to
   it** — the query selects `activity_category`, a day bucket and
