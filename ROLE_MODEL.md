@@ -109,22 +109,25 @@ Verified on dev with a seeded care_manager and the existing clinician:
 
 ---
 
-## Open design question — actor attribution on the RPM note
+## Actor attribution on the RPM note — RESOLVED, with one open compliance item
 
-**Today the note does not distinguish who logged billable time.**
+**Done (`75e99a8`).** The note carries `time_documentation.by_actor` (per staff
+member: name, role, `kind`, minutes) plus `provider_minutes` /
+`clinical_staff_minutes` roll-ups, rendered as a "Time by staff member" table
+above the signature block. `kind` is `provider` when the actor's role is
+`clinician`, `clinical_staff` otherwise. Supervision is recorded in the ledger at
+write time (`time_entries.supervising_provider_id`, migration `20260831120000`),
+NULL when the actor is themselves a clinician or when the patient has no single
+assignment; corrections carry the link forward rather than re-resolving.
 
-- `time_entries.staff_user_id` records the actor correctly, and it is the right
-  column — "the clinical time belongs to whoever did the work"
-  (`CARE_ACTIVITY_NOTES.md`).
-- But `services/rpmNote.service.js` aggregates time with **no reference to
-  `staff_user_id`** — the query selects only `activity_category`, a day bucket
-  and `duration_seconds`.
-- The note therefore renders `Provider: <assigned clinician>` at the top, three
-  undifferentiated minute totals in TIME DOCUMENTATION, and a physician
-  signature block at the bottom. Care-manager minutes are indistinguishable
-  from the physician's own.
+Verified on dev with real ledger rows: 58 provider minutes split from 18
+clinical-staff minutes, parts summing to the total, and a correction's 18
+minutes superseding the original 15.
 
-If a care manager's time is to be billed as clinical-staff time under the
-billing provider's supervision, the note needs to say so. See the "Time
-attribution" entry in `CARE_ACTIVITY_NOTES.md` for the shape of the fix. Decide
-before this note is used as a billing artifact.
+**Open, and NOT an engineering decision:** the attestation printed above that
+signature still reads "personally performed or **directly** supervised". Because
+it is a disjunction, neither limb is true for care-manager time under general
+supervision — and the new breakdown now makes that mismatch visible on the same
+page. Written up in `ATTESTATION_REVIEW_FOR_ROSEMARY.md`, deliberately unchanged
+pending compliance. Note that the wording is unreleased: `rpm_notes` has zero
+signed notes and the note feature is absent from `origin/main`.
