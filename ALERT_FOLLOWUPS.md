@@ -55,7 +55,23 @@ assignment row is inserted, so an org-wide reader never becomes a paging target
 underlying column still conflates the two axes; splitting it is a schema change
 and is NOT done.
 
-**Still open after step 5 — read-state for org-wide readers.** `read_status` /
+**RESOLVED — read-state for org-wide readers (`alert_reads`).** Read state now
+lives in its own table (`alert_reads(alert_id, user_id, read_at)`, migration
+`20260831130000`), keyed UNIQUE per person per alert so marking read is
+idempotent. Org-wide readers get their own inbox: `read_status`/`read_at` in the
+org-wide list responses are now THIS reader's state, and the assigned
+clinician's state is still exposed alongside under `assigned_read_status` /
+`assigned_read_at` rather than being silently presented as the reader's own.
+`PATCH /:alert_id/read` and `/mark-all-read` write to `alert_reads` for org-wide
+roles — **never** to `alert_assignments`, so marking read still cannot make
+anyone a paging target. Mark-read is org-scoped (404 for an out-of-scope alert,
+matching the rest of the surface). The clinician flow is untouched and still
+uses `alert_assignments`; verified that a care_manager clearing their inbox does
+not clear the clinician's. Existing `alert_assignments.read_status` values were
+deliberately NOT backfilled into `alert_reads` — they record that the *assigned
+clinician* read something, and copying them would invent read events.
+
+**Was open before that change:** `read_status` /
 `read_at` live on `alert_assignments`, i.e. per assigned clinician. An org-wide
 reader has no assignment row, so:
 - `PATCH /alerts/:alert_id/read` returns **404** for them (no row to update);

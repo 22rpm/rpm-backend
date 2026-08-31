@@ -2392,12 +2392,16 @@ router.get("/unread-count", authRequired, resolveOrgScope, async (req, res) => {
     // (every alert whose patient belongs to req.orgScope).
     if (isOrgWide(req.user)) {
       const [orgUnreadRows] = await connection.query(
-        `SELECT COUNT(DISTINCT aa.id) as count
+        // Unread FOR THIS READER: alerts in the org with no alert_reads row
+        // for them. Counting aa.read_status would report whether some assigned
+        // clinician had read it, which is not this person's inbox.
+        `SELECT COUNT(DISTINCT a.id) as count
            FROM alert_assignments aa
            JOIN alerts a ON aa.alert_id = a.id
            JOIN users p ON a.user_id = p.id
-          WHERE p.organization_id = ? AND aa.read_status = false`,
-        [req.orgScope]
+           LEFT JOIN alert_reads ar ON ar.alert_id = a.id AND ar.user_id = ?
+          WHERE p.organization_id = ? AND ar.id IS NULL`,
+        [req.user.id, req.orgScope]
       );
       return res.json({
         ok: true,
@@ -2458,8 +2462,14 @@ router.get("/my-alerts", authRequired, resolveOrgScope, async (req, res) => {
                 alerts.type,
                 alerts.created_at as alert_created_at,
                 alerts.updated_at as alert_updated_at,
-                alert_assignments.read_status,
-                alert_assignments.read_at,
+                -- read_status/read_at on alert_assignments are the ASSIGNED
+                -- clinician's state, not this reader's. Exposed under
+                -- assigned_* so nothing silently reads someone else's inbox;
+                -- this reader's own state comes from alert_reads.
+                alert_assignments.read_status AS assigned_read_status,
+                alert_assignments.read_at     AS assigned_read_at,
+                (ar.id IS NOT NULL)           AS read_status,
+                ar.read_at                    AS read_at,
                 alert_assignments.created_at as assigned_at,
                 alert_assignments.id as assignment_id,
                 alert_assignments.doctor_id,
@@ -2470,18 +2480,24 @@ router.get("/my-alerts", authRequired, resolveOrgScope, async (req, res) => {
          FROM alert_assignments
          JOIN alerts ON alert_assignments.alert_id = alerts.id
          JOIN users as patients ON alerts.user_id = patients.id
+         LEFT JOIN alert_reads ar
+                ON ar.alert_id = alerts.id AND ar.user_id = ?
          WHERE patients.organization_id = ?
          ORDER BY alerts.created_at DESC`,
-        [req.orgScope]
+        [req.user.id, req.orgScope]
       );
 
       const [orgUnreadRows] = await connection.query(
-        `SELECT COUNT(DISTINCT aa.id) as count
+        // Unread FOR THIS READER: alerts in the org with no alert_reads row
+        // for them. Counting aa.read_status would report whether some assigned
+        // clinician had read it, which is not this person's inbox.
+        `SELECT COUNT(DISTINCT a.id) as count
            FROM alert_assignments aa
            JOIN alerts a ON aa.alert_id = a.id
            JOIN users p ON a.user_id = p.id
-          WHERE p.organization_id = ? AND aa.read_status = false`,
-        [req.orgScope]
+           LEFT JOIN alert_reads ar ON ar.alert_id = a.id AND ar.user_id = ?
+          WHERE p.organization_id = ? AND ar.id IS NULL`,
+        [req.user.id, req.orgScope]
       );
 
       return res.json({
@@ -2572,8 +2588,14 @@ router.get("/my-alerts/unread", authRequired, resolveOrgScope, async (req, res) 
                 alerts.type,
                 alerts.created_at as alert_created_at,
                 alerts.updated_at as alert_updated_at,
-                alert_assignments.read_status,
-                alert_assignments.read_at,
+                -- read_status/read_at on alert_assignments are the ASSIGNED
+                -- clinician's state, not this reader's. Exposed under
+                -- assigned_* so nothing silently reads someone else's inbox;
+                -- this reader's own state comes from alert_reads.
+                alert_assignments.read_status AS assigned_read_status,
+                alert_assignments.read_at     AS assigned_read_at,
+                (ar.id IS NOT NULL)           AS read_status,
+                ar.read_at                    AS read_at,
                 alert_assignments.created_at as assigned_at,
                 alert_assignments.id as assignment_id,
                 alert_assignments.doctor_id,
@@ -2584,10 +2606,12 @@ router.get("/my-alerts/unread", authRequired, resolveOrgScope, async (req, res) 
            FROM alert_assignments
            JOIN alerts ON alert_assignments.alert_id = alerts.id
            JOIN users as patients ON alerts.user_id = patients.id
+           LEFT JOIN alert_reads ar
+                  ON ar.alert_id = alerts.id AND ar.user_id = ?
           WHERE patients.organization_id = ?
             AND alert_assignments.read_status = false
           ORDER BY alerts.created_at DESC`,
-        [req.orgScope]
+        [req.user.id, req.orgScope]
       );
 
       // Same response shape as the clinician branch below, so the frontend
@@ -2652,13 +2676,54 @@ router.get("/my-alerts/unread", authRequired, resolveOrgScope, async (req, res) 
 });
 
 // Mark a specific alert as read
-router.patch("/:alert_id/read", authRequired, async (req, res) => {
+router.patch("/:alert_id/read", authRequired, resolveOrgScope, async (req, res) => {
   const clinician_id = req.user.id;
   const { alert_id } = req.params;
 
   let connection;
   try {
     connection = await db.getConnection();
+
+    // Org-wide readers have no alert_assignments row, so read state is recorded
+    // in alert_reads instead. Never insert an assignment row to represent a
+    // read — that would enrol the reader as a paging target (ALERT_FOLLOWUPS #1).
+    if (isOrgWide(req.user)) {
+      const [[inScope]] = await connection.query(
+        `SELECT a.id FROM alerts a
+           JOIN users p ON p.id = a.user_id
+          WHERE a.id = ? AND p.organization_id = ?
+          LIMIT 1`,
+        [alert_id, req.orgScope]
+      );
+      if (!inScope) {
+        // 404, not 403 — do not confirm an out-of-scope alert exists.
+        return res.status(404).json({ ok: false, message: "Alert not found" });
+      }
+
+      // Idempotent: re-reading is a no-op, one row per person per alert.
+      await connection.query(
+        `INSERT INTO alert_reads (alert_id, user_id, read_at)
+         VALUES (?, ?, NOW())
+         ON DUPLICATE KEY UPDATE read_at = read_at`,
+        [alert_id, clinician_id]
+      );
+
+      const [[row]] = await connection.query(
+        `SELECT COUNT(DISTINCT a.id) as count
+           FROM alert_assignments aa
+           JOIN alerts a ON aa.alert_id = a.id
+           JOIN users p ON a.user_id = p.id
+           LEFT JOIN alert_reads ar ON ar.alert_id = a.id AND ar.user_id = ?
+          WHERE p.organization_id = ? AND ar.id IS NULL`,
+        [clinician_id, req.orgScope]
+      );
+
+      return res.json({
+        ok: true,
+        message: "Alert marked as read successfully",
+        unread_count: parseInt(row.count) || 0,
+      });
+    }
 
     // Verify the alert assignment exists and belongs to this clinician
     const [assignmentRows] = await connection.query(
@@ -2723,7 +2788,39 @@ router.patch("/:alert_id/read", authRequired, async (req, res) => {
 });
 
 // Mark all alerts as read for a clinician
-router.patch("/mark-all-read", authRequired, async (req, res) => {
+router.patch("/mark-all-read", authRequired, resolveOrgScope, async (req, res) => {
+  // Org-wide readers: mark every alert in their org scope read for THEM, in
+  // alert_reads. No alert_assignments row is touched, so this cannot make the
+  // reader a paging target and cannot clear an assigned clinician's own inbox.
+  if (isOrgWide(req.user)) {
+    let conn;
+    try {
+      conn = await db.getConnection();
+      await conn.query(
+        `INSERT INTO alert_reads (alert_id, user_id, read_at)
+         SELECT DISTINCT a.id, ?, NOW()
+           FROM alert_assignments aa
+           JOIN alerts a ON aa.alert_id = a.id
+           JOIN users p ON a.user_id = p.id
+          WHERE p.organization_id = ?
+         ON DUPLICATE KEY UPDATE read_at = alert_reads.read_at`,
+        [req.user.id, req.orgScope]
+      );
+      return res.json({
+        ok: true,
+        message: "All alerts marked as read successfully",
+        unread_count: 0,
+      });
+    } catch (error) {
+      console.error("Error marking all alerts read (org-wide):", error);
+      return res
+        .status(500)
+        .json({ ok: false, message: "Server error", error: error.message });
+    } finally {
+      if (conn) conn.release();
+    }
+  }
+
   const clinician_id = req.user.id;
 
   let connection;

@@ -22,7 +22,13 @@ assignment rows — that would page the reader. See the header block in
 | 1–2 | Session token carries `role_type` + `org_id` | done (`3a15ab9`, SECURITY_FOLLOWUPS #9) |
 | 3 | Register `care_manager` (Joi allow-list, dedup ranking) | done (`a87c731`) |
 | 4 | Patient visibility — shared `patientAccess` helper across 6 gates | done (`5ce7acf`…`81fa5bc`) |
-| 5 | Alert visibility for org-wide roles, read-only | done (this change) |
+| 5 | Alert visibility for org-wide roles + per-reader read state | done (`abbf63d`, `75e99a8`, this change) |
+
+Step 5 covered three things: org-scoped alert **visibility** for org-wide roles;
+per-actor **time attribution** on the RPM note, with the supervision link
+recorded in the ledger at write time; and per-reader **read state**
+(`alert_reads`) so an org-wide reader has their own inbox without being enrolled
+as a paging target.
 
 ---
 
@@ -74,6 +80,21 @@ Verified the same way (seeded second org + care_manager, real tokens):
   re-running.
 - **Reading creates no `alert_assignments` rows** (asserted before/after). An
   org-wide reader never becomes a paging target.
+
+### Step 5 — per-reader read state (`alert_reads`)
+
+Verified on dev with a seeded care_manager and the existing clinician:
+
+- care_manager starts with every org alert unread (their own state, not the
+  assigned clinician's), can mark one read (**200**, previously 404), and their
+  count drops by one.
+- Marking read is **idempotent** — re-marking is a no-op and leaves exactly one
+  `alert_reads` row.
+- **Zero `alert_assignments` rows** are created by any of it, before or after
+  mark-all-read. Visibility still never implies paging.
+- Cross-org: another org's care_manager marking the same alert gets **404** and
+  writes no read row.
+- The clinician's inbox is **not** cleared when the care_manager clears theirs.
 
 ### Not verified
 
