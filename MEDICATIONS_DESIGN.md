@@ -270,6 +270,30 @@ of the note's care, not all:
   `interventions.medication_text` is the physician's OWN intervention and is a
   different thing from the patient-reported list — never conflate them.
 
+## Reorder timing (#3) — built
+
+**Option B (computed projection), presented as an estimate.** Capture per current fill:
+`dispense_quantity`, `last_filled_date`, `refills_remaining` (nullable; from OCR/manual —
+the NDC/barcode does not carry them). `computeReorder` projects
+`days_left = dispense_quantity / (unitsPerDose × dosesPerDay) − days since last_filled_date`.
+
+Two hard constraints:
+- **Never a date as fact.** The API returns `days_left` (a number) + `estimate:true`, not a
+  date; the UI renders "About N days left · estimate, from reported use." Consumption is
+  assumed from patient-reported dose + frequency, so a hard "Reorder by Sep 12" would
+  overstate certainty. When consumption can't be known — "as needed"/PRN, or a dose
+  that's a strength ("10 mg") rather than a unit count — `days_left` is **null** (no
+  fabricated number), never a guess.
+- **Refills ≠ running low.** `refills_remaining === 0` sets `needs_new_rx` and is surfaced
+  as a distinct, urgent signal ("No refills left — needs a new prescription") — a new
+  script is a different action with a longer lead time than a reorder. Refills are shown
+  whenever known, independent of the day estimate.
+
+Confidence is deliberately modest: fractional dosing is handled (half a tablet twice a
+day = 1/day), but the estimate is only as good as patient-reported dose/frequency and the
+label-copied quantity/fill-date. Running-low threshold: 10 days. **Visibility:** shown to
+clinician/staff on the dashboard Medications tab (no pharmacist role yet — followup #1).
+
 ## Decisions taken
 
 - **Pharmacist confirmation: NO second state for now.** One confirmed state,
