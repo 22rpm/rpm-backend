@@ -163,17 +163,20 @@ entry enters `unconfirmed` → a clinician must explicitly confirm. There is no 
 from camera to confirmed. `source=photo` grants zero trust.
 
 **Built (step 5, iOS):** `labelOcr.js` captures via the OS camera
-(`react-native-image-picker`, `saveToPhotos:false`), reads the label on-device with ML
-Kit (`@react-native-ml-kit/text-recognition`), parses a best-effort name + strength, and
-**discards the image immediately** (`react-native-fs` unlink in a `finally`). The result
-only pre-fills the entry form (`MedicationCapture.js` → `MedicationEntryScreen.js`), where
-the patient must review and correct every field — a "Filled in from your photo — check the
-dose" banner makes that explicit — before it's submitted as `unconfirmed` (`source=photo`).
-**Nothing is stored:** not in the camera roll, not uploaded, and `document_key` /
-`document_sha256` stay NULL until S3 exists. The capture screen says so in one line: "The
-photo is only used to read the label on your phone. It isn't saved or sent anywhere."
-Native modules + `NSCameraUsageDescription` are part of the device build (see the iOS
-`MEDICATIONS_FOLLOWUPS.md`).
+(`react-native-image-picker`, `saveToPhotos:false`), then reads the label on-device with
+**Apple's Vision framework** — a native Objective-C module (`ios/VTMDeviceManager/
+MedLabelOCR.{h,m}`, `VNRecognizeTextRequest`), **zero third-party OCR dependency**. The
+native module reads the file and **deletes it in native code** (success or failure), so
+the "nothing is stored" guarantee lives in native rather than being trusted to JS —
+`react-native-fs` and the ML Kit dependency are both gone. The parsed best-effort name +
+strength only pre-fill the entry form (`MedicationCapture.js` → `MedicationEntryScreen.js`),
+where the patient must review and correct every field — a "Filled in from your photo —
+check the dose" banner makes that explicit — before it's submitted as `unconfirmed`
+(`source=photo`). **Nothing is stored:** not in the camera roll, not uploaded, and
+`document_key` / `document_sha256` stay NULL until S3 exists. The capture screen says so
+in one line: "The photo is only used to read the label on your phone. It isn't saved or
+sent anywhere." The camera dep + `NSCameraUsageDescription` + adding the two native files
+to the Xcode target are part of the device build (see the iOS `MEDICATIONS_FOLLOWUPS.md`).
 
 **The strength guard catches invalid strengths, not misreads — say it plainly.** If
 an OCR-read strength isn't among the chosen drug's known RxNorm strengths, we flag
