@@ -1,0 +1,52 @@
+# Call scheduling (#3) — design & decisions
+
+Built. A scheduling layer on top of the existing call log — deliberately NOT a second
+record of the same conversation.
+
+## The model: intent vs. fact
+- **Scheduled call** (`scheduled_calls`) = an *intent*: an appointment to call a patient.
+  Not billable.
+- **Logged call** (`patient_calls`) = a *fact*: a documented conversation with outcome +
+  duration + actor. This is the billing record and feeds **99457's interactive-communication
+  test** (`rpmNote.service`).
+
+They are **linked, never duplicated**: `scheduled_calls.completed_call_id` → `patient_calls.id`.
+
+## Confirmed decisions (2026-09-01)
+1. **"Last call recorded" = `patient_calls`** (a fact), not the last scheduled call (an
+   intent). Surfaced on the worklist as `last_call` (head-of-chain `patient_calls`),
+   distinct from `last_interaction` (which also counts notes).
+2. **Completion routes through the existing call-logging flow.** The calendar's
+   "Log & complete" opens `LogCallForm` (creates the `patient_calls` row via
+   `/api/care/.../calls`), then links it (`PATCH /scheduled-calls/:id/complete`). A bare
+   "mark done" was rejected: it would create scheduled calls that look complete but leave
+   the conversation undocumented and uncounted for 99457 — the worst of both.
+3. **Separate `scheduled_calls` table** — future/planned rows never pollute the billing
+   record.
+4. **Reschedule is update-in-place** for v1. Reschedule history → followup.
+
+## The 99457 boundary
+Scheduling **never** feeds 99457 on its own. Only the linked `patient_calls` (with a
+qualifying outcome + duration) counts. `complete` validates the logged call's
+patient+org match the schedule, so an unrelated call can't mark it done. A schedule is
+"complete" only when `completed_call_id` is set; if never logged it stays `scheduled`
+past its time = **overdue**.
+
+## Overdue is visible without opening the calendar
+A scheduled call past its time and never logged is a patient nobody talked to — a missed
+monthly 99457. Surfaced two ways on the **patient list**: a red "Overdue" badge on the
+"Next call" column, and an "Overdue (N)" filter/toggle in the header. The calendar shows
+an "Overdue — never logged" block first and loud.
+
+## Surface
+- Backend: `scheduled_calls` (migration `20260901140000`); `/api/scheduled-calls`
+  (list window, overdue, create/reschedule/cancel/no-show = org admin; complete = clinical
+  staff); worklist returns `next_scheduled_call`, `scheduled_overdue`, `last_call`.
+- Dashboard: `CallSchedule` page (route `/call-schedule`, Sidebar "Call Schedule");
+  `PatientWorklist` columns "Next call" (+ overdue badge) and "Last call" + overdue filter.
+
+## Followups
+- Reschedule history (v1 is update-in-place).
+- Time-zone: overdue uses server `NOW()`; fine at day granularity for a monthly call, but
+  revisit alongside the clinic-tz work if hour-level precision ever matters.
+- A month-grid calendar view (v1 is an agenda: overdue + day-grouped list).
