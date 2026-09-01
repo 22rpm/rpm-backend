@@ -217,3 +217,41 @@ empty does NOT have the fix.
 `req.cookies.token` and ignores the `Authorization: Bearer` header the app also
 sends, so there is no fallback when the cookie is absent. Whether to accept either
 is a deliberate decision, not yet made.
+
+## 11. `authRequired` accepts only the cookie, ignoring the Bearer header the app sends — decide + unify (not blocking)
+
+**The inconsistency:** two auth middlewares evolved separately.
+- `authRequired` (`middleware/auth.js`) reads **only** `req.cookies.token`. It's on
+  essentially every route (doctor, patient, alerts, medications, auth/check-me, …).
+- `authMiddleware` reads **only** `Authorization: Bearer` and its own comment says
+  it's "being used in live chat messageService" — added for one feature, never
+  generalized.
+
+The iOS app sends **both** a cookie (`credentials:'include'`) and
+`Authorization: Bearer <token>` (the login-body token, stored in AsyncStorage). So
+the client clearly expects Bearer to work, but for `authRequired` routes the server
+ignores it — meaning there is **no fallback** when the cookie is absent. That's why
+the cookie-over-http failure (#10) was total rather than degraded.
+
+**Not intentional — drift**, not a designed scheme.
+
+**Recommendation (reasoning captured for later scoping):** accept **cookie first,
+Bearer fallback** in a single unified `authRequired`, and collapse `authMiddleware`
+into it.
+- **Mobile robustness:** a Bearer fallback makes the whole cookie-over-http
+  fragility (the #10 class of bug) non-fatal for the app. Native cookie stores are
+  finicky; Bearer is the normal mobile path, and the plumbing already exists (the
+  app stores + sends the token) — only the server ignores it.
+- **Dashboard stays cookie-only:** the web client keeps the httpOnly cookie and must
+  **not** start storing tokens in JS (XSS exposure). Accepting Bearer on the server
+  doesn't force the web to use it; the dashboard simply won't send one.
+- **Mobile posture unchanged:** the app already keeps the token in AsyncStorage, so
+  honoring Bearer there doesn't weaken a protection it still holds.
+- Keep `sameSite` on the cookie for the cookie path's CSRF protection.
+
+**Why deferred:** not blocking anything — #10 fixed the cookie path, so auth works
+today. This is a robustness + consistency improvement. **Scope as its own reviewed
+unit** (like the role-model units): audit every route's middleware (`authRequired`
+vs `authMiddleware`), define one middleware that accepts cookie-or-Bearer, confirm
+refresh/TTL works on the header path, and decide the web dashboard's stance
+explicitly. Cross-ref #10.
