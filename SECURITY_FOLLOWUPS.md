@@ -184,3 +184,36 @@ infrequent and re-login masks it.
 Found during the role-model scoping. Reinforces the standing inconsistency that
 tokens carry `role_type` while response bodies use `role` (also the dead socket
 gate — see ALERT_FOLLOWUPS #1 note).
+
+## 10. Session cookie not stored over local http — FIXED (2ef398c), was unmerged until now
+
+**Symptom:** login succeeds but no auth cookie persists on the iOS app against a
+local **http** backend — `authRequired` logs `Available cookies: []` on every
+subsequent call, so everything 401s. Diagnosed from scratch **twice** before it
+was noticed that the fix already existed.
+
+**Cause:** `issueSession` set the auth cookies `secure:true; sameSite:none`
+(hardcoded), so a plain-http client (LAN dev, e.g. `http://192.168.1.x:4000`)
+drops them at store time — nothing to send back. Compounded by a clean reinstall
+(e.g. after a LAN IP change) wiping the previously-stored cookie. `logout` also
+cleared with `sameSite:strict`, mismatching the `none` it was set with, so logout
+could leave a live session cookie (prod bug).
+
+**Fix — `2ef398c` on branch `fix/cookie-secure-conditional`:** a single
+`sessionCookieFlags()` helper used by BOTH set and clear;
+`secure = ALLOW_INSECURE_COOKIES !== "true"` (fail-secure opt-in, prod
+byte-identical), `sameSite = secure ? "none" : "lax"` (None requires Secure). Set
+`ALLOW_INSECURE_COOKIES=true` in the dev `.env` for local http.
+
+**Where it lives / how to stop re-diagnosing it:** the fix was on its own branch
+and **never merged into `feature/care-activity`**, so `ALLOW_INSECURE_COOKIES`
+read as dead code there and it looked unfixed. Now **merged into
+`feature/care-activity`**. If you branch for local http testing off anything that
+predates the merge, cherry-pick/merge `2ef398c` — the `.env` var does nothing
+without it. Any branch where `grep -r ALLOW_INSECURE_COOKIES controllers/` is
+empty does NOT have the fix.
+
+**Related open question (see below / ALERT_FOLLOWUPS):** `authRequired` reads only
+`req.cookies.token` and ignores the `Authorization: Bearer` header the app also
+sends, so there is no fallback when the cookie is absent. Whether to accept either
+is a deliberate decision, not yet made.
