@@ -42,6 +42,8 @@ async function enrollPatient({
   insurancePayerId,
   comments,
   mrn,
+  isDialysis,
+  dialysisClinic,
   conditions,
   careTeam,
   consent,
@@ -137,8 +139,9 @@ async function enrollPatient({
 
     await conn.query(
       `INSERT INTO patient_profiles
-         (user_id, date_of_birth, enrolled_at, program_status, insurance_payer_id, comments, mrn)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+         (user_id, date_of_birth, enrolled_at, program_status, insurance_payer_id, comments, mrn,
+          is_dialysis, dialysis_clinic)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         patientId,
         dateOfBirth,
@@ -147,6 +150,8 @@ async function enrollPatient({
         insurancePayerId,
         comments,
         (mrn && String(mrn).trim()) || null,
+        isDialysis ? 1 : 0,
+        dialysisClinic || null,
       ]
     );
 

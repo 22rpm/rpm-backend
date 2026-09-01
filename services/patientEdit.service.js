@@ -46,7 +46,8 @@ async function getPatientForEdit(patientId, orgScope) {
   const [prof] = await db.query(
     `SELECT DATE_FORMAT(date_of_birth, '%Y-%m-%d') AS date_of_birth,
             DATE_FORMAT(enrolled_at, '%Y-%m-%d') AS enrolled_at,
-            program_status, insurance_payer_id, comments, mrn
+            program_status, insurance_payer_id, comments, mrn,
+            is_dialysis, dialysis_clinic
        FROM patient_profiles WHERE user_id = ?`,
     [patientId]
   );
@@ -74,6 +75,8 @@ async function getPatientForEdit(patientId, orgScope) {
     insurance_payer_id: p.insurance_payer_id ?? null,
     comments: p.comments ?? null,
     mrn: p.mrn ?? null,
+    is_dialysis: !!p.is_dialysis,
+    dialysis_clinic: p.dialysis_clinic ?? null,
     conditions: conds.map((c) => c.name),
     care_team: team.map((m) => ({
       id: m.id,
@@ -115,7 +118,7 @@ async function updatePatient({ patientId, orgScope, actorId, data }) {
     await conn.beginTransaction();
 
     const [cur] = await conn.query(
-      "SELECT DATE_FORMAT(enrolled_at, '%Y-%m-%d') AS enrolled_at, mrn FROM patient_profiles WHERE user_id = ?",
+      "SELECT DATE_FORMAT(enrolled_at, '%Y-%m-%d') AS enrolled_at, mrn, is_dialysis, dialysis_clinic FROM patient_profiles WHERE user_id = ?",
       [patientId]
     );
     const prevEnrolledAt = cur.length ? cur[0].enrolled_at : null;
@@ -130,10 +133,22 @@ async function updatePatient({ patientId, orgScope, actorId, data }) {
     else if (data.mrn === null) newMrn = null;
     else newMrn = String(data.mrn).trim() || null;
 
+    // Dialysis flag + clinic: keep-if-absent (like mrn), so an older client that omits
+    // the keys doesn't wipe them.
+    const prevDialysis = cur.length ? cur[0].is_dialysis : 0;
+    const newIsDialysis =
+      data.is_dialysis === undefined ? (prevDialysis ? 1 : 0) : data.is_dialysis ? 1 : 0;
+    const prevClinic = cur.length ? cur[0].dialysis_clinic : null;
+    let newClinic;
+    if (data.dialysis_clinic === undefined) newClinic = prevClinic;
+    else if (data.dialysis_clinic === null) newClinic = null;
+    else newClinic = String(data.dialysis_clinic).trim().slice(0, 255) || null;
+
     await conn.query(
       `INSERT INTO patient_profiles
-         (user_id, date_of_birth, enrolled_at, program_status, insurance_payer_id, comments, mrn)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
+         (user_id, date_of_birth, enrolled_at, program_status, insurance_payer_id, comments, mrn,
+          is_dialysis, dialysis_clinic)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
          date_of_birth = VALUES(date_of_birth),
          enrolled_at = VALUES(enrolled_at),
@@ -141,6 +156,8 @@ async function updatePatient({ patientId, orgScope, actorId, data }) {
          insurance_payer_id = VALUES(insurance_payer_id),
          comments = VALUES(comments),
          mrn = VALUES(mrn),
+         is_dialysis = VALUES(is_dialysis),
+         dialysis_clinic = VALUES(dialysis_clinic),
          updated_at = NOW()`,
       [
         patientId,
@@ -150,6 +167,8 @@ async function updatePatient({ patientId, orgScope, actorId, data }) {
         data.insurance_payer_id ?? null,
         data.comments || null,
         newMrn,
+        newIsDialysis,
+        newClinic,
       ]
     );
 

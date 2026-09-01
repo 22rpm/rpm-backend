@@ -76,6 +76,7 @@ async function getWorklist({ orgScope, userId, month, mine }) {
             DATE_FORMAT(p.date_of_birth, '%Y-%m-%d') AS date_of_birth,
             DATE_FORMAT(p.enrolled_at, '%Y-%m-%d') AS enrolled_at,
             p.program_status, p.comments,
+            p.is_dialysis, p.dialysis_clinic,
             ip.name AS insurance_payer
        FROM users u
        JOIN role r ON r.user_id = u.id AND r.role_type = 'patient'
@@ -173,6 +174,8 @@ async function getWorklist({ orgScope, userId, month, mine }) {
     program_status: r.program_status,
     last_login: r.last_login,
     comments: r.comments,
+    is_dialysis: !!r.is_dialysis,
+    dialysis_clinic: r.dialysis_clinic || null,
     insurance_payer: r.insurance_payer || null,
     conditions: condMap.get(r.id) || [],
     care_team: teamMap.get(r.id) || [],
@@ -184,4 +187,19 @@ async function getWorklist({ orgScope, userId, month, mine }) {
   return { month: win.label, mine: !!mine, patients };
 }
 
-module.exports = { getWorklist };
+// Distinct dialysis clinic names in the org — powers the patient-list filter dropdown
+// and the entry-form datalist (free text that self-normalizes toward existing values).
+async function listDialysisClinics(orgScope) {
+  const [rows] = await db.query(
+    `SELECT DISTINCT p.dialysis_clinic AS clinic
+       FROM patient_profiles p
+       JOIN users u ON u.id = p.user_id
+      WHERE u.organization_id = ?
+        AND p.dialysis_clinic IS NOT NULL AND p.dialysis_clinic <> ''
+      ORDER BY p.dialysis_clinic`,
+    [orgScope]
+  );
+  return rows.map((r) => r.clinic);
+}
+
+module.exports = { getWorklist, listDialysisClinics };

@@ -113,6 +113,8 @@ async function enrollPatient(req, res) {
       insurancePayerId: b.insurance_payer_id != null ? Number(b.insurance_payer_id) : null,
       comments: b.comments != null ? String(b.comments) : null,
       mrn: b.mrn != null ? String(b.mrn) : null,
+      isDialysis: b.is_dialysis === true || b.is_dialysis === 1 || b.is_dialysis === "true",
+      dialysisClinic: b.dialysis_clinic != null ? String(b.dialysis_clinic).trim().slice(0, 255) || null : null,
       conditions: Array.isArray(b.conditions) ? b.conditions.map((c) => c.trim()) : [],
       careTeam: Array.isArray(b.care_team) ? b.care_team.map(Number) : [],
       consent: b.consent

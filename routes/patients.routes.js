@@ -10,7 +10,7 @@ const {
   enrollPatient,
   getEnrollmentOptions,
 } = require("../controllers/patientEnrollment.controller");
-const { getWorklist } = require("../controllers/patientWorklist.controller");
+const { getWorklist, getDialysisClinics } = require("../controllers/patientWorklist.controller");
 const {
   getPatientForEdit,
   updatePatient,
@@ -45,6 +45,16 @@ router.get(
   requireRole("clinician", "admin", "super-admin"),
   resolveOrgScope,
   getEnrollmentOptions
+);
+
+// GET /api/patients/dialysis-clinics — distinct clinic names in the org, for the
+// patient-list filter dropdown and the entry-form datalist.
+router.get(
+  "/dialysis-clinics",
+  authRequired,
+  requireRole("clinician", "admin", "super-admin", "care_manager"),
+  resolveOrgScope,
+  getDialysisClinics
 );
 
 // GET /api/patients/worklist?month=YYYY-MM&mine=true — the staff worklist for

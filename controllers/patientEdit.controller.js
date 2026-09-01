@@ -83,6 +83,9 @@ async function updatePatient(req, res) {
       // Pass mrn through RAW (not `|| null`) so the service can tell "absent,
       // keep existing" (undefined) from "explicit clear" (""). See the service.
       mrn: b.mrn,
+      // Raw pass-through (like mrn): undefined = keep existing, else set/clear.
+      is_dialysis: b.is_dialysis,
+      dialysis_clinic: b.dialysis_clinic,
       conditions: Array.isArray(b.conditions)
         ? b.conditions.map((c) => c.trim()).filter(Boolean)
         : [],

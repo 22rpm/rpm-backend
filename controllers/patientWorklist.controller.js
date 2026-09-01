@@ -21,4 +21,14 @@ async function getWorklist(req, res) {
   }
 }
 
-module.exports = { getWorklist };
+async function getDialysisClinics(req, res) {
+  try {
+    const clinics = await worklistService.listDialysisClinics(req.orgScope);
+    return res.status(200).json({ ok: true, clinics });
+  } catch (err) {
+    console.error("getDialysisClinics error:", err);
+    return res.status(500).json({ ok: false, message: "Server error" });
+  }
+}
+
+module.exports = { getWorklist, getDialysisClinics };
