@@ -7,9 +7,27 @@ screenshots were Epic Haiku, a prescribing system — the contrast, not the mode
 Build order (accepted): **schema → RxNorm autocomplete → patient entry → clinician
 confirmation → photo/OCR last** (photo is S3-blocked; see §4).
 
-Status: **schema built** (`config/migrations/20260831140000_create_patient_medications.js`,
-applied to dev, replayed clean from scratch on the throwaway `rpm_db_reconcile`).
-Everything below the schema is designed, not yet built.
+Status: **schema built** (step 1), **RxNorm autocomplete built** (step 2, §1), and
+**patient-entry API built** (step 3 backend — see below). Remaining: the iOS patient
+UI (step 3 frontend), clinician confirmation (step 4), photo/OCR (step 5).
+
+### Step 3 backend — patient entry API (built)
+
+`services/medication.service.js`, `controllers/medication.controller.js`, routes on
+`/api/medications` (all `authRequired`; a patient acts on their OWN rows only):
+- `POST /` — create a reported medication. Always `unconfirmed`; a patient cannot set
+  `status`/`confirmed_*` (ignored), and `note_to_pharmacy` is never accepted from the
+  patient. Org is read authoritatively from `users`, not the token.
+- `GET /mine` — the patient's own list, all statuses, via a patient view that excludes
+  `note_to_pharmacy` and `confirmed_by`, includes `matched` and `reject_reason`.
+- `PATCH /:id` — edit own entry. **Any edit returns it to `unconfirmed` and clears
+  confirmation/rejection** — a patient-modified entry is always pending re-review.
+- `DELETE /:id` — remove own entry. Cross-patient access returns 404 (never reveals
+  another patient's row exists).
+
+Verified on dev: sneaked `status:'confirmed'`/`note_to_pharmacy` ignored; free-text
+entry is `matched:false`; editing a confirmed row reset it to unconfirmed and cleared
+`confirmed_by`/`confirmed_at`; cross-patient edit blocked 404.
 
 ## The one property that matters most
 
