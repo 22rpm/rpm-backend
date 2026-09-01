@@ -16,6 +16,8 @@
 //     surfaced to the clinician as `matched:false`; it is never an error here.
 
 const db = require("../config/db");
+const { canAccessPatient } = require("./patientAccess");
+const audit = require("./audit.service");
 
 function httpError(status, message) {
   const e = new Error(message);
@@ -128,16 +130,28 @@ async function updateMyMedication(user, id, input) {
   };
   if (!next.drug_name) throw httpError(400, "drug_name is required");
 
+  // Invalidation signal: if this row was CONFIRMED, preserve who/when confirmed into
+  // previously_confirmed_* before clearing, so the clinician sees their confirmation
+  // was invalidated (revalidation_needed) rather than a silent revert. If the row was
+  // already unconfirmed (possibly with an earlier invalidation still pending), leave
+  // previously_confirmed_* untouched — a second edit must not erase the first
+  // invalidation.
+  const wasConfirmed = row.status === "confirmed";
+
   await db.query(
     `UPDATE patient_medications SET
        drug_name = ?, rxcui = ?, dose = ?, route = ?, frequency = ?,
        admin_instructions = ?, pharmacy_name = ?, pharmacy_phone = ?,
        status = 'unconfirmed', confirmed_by = NULL, confirmed_at = NULL, reject_reason = NULL,
+       previously_confirmed_by = CASE WHEN ? THEN ? ELSE previously_confirmed_by END,
+       previously_confirmed_at = CASE WHEN ? THEN ? ELSE previously_confirmed_at END,
        updated_at = ?
      WHERE id = ? AND patient_id = ?`,
     [
       next.drug_name, next.rxcui, next.dose, next.route, next.frequency,
       next.admin_instructions, next.pharmacy_name, next.pharmacy_phone,
+      wasConfirmed, row.confirmed_by,
+      wasConfirmed, row.confirmed_at,
       new Date(), id, user.id,
     ]
   );
@@ -151,9 +165,136 @@ async function deleteMyMedication(user, id) {
   return { deleted: true, id: Number(id) };
 }
 
+// ===========================================================================
+// Clinician side (step 4). Visibility follows canAccessPatient (org-wide roles see
+// all patients in the org; a clinician sees only their assigned patients). CONFIRM /
+// REJECT are clinician-only — enforced by requireRole("clinician") at the route AND
+// re-checked here by canAccessPatient (which, for a clinician, requires assignment).
+// A care_manager/admin can READ the list but the route gate blocks them from
+// confirm/reject: confirming what a patient is taking is a clinical judgment, the same
+// class of act as signing the note.
+// ===========================================================================
+
+// Shape a row for a STAFF viewer. Includes note_to_pharmacy (clinic-facing, just not
+// patient-facing) and the confirmation audit fields + names. `revalidation_needed`
+// flags an entry a clinician had confirmed that the patient has since edited.
+function toClinicianView(r) {
+  const revalidationNeeded = r.status === "unconfirmed" && r.previously_confirmed_at != null;
+  return {
+    id: r.id,
+    patient_id: r.patient_id,
+    drug_name: r.drug_name,
+    rxcui: r.rxcui || null,
+    matched: r.rxcui != null,
+    dose: r.dose,
+    route: r.route,
+    frequency: r.frequency,
+    admin_instructions: r.admin_instructions,
+    pharmacy_name: r.pharmacy_name,
+    pharmacy_phone: r.pharmacy_phone,
+    note_to_pharmacy: r.note_to_pharmacy,
+    source: r.source,
+    status: r.status,
+    confirmed_by: r.confirmed_by,
+    confirmed_by_name: r.confirmed_by_name || null,
+    confirmed_at: r.confirmed_at,
+    reject_reason: r.reject_reason,
+    revalidation_needed: revalidationNeeded,
+    previously_confirmed_by: revalidationNeeded ? r.previously_confirmed_by : null,
+    previously_confirmed_by_name: revalidationNeeded ? r.previously_confirmed_by_name || null : null,
+    previously_confirmed_at: revalidationNeeded ? r.previously_confirmed_at : null,
+    // When it last changed — pairs with previously_confirmed_at to show the clinician
+    // "you confirmed on X; patient changed it on Y".
+    updated_at: r.updated_at,
+    created_at: r.created_at,
+  };
+}
+
+const CLINICIAN_SELECT = `
+  SELECT m.*,
+         cu.name AS confirmed_by_name,
+         pu.name AS previously_confirmed_by_name
+    FROM patient_medications m
+    LEFT JOIN users cu ON cu.id = m.confirmed_by
+    LEFT JOIN users pu ON pu.id = m.previously_confirmed_by
+`;
+
+// The patient's medication list for a staff viewer. canAccessPatient self-enforces the
+// org boundary and (for a clinician) the assignment requirement.
+async function listPatientMedications(actor, orgScope, patientId) {
+  const allowed = await canAccessPatient(actor, orgScope, patientId);
+  if (!allowed) throw httpError(404, "Patient not found");
+  const [rows] = await db.query(
+    `${CLINICIAN_SELECT} WHERE m.patient_id = ? ORDER BY m.created_at DESC, m.id DESC`,
+    [patientId]
+  );
+  return rows.map(toClinicianView);
+}
+
+async function getStaffRow(id) {
+  const [rows] = await db.query(`${CLINICIAN_SELECT} WHERE m.id = ?`, [id]);
+  return rows[0] || null;
+}
+
+// Clinician confirms an entry. Route already gated to requireRole("clinician"); here we
+// re-check patient access (org + assignment) via the row's patient.
+async function confirmMedication(actor, orgScope, id, req) {
+  const row = await getStaffRow(id);
+  if (!row) throw httpError(404, "Medication not found");
+  const allowed = await canAccessPatient(actor, orgScope, row.patient_id);
+  if (!allowed) throw httpError(404, "Medication not found");
+
+  await db.query(
+    `UPDATE patient_medications SET
+       status = 'confirmed', confirmed_by = ?, confirmed_at = ?, reject_reason = NULL,
+       previously_confirmed_by = NULL, previously_confirmed_at = NULL, updated_at = ?
+     WHERE id = ?`,
+    [actor.id, new Date(), new Date(), id]
+  );
+  await audit.record({
+    req,
+    action: audit.ACTIONS.MEDICATION_CONFIRM,
+    entityType: "patient_medication",
+    entityId: id,
+    metadata: { patient_id: row.patient_id, drug_name: row.drug_name, was_revalidation: row.previously_confirmed_at != null },
+  });
+  return toClinicianView(await getStaffRow(id));
+}
+
+// Clinician rejects an entry. reject_reason is required and shown to the patient so they
+// know what to fix. The rejecting clinician + timestamp are captured in the audit log;
+// confirmed_by stays NULL (a rejected row is never "confirmed by" anyone).
+async function rejectMedication(actor, orgScope, id, reason, req) {
+  const r = clean(reason, 500);
+  if (!r) throw httpError(400, "A reject reason is required");
+  const row = await getStaffRow(id);
+  if (!row) throw httpError(404, "Medication not found");
+  const allowed = await canAccessPatient(actor, orgScope, row.patient_id);
+  if (!allowed) throw httpError(404, "Medication not found");
+
+  await db.query(
+    `UPDATE patient_medications SET
+       status = 'rejected', reject_reason = ?, confirmed_by = NULL, confirmed_at = NULL,
+       previously_confirmed_by = NULL, previously_confirmed_at = NULL, updated_at = ?
+     WHERE id = ?`,
+    [r, new Date(), id]
+  );
+  await audit.record({
+    req,
+    action: audit.ACTIONS.MEDICATION_REJECT,
+    entityType: "patient_medication",
+    entityId: id,
+    metadata: { patient_id: row.patient_id, drug_name: row.drug_name, reason: r },
+  });
+  return toClinicianView(await getStaffRow(id));
+}
+
 module.exports = {
   createMedication,
   listMyMedications,
   updateMyMedication,
   deleteMyMedication,
+  listPatientMedications,
+  confirmMedication,
+  rejectMedication,
 };

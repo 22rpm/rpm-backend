@@ -7,9 +7,10 @@ screenshots were Epic Haiku, a prescribing system — the contrast, not the mode
 Build order (accepted): **schema → RxNorm autocomplete → patient entry → clinician
 confirmation → photo/OCR last** (photo is S3-blocked; see §4).
 
-Status: **schema built** (step 1), **RxNorm autocomplete built** (step 2, §1), and
-**patient-entry API built** (step 3 backend — see below). Remaining: the iOS patient
-UI (step 3 frontend), clinician confirmation (step 4), photo/OCR (step 5).
+Status: **schema built** (step 1), **RxNorm autocomplete built** (step 2, §1),
+**patient-entry API built** (step 3 backend), and **clinician confirmation API built**
+(step 4 backend — see below). Remaining: the iOS patient UI (step 3 frontend), the
+dashboard Medications tab (step 4 frontend), photo/OCR (step 5).
 
 ### Step 3 backend — patient entry API (built)
 
@@ -28,6 +29,41 @@ UI (step 3 frontend), clinician confirmation (step 4), photo/OCR (step 5).
 Verified on dev: sneaked `status:'confirmed'`/`note_to_pharmacy` ignored; free-text
 entry is `matched:false`; editing a confirmed row reset it to unconfirmed and cleared
 `confirmed_by`/`confirmed_at`; cross-patient edit blocked 404.
+
+### Step 4 backend — clinician confirmation API (built)
+
+Added to the same service/controller/router:
+- `GET /patient/:patientId` — staff read of a patient's list. **Visibility** follows
+  `canAccessPatient`: org-wide roles (care_manager/admin/super-admin) see every
+  patient in the org; a clinician sees only their assigned patients. Returns a staff
+  view (includes `note_to_pharmacy` — clinic-facing, just not patient-facing — plus
+  confirmation audit fields and confirmer names).
+- `PATCH /:id/confirm` and `PATCH /:id/reject` — **CLINICIAN-ONLY**
+  (`requireRole("clinician")`, the same gate as signing the note), with
+  `canAccessPatient` re-checked in the service so a clinician can only act on assigned
+  patients. **A care_manager can read the list but not confirm/reject** — confirming
+  what a patient is taking is a clinical judgment, the same class of act as the note
+  signature (which excludes even super-admin). Reject requires a reason (shown to the
+  patient). Both actions are audit-logged (`medication.confirm` / `medication.reject`);
+  the rejecting clinician + timestamp live in the audit trail (`confirmed_by` stays
+  NULL on a rejected row, so a rejected entry never looks "confirmed by" anyone).
+
+**Confirmation is not silently reverted.** When a clinician has confirmed an entry and
+the patient then edits it, the row resets to `unconfirmed` (a confirmed record must not
+drift) — but `previously_confirmed_by`/`previously_confirmed_at` are preserved
+(migration `20260831160000`), and the staff view exposes `revalidation_needed` =
+(`unconfirmed` AND previously confirmed). The clinician sees a distinct "you confirmed
+this on X; the patient changed it on Y — re-review" state in the queue, not a generic
+new entry. A fresh confirm/reject clears the signal. This is a **passive** queue signal
+for v1; an active push to the confirming clinician is a followup (#7). Verified on dev:
+confirm records the clinician; a subsequent patient edit set `revalidation_needed` with
+the prior confirmer's name; re-confirm cleared it; unassigned clinician got 404.
+
+**Attestation care (Q5, revisited):** clinician confirmation now carries an audit trail
+(`confirmed_by`/`confirmed_at` on-row for confirms; actor+time in the audit log for
+both) — the "some of the note's care, not all" standard from §5. It still does NOT
+reuse the note's attestation string or hash, and remains a separate act that does not
+feed the signed note.
 
 ## The one property that matters most
 
@@ -212,3 +248,7 @@ of the note's care, not all:
 5. **RxNorm local import** — if we later want zero external calls.
 6. **Schedule the cache refresh** — `scripts/refreshRxNormCache.js` is not
    self-scheduling. Wire it to cron/launchd/CI (~monthly) in the deploy environment.
+7. **Active revalidation notice** — when a patient edit invalidates a confirmation, the
+   confirming clinician currently learns of it only via the queue's `revalidation_needed`
+   flag (passive). An active push/inbox notice is a followup once a notification channel
+   exists.

@@ -61,6 +61,10 @@ const ACTIONS = {
 
   // Billing documents
   RPM_NOTE_SIGNED: "rpm_note.signed",
+
+  // Medications (patient-reported; clinician confirms/rejects)
+  MEDICATION_CONFIRM: "medication.confirm",
+  MEDICATION_REJECT: "medication.reject",
 };
 
 /**

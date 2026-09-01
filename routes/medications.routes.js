@@ -6,12 +6,16 @@
 const express = require("express");
 const router = express.Router();
 const { authRequired, requireRole } = require("../middleware/auth");
+const { resolveOrgScope } = require("../middleware/orgScope");
 const { drugSearch, cacheStatus, refreshCache } = require("../controllers/rxnorm.controller");
 const {
   createMyMedication,
   listMyMedications,
   updateMyMedication,
   deleteMyMedication,
+  getPatientMedications,
+  confirmMedication,
+  rejectMedication,
 } = require("../controllers/medication.controller");
 
 // Autocomplete. Any authenticated user (a patient searching for their medication).
@@ -32,5 +36,15 @@ router.get("/mine", authRequired, listMyMedications);
 router.post("/", authRequired, createMyMedication);
 router.patch("/:id", authRequired, updateMyMedication);
 router.delete("/:id", authRequired, deleteMyMedication);
+
+// --- Clinician confirmation (step 4). ---
+// READ: org-wide roles + assigned clinician can see a patient's list (visibility via
+// canAccessPatient in the service).
+router.get("/patient/:patientId", authRequired, resolveOrgScope, getPatientMedications);
+// CONFIRM / REJECT: CLINICIAN-ONLY — the same gate as signing the note. A care_manager
+// can read the list but confirming what a patient is taking is a clinical judgment.
+// canAccessPatient (assignment) is re-checked in the service.
+router.patch("/:id/confirm", authRequired, resolveOrgScope, requireRole("clinician"), confirmMedication);
+router.patch("/:id/reject", authRequired, resolveOrgScope, requireRole("clinician"), rejectMedication);
 
 module.exports = router;
