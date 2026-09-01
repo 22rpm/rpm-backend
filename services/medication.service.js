@@ -33,6 +33,86 @@ function clean(v, max) {
   return s.slice(0, max);
 }
 
+// A non-negative number, or null. For dispense_quantity / refills_remaining.
+function num(v) {
+  if (v == null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+// A YYYY-MM-DD date string, or null. Stored as DATE.
+function cleanDate(v) {
+  if (v == null || v === "") return null;
+  const s = String(v).trim();
+  const m = s.match(/^\d{4}-\d{2}-\d{2}/);
+  if (!m) return null;
+  const d = new Date(m[0]);
+  return isNaN(d.getTime()) ? null : m[0];
+}
+
+// ---- Reorder projection (Option B: computed, always an ESTIMATE) ----
+const REORDER_LOW_DAYS = 10; // "running low" threshold
+
+// Doses per day from the (patient-reported, now mostly chip-picked) frequency. Returns
+// null when it can't be known — e.g. "as needed" — so no estimate is fabricated.
+function dosesPerDay(frequency) {
+  const f = (frequency || "").toLowerCase();
+  if (!f) return null;
+  if (/as needed|as-needed|\bprn\b/.test(f)) return null;
+  if (/every other day/.test(f)) return 0.5;
+  if (/weekly|once a week|every week/.test(f)) return 1 / 7;
+  if (/four times|4 times|\bqid\b/.test(f)) return 4;
+  if (/three times|3 times|\btid\b/.test(f)) return 3;
+  if (/twice|2 times|two times|\bbid\b/.test(f)) return 2;
+  if (/once|every morning|at bedtime|nightly|daily|every day|\bqd\b/.test(f)) return 1;
+  const m = f.match(/(\d+(?:\.\d+)?)\s*times?/); // "5 times a day"
+  if (m) return Number(m[1]);
+  return null;
+}
+
+// Units taken per dose from the dose field ("1 tablet", "half a tablet", "2 caps").
+// Returns null when it isn't a count in the same unit as dispense_quantity (e.g. a
+// strength like "10 mg"), so we don't divide incomparable quantities.
+function unitsPerDose(dose) {
+  const d = (dose || "").toLowerCase();
+  if (!d) return null;
+  if (/half|1\/2|½/.test(d)) return 0.5;
+  const frac = d.match(/(\d+)\s*\/\s*(\d+)/);
+  if (frac) return Number(frac[1]) / Number(frac[2]);
+  const n = d.match(/(\d+(?:\.\d+)?)/);
+  if (!n) return null;
+  // A strength value (mg/mcg/ml/…) is NOT a unit count — can't deplete the quantity.
+  if (/\b(mg|mcg|g|ml|%|units?|iu)\b/.test(d)) return null;
+  return Number(n[1]);
+}
+
+// Build the reorder object for a row. `days_left` is null when it can't be computed;
+// refills info is surfaced whenever present, independent of the date. Callers/UI must
+// present days_left as an estimate, never a hard date.
+function computeReorder(r, nowMs) {
+  const refills = r.refills_remaining == null ? null : Number(r.refills_remaining);
+  const out = {
+    estimate: true,
+    days_left: null,
+    running_low: false,
+    refills_remaining: refills,
+    needs_new_rx: refills === 0, // 0 refills => new prescription, not a reorder
+  };
+  const qty = r.dispense_quantity == null ? null : Number(r.dispense_quantity);
+  if (qty == null || qty <= 0 || !r.last_filled_date) return out;
+  const perDay = dosesPerDay(r.frequency);
+  const perDose = unitsPerDose(r.dose);
+  if (!perDay || !perDose) return out; // can't assume a consumption rate
+  const rate = perDay * perDose; // units/day
+  if (rate <= 0) return out;
+  const filledMs = new Date(r.last_filled_date).getTime();
+  if (isNaN(filledMs)) return out;
+  const elapsed = Math.floor(((nowMs || Date.now()) - filledMs) / 86400000);
+  const totalDays = qty / rate;
+  out.days_left = Math.round(totalDays - elapsed);
+  out.running_low = out.days_left <= REORDER_LOW_DAYS;
+  return out;
+}
+
 // Shape a row for the PATIENT app. Excludes clinic-only fields (note_to_pharmacy) and
 // internal ids (confirmed_by). Includes reject_reason so the patient can see why an
 // entry needs fixing, and `matched` so "not matched to a drug database" is explicit.
@@ -52,6 +132,10 @@ function toPatientView(r) {
     status: r.status, // unconfirmed | confirmed | rejected
     reject_reason: r.reject_reason,
     confirmed_at: r.confirmed_at,
+    dispense_quantity: r.dispense_quantity,
+    last_filled_date: r.last_filled_date,
+    refills_remaining: r.refills_remaining,
+    reorder: computeReorder(r),
     created_at: r.created_at,
     updated_at: r.updated_at,
   };
@@ -80,8 +164,9 @@ async function createMedication(user, input) {
   const [result] = await db.query(
     `INSERT INTO patient_medications
        (patient_id, organization_id, reported_by, drug_name, rxcui, dose, route,
-        frequency, admin_instructions, pharmacy_name, pharmacy_phone, source, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unconfirmed')`,
+        frequency, admin_instructions, pharmacy_name, pharmacy_phone,
+        dispense_quantity, last_filled_date, refills_remaining, source, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unconfirmed')`,
     [
       user.id,
       u.organization_id,
@@ -94,6 +179,9 @@ async function createMedication(user, input) {
       clean(input.admin_instructions, 500),
       clean(input.pharmacy_name, 255),
       clean(input.pharmacy_phone, 40),
+      num(input.dispense_quantity),
+      cleanDate(input.last_filled_date),
+      num(input.refills_remaining),
       source,
       // note_to_pharmacy intentionally NOT accepted from the patient.
     ]
@@ -127,6 +215,9 @@ async function updateMyMedication(user, id, input) {
       input.admin_instructions !== undefined ? clean(input.admin_instructions, 500) : row.admin_instructions,
     pharmacy_name: input.pharmacy_name !== undefined ? clean(input.pharmacy_name, 255) : row.pharmacy_name,
     pharmacy_phone: input.pharmacy_phone !== undefined ? clean(input.pharmacy_phone, 40) : row.pharmacy_phone,
+    dispense_quantity: input.dispense_quantity !== undefined ? num(input.dispense_quantity) : row.dispense_quantity,
+    last_filled_date: input.last_filled_date !== undefined ? cleanDate(input.last_filled_date) : row.last_filled_date,
+    refills_remaining: input.refills_remaining !== undefined ? num(input.refills_remaining) : row.refills_remaining,
   };
   if (!next.drug_name) throw httpError(400, "drug_name is required");
 
@@ -142,6 +233,7 @@ async function updateMyMedication(user, id, input) {
     `UPDATE patient_medications SET
        drug_name = ?, rxcui = ?, dose = ?, route = ?, frequency = ?,
        admin_instructions = ?, pharmacy_name = ?, pharmacy_phone = ?,
+       dispense_quantity = ?, last_filled_date = ?, refills_remaining = ?,
        status = 'unconfirmed', confirmed_by = NULL, confirmed_at = NULL, reject_reason = NULL,
        previously_confirmed_by = CASE WHEN ? THEN ? ELSE previously_confirmed_by END,
        previously_confirmed_at = CASE WHEN ? THEN ? ELSE previously_confirmed_at END,
@@ -150,6 +242,7 @@ async function updateMyMedication(user, id, input) {
     [
       next.drug_name, next.rxcui, next.dose, next.route, next.frequency,
       next.admin_instructions, next.pharmacy_name, next.pharmacy_phone,
+      next.dispense_quantity, next.last_filled_date, next.refills_remaining,
       wasConfirmed, row.confirmed_by,
       wasConfirmed, row.confirmed_at,
       new Date(), id, user.id,
@@ -193,6 +286,10 @@ function toClinicianView(r) {
     pharmacy_name: r.pharmacy_name,
     pharmacy_phone: r.pharmacy_phone,
     note_to_pharmacy: r.note_to_pharmacy,
+    dispense_quantity: r.dispense_quantity,
+    last_filled_date: r.last_filled_date,
+    refills_remaining: r.refills_remaining,
+    reorder: computeReorder(r),
     source: r.source,
     status: r.status,
     confirmed_by: r.confirmed_by,
