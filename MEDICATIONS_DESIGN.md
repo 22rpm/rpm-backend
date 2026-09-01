@@ -127,6 +127,15 @@ live lisinopril search, a forced-outage fallback returned rxcui-bearing rows.)
 Rate-limit posture: typeahead is live per *search*, not per keystroke — the client
 must debounce, and the service enforces a 2-char minimum and a 20-result cap.
 
+**Update (device testing) — search fix.** Live `drugs.json` results are filtered to the
+patient-facing term types **BN/SBD/SCD** (drops ingredient/pack/dose-form noise), and
+because `drugs.json` needs a fairly complete name (a partial like "lisin" → 0), a
+**cache prefix fallback** runs when live yields nothing — that's what makes partial
+typing autocomplete (verified: "lisin" → 16 cache hits). And `drug-search` + the new
+`ndc/:ndc` are now **public** (no `authRequired`): RxNorm reference data, no PHI, no
+patient identifiers — autocomplete must not depend on session/cookie state (a flaky
+cookie had made it silently return nothing on device).
+
 **Local import** (RRF release files; free UMLS/UTS account for the full release, or the
 license-free prescribable subset) — deferred; an option later for zero external calls.
 
@@ -161,6 +170,26 @@ cloud model, that is an explicit BAA decision, not a default.
 score: OCR only pre-fills an editable draft → the patient reviews/corrects → the
 entry enters `unconfirmed` → a clinician must explicitly confirm. There is no path
 from camera to confirmed. `source=photo` grants zero trust.
+
+**Update (device testing) — barcode-first, and no name-guessing.** Field extraction
+from OCR text is unreliable (a real test grabbed a pharmacy-metadata line instead of
+"Linzess"). Two changes:
+- **Barcode → NDC → exact product.** The native module now runs
+  `VNDetectBarcodesRequest` alongside text and returns `{ barcodes, lines }`. The client
+  resolves an NDC — from a barcode payload, else a printed-NDC regex in the text — via
+  the public `GET /ndc/:ndc` (RxNorm `ndcstatus`) to the exact drug/strength/form. A
+  barcode-derived NDC is *validated by the lookup* (a bad GTIN-parse just fails and
+  falls through), so it never yields a wrong drug.
+- **NDC fills name / strength / form ONLY — never dose or frequency.** An NDC identifies
+  the *product*, not what the patient takes (half a 50 mg tablet: NDC says 50 mg, dose is
+  25 mg). Dose and frequency are left blank for the patient; the "dose" field is relabeled
+  "How much you take each time (e.g., 1 tablet, half a tablet)" and is never pre-filled
+  from a strength — this also fixed the autocomplete-pick path, which used to shove the
+  strength into dose.
+- **No NDC → show the recognized lines, patient taps the name.** We never guess the name:
+  a confident wrong name is worse than a list to pick from.
+- **Structured pickers:** Form and Frequency are tap-chips (closed lists) with a
+  free-text fallback, not typed fields.
 
 **Built (step 5, iOS):** `labelOcr.js` captures via the OS camera
 (`react-native-image-picker`, `saveToPhotos:false`), then reads the label on-device with
