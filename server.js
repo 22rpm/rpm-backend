@@ -161,6 +161,7 @@ const emailRoutes = require("./routes/emailRoute");
 const careRoutes = require("./routes/care.routes");
 const patientsRoutes = require("./routes/patients.routes");
 const medicationsRoutes = require("./routes/medications.routes");
+const scheduledCallsRoutes = require("./routes/scheduledCall.routes");
 const fs = require("fs");
 const path = require("path");
 
@@ -222,6 +223,7 @@ app.use("/api/email", emailRoutes);
 app.use("/api/care", careRoutes);
 app.use("/api/patients", patientsRoutes);
 app.use("/api/medications", medicationsRoutes);
+app.use("/api/scheduled-calls", scheduledCallsRoutes);
 // Add this temporary test route to check your current setup
 app.get("/debug-twilio", (req, res) => {
   const accountSid = process.env.TWILIO_ACCOUNT_SID;

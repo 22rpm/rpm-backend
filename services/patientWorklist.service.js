@@ -156,6 +156,30 @@ async function getWorklist({ orgScope, userId, month, mine }) {
     mins.map((r) => [r.patient_id, Math.floor(Number(r.secs || 0) / 60)])
   );
   const billMap = new Map(bills.map((r) => [r.patient_id, r.status]));
+
+  // Scheduled calls: next upcoming + an overdue flag (still 'scheduled', past its time —
+  // a patient nobody talked to). Plus the last RECORDED call (patient_calls only,
+  // head-of-chain), distinct from last_interaction which also counts notes.
+  const [sched] = await db.query(
+    `SELECT patient_id,
+            MIN(CASE WHEN status='scheduled' AND scheduled_at >= NOW() THEN scheduled_at END) AS next_scheduled,
+            MAX(CASE WHEN status='scheduled' AND scheduled_at <  NOW() THEN 1 ELSE 0 END) AS overdue
+       FROM scheduled_calls
+      WHERE organization_id = ? AND patient_id IN (?)
+      GROUP BY patient_id`,
+    [orgScope, ids]
+  );
+  const [lastCall] = await db.query(
+    `SELECT c.patient_id, MAX(c.started_at) AS last_call
+       FROM patient_calls c
+       LEFT JOIN patient_calls cs ON cs.supersedes = c.id
+      WHERE cs.id IS NULL AND c.organization_id = ? AND c.patient_id IN (?)
+      GROUP BY c.patient_id`,
+    [orgScope, ids]
+  );
+  const schedMap = new Map(sched.map((r) => [r.patient_id, r]));
+  const lastCallMap = new Map(lastCall.map((r) => [r.patient_id, r.last_call]));
+
   const lastMap = new Map();
   for (const r of inter) {
     if (!lastMap.has(r.patient_id))
@@ -182,6 +206,9 @@ async function getWorklist({ orgScope, userId, month, mine }) {
     total_minutes: minMap.get(r.id) || 0,
     billing_status: billMap.get(r.id) || null,
     last_interaction: lastMap.get(r.id) || null,
+    last_call: lastCallMap.get(r.id) || null,
+    next_scheduled_call: schedMap.get(r.id)?.next_scheduled || null,
+    scheduled_overdue: !!(schedMap.get(r.id)?.overdue),
   }));
 
   return { month: win.label, mine: !!mine, patients };
