@@ -39,9 +39,13 @@ monthly 99457. Surfaced two ways on the **patient list**: a red "Overdue" badge 
 an "Overdue — never logged" block first and loud.
 
 ## Surface
-- Backend: `scheduled_calls` (migration `20260901140000`); `/api/scheduled-calls`
-  (list window, overdue, create/reschedule/cancel/no-show = org admin; complete = clinical
-  staff); worklist returns `next_scheduled_call`, `scheduled_overdue`, `last_call`.
+- Backend: `scheduled_calls` (migration `20260901140000`); `/api/scheduled-calls` — all
+  routes (list, overdue, create/reschedule/cancel/no-show, complete) are **clinical staff**
+  (clinician, care_manager, admin, super-admin): calling patients is clinical staff's job,
+  and a physician shouldn't need an admin to schedule. The org/assignment boundary still
+  holds — `create` checks `canAccessPatient`, so a clinician can only schedule for a
+  patient they're assigned to; care_manager/admin are org-wide. Worklist returns
+  `next_scheduled_call`, `scheduled_overdue`, `last_call`.
 - Dashboard: `CallSchedule` page (route `/call-schedule`, Sidebar "Call Schedule");
   `PatientWorklist` columns "Next call" (+ overdue badge) and "Last call" + overdue filter.
 
