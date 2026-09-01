@@ -7,7 +7,7 @@ const express = require("express");
 const router = express.Router();
 const { authRequired, requireRole } = require("../middleware/auth");
 const { resolveOrgScope } = require("../middleware/orgScope");
-const { drugSearch, cacheStatus, refreshCache } = require("../controllers/rxnorm.controller");
+const { drugSearch, ndcLookup, cacheStatus, refreshCache } = require("../controllers/rxnorm.controller");
 const {
   createMyMedication,
   listMyMedications,
@@ -18,10 +18,16 @@ const {
   rejectMedication,
 } = require("../controllers/medication.controller");
 
-// Autocomplete. Any authenticated user (a patient searching for their medication).
-// Reference data only — no org scoping, no PHI. The client should debounce; the
-// service enforces a minimum query length and result cap.
-router.get("/drug-search", authRequired, drugSearch);
+// Autocomplete + NDC lookup. PUBLIC reference data (RxNorm) — no PHI, no patient
+// identifiers, no org scoping. Deliberately NOT authRequired: autocomplete must not
+// depend on session/cookie state (a flaky cookie previously made it silently return
+// nothing). The service enforces a minimum query length and result cap; the client
+// should debounce.
+router.get("/drug-search", drugSearch);
+
+// Barcode / printed-NDC path: NDC -> exact drug (name, strength, form). Public, same
+// rationale as drug-search.
+router.get("/ndc/:ndc", ndcLookup);
 
 // Ops: cache freshness (last refresh, age, stale flag). Staff only.
 router.get("/rxnorm/status", authRequired, requireRole("super-admin", "admin"), cacheStatus);

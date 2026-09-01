@@ -17,6 +17,19 @@ async function drugSearch(req, res) {
   }
 }
 
+// NDC -> exact drug (barcode / printed-NDC path). Reference data, no PHI. Returns
+// { ok, result } where result is null when the NDC doesn't resolve — the client then
+// falls back to the text picker. The result identifies the product only; the client
+// must NOT prefill the patient's dose from the strength.
+async function ndcLookup(req, res) {
+  try {
+    const result = await rxnorm.lookupNdc(req.params.ndc);
+    return res.status(200).json({ ok: true, result });
+  } catch (err) {
+    return res.status(500).json({ ok: false, message: "NDC lookup failed" });
+  }
+}
+
 async function cacheStatus(req, res) {
   try {
     const status = await rxnorm.getCacheStatus();
@@ -37,4 +50,4 @@ async function refreshCache(req, res) {
   }
 }
 
-module.exports = { drugSearch, cacheStatus, refreshCache };
+module.exports = { drugSearch, ndcLookup, cacheStatus, refreshCache };

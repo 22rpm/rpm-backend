@@ -24,6 +24,10 @@ const REFRESH_TIMEOUT_MS = 30000; // the displaynames dump is large
 const MIN_QUERY_LEN = 2; // bound load; client should also debounce
 const MAX_RESULTS = 20;
 const STALE_AFTER_DAYS = 90; // surfaced as a warning only; never disables the cache
+// Term types a PATIENT should pick from: BN (brand name), SBD (branded drug w/
+// strength+form), SCD (clinical/generic drug w/ strength+form). Excludes ingredients,
+// packs (BPCK/GPCK) and dose-form-only concepts — noise a patient can't act on.
+const KEEP_TTY = new Set(["BN", "SBD", "SCD"]);
 
 // ---- small fetch helper with a hard timeout (Node 24 native fetch) ----
 async function fetchJson(url, timeoutMs) {
@@ -100,34 +104,68 @@ async function searchCache(q) {
 // The autocomplete entry point. Returns { results, degraded, source }.
 //   degraded=true  -> served from cache (RxNav unreachable); client should nudge
 //                     "search is limited — you can type your medication name".
+// Live drugs.json searches broadly across sources; results are filtered to the
+// patient-facing term types (BN/SBD/SCD). drugs.json needs a fairly complete name
+// (a partial like "lisin" returns 0), so when live yields nothing we fall to the
+// local cache's PREFIX search — that's what makes partial typing autocomplete.
 async function searchDrugs(query) {
   const q = (query || "").trim();
   if (q.length < MIN_QUERY_LEN) return { results: [], degraded: false, source: "none" };
 
-  // Tier 1: live.
+  // Tier 1: live (all sources), keep only BN/SBD/SCD.
   try {
     const json = await fetchJson(
       `${RXNAV_BASE}/drugs.json?name=${encodeURIComponent(q)}`,
       LIVE_TIMEOUT_MS
     );
-    const parsed = parseDrugGroup(json).slice(0, MAX_RESULTS);
-    warmCache(parsed); // fire-and-forget enrichment (awaited-free by design)
+    const parsed = parseDrugGroup(json)
+      .filter((r) => KEEP_TTY.has(r.tty))
+      .slice(0, MAX_RESULTS);
+    if (parsed.length) {
+      warmCache(parsed); // fire-and-forget enrichment
+      return {
+        results: parsed.map((r) => ({ ...r, matched: true })),
+        degraded: false,
+        source: "live",
+      };
+    }
+    // Live reachable but no full-name match (e.g. a partial) -> cache prefix search.
+    const results = await searchCache(q);
+    return { results, degraded: false, source: results.length ? "cache" : "none" };
+  } catch (_) {
+    // Live unreachable -> cache.
+    try {
+      const results = await searchCache(q);
+      return { results, degraded: true, source: results.length ? "cache" : "none" };
+    } catch (_) {
+      return { results: [], degraded: true, source: "none" };
+    }
+  }
+}
+
+// NDC -> exact drug. One call: ndcstatus.json returns the concept's rxcui and
+// conceptName (which carries the manufactured strength AND form). Returns null if the
+// NDC doesn't resolve. NOTE: this identifies the PRODUCT (drug/strength/form) — it does
+// NOT tell you the patient's dose (someone may take half a tablet), so callers must not
+// treat the strength as the dose. Public reference data — no PHI.
+async function lookupNdc(ndc) {
+  const clean = String(ndc || "").replace(/\D/g, "");
+  if (clean.length < 8 || clean.length > 12) return null; // NDCs are 10-11 digits
+  try {
+    const json = await fetchJson(
+      `${RXNAV_BASE}/ndcstatus.json?ndc=${encodeURIComponent(clean)}`,
+      LIVE_TIMEOUT_MS
+    );
+    const st = json?.ndcStatus;
+    if (!st || !st.rxcui) return null;
     return {
-      results: parsed.map((r) => ({ ...r, matched: true })),
-      degraded: false,
-      source: "live",
+      ndc: clean,
+      rxcui: String(st.rxcui),
+      name: st.conceptName || null, // e.g. "linaclotide 0.145 MG Oral Capsule [Linzess]"
+      active: st.status === "ACTIVE",
     };
   } catch (_) {
-    // fall through to cache
-  }
-
-  // Tier 2: cache.
-  try {
-    const results = await searchCache(q);
-    return { results, degraded: true, source: "cache" };
-  } catch (_) {
-    // Tier 3: nothing to offer; caller falls to free text.
-    return { results: [], degraded: true, source: "none" };
+    return null;
   }
 }
 
@@ -194,4 +232,4 @@ async function getCacheStatus() {
   };
 }
 
-module.exports = { searchDrugs, refreshCache, getCacheStatus, MIN_QUERY_LEN };
+module.exports = { searchDrugs, lookupNdc, refreshCache, getCacheStatus, MIN_QUERY_LEN };
