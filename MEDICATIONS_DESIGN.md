@@ -179,7 +179,10 @@ from OCR text is unreliable (a real test grabbed a pharmacy-metadata line instea
   resolves an NDC — from a barcode payload, else a printed-NDC regex in the text — via
   the public `GET /ndc/:ndc` (RxNorm `ndcstatus`) to the exact drug/strength/form. A
   barcode-derived NDC is *validated by the lookup* (a bad GTIN-parse just fails and
-  falls through), so it never yields a wrong drug.
+  falls through), so it never yields a wrong drug. **Only an ACTIVE concept counts as a
+  match** — an obsolete NDC resolving as though it were a real drug is the
+  silently-wrong-but-confident case, so `active:false` (or unresolved) falls through to
+  the line picker for the patient to choose.
 - **NDC fills name / strength / form ONLY — never dose or frequency.** An NDC identifies
   the *product*, not what the patient takes (half a 50 mg tablet: NDC says 50 mg, dose is
   25 mg). Dose and frequency are left blank for the patient; the "dose" field is relabeled
