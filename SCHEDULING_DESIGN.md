@@ -49,4 +49,9 @@ an "Overdue — never logged" block first and loud.
 - Reschedule history (v1 is update-in-place).
 - Time-zone: overdue uses server `NOW()`; fine at day granularity for a monthly call, but
   revisit alongside the clinic-tz work if hour-level precision ever matters.
-- A month-grid calendar view (v1 is an agenda: overdue + day-grouped list).
+- Layout: the page is **patient-centric coverage** ("shape D") — every patient with last
+  call / days-since / next scheduled, sorted by who's most overdue — because the care
+  team's real question is "who haven't I called this month," not "what does the month look
+  like." A date-organized view (month grid / agenda) hides a patient who was never
+  scheduled, which is exactly who needs surfacing. A calendar/date view could be an
+  additional lens later.
