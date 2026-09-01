@@ -39,6 +39,18 @@ const twilioService = require("../services/twillio.service");
 
 const TRUST_DAYS = 60;
 
+// Session-cookie flags — the SINGLE source of truth for both setting and clearing
+// the auth cookies, so they can NEVER drift (a cookie set with SameSite=None but
+// cleared with SameSite=Strict may not clear, leaving a live session after logout).
+// Secure + SameSite=None in every environment EXCEPT an explicit local-dev opt-in
+// (ALLOW_INSECURE_COOKIES=true, which production must never set). FAIL-SECURE: keyed
+// on the insecure opt-in, NOT on NODE_ENV, so a missing/misspelled NODE_ENV can't
+// downgrade prod. Prod (no flag) is byte-identical: { secure:true, sameSite:'none' }.
+function sessionCookieFlags() {
+  const secure = process.env.ALLOW_INSECURE_COOKIES !== "true";
+  return { secure, sameSite: secure ? "none" : "lax" };
+}
+
 // Treat an identifier as a phone number when it has no "@", contains only
 // phone-ish characters, and has 7-15 digits once punctuation is stripped.
 function looksLikePhone(identifier) {
@@ -453,17 +465,20 @@ async function issueSession({
     );
   }
 
+  // Set and clear share sessionCookieFlags() so their flags can never drift.
+  const { secure: cookieSecure, sameSite: cookieSameSite } = sessionCookieFlags();
+
   res.cookie("token", accessToken, {
     httpOnly: true,
-    secure: true,
-    sameSite: "none",
+    secure: cookieSecure,
+    sameSite: cookieSameSite,
     maxAge: 45 * 60 * 1000,
   });
 
   res.cookie("refresh_token", refreshToken, {
     httpOnly: true,
-    secure: true,
-    sameSite: "none",
+    secure: cookieSecure,
+    sameSite: cookieSameSite,
     maxAge: 14 * 24 * 60 * 60 * 1000,
   });
 audit.recordAsync({
@@ -660,19 +675,24 @@ async function logout(req, res) {
     res.setHeader("Expires", "0");
     res.setHeader("Surrogate-Control", "no-store");
 
+    // Clear with the SAME flags the cookie was set with (sessionCookieFlags) —
+    // a mismatch (set SameSite=None, clear SameSite=Strict) can leave the cookie
+    // uncleared, i.e. a live session after logout.
+    const { secure: cookieSecure, sameSite: cookieSameSite } = sessionCookieFlags();
+
     // clear access token
     res.clearCookie("token", {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
+      secure: cookieSecure,
+      sameSite: cookieSameSite,
       path: "/",
     });
 
     // clear refresh token
     res.clearCookie("refresh_token", {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
+      secure: cookieSecure,
+      sameSite: cookieSameSite,
       path: "/",
     });
 
