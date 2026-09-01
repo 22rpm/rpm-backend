@@ -7,10 +7,11 @@ screenshots were Epic Haiku, a prescribing system — the contrast, not the mode
 Build order (accepted): **schema → RxNorm autocomplete → patient entry → clinician
 confirmation → photo/OCR last** (photo is S3-blocked; see §4).
 
-Status: **schema built** (step 1), **RxNorm autocomplete built** (step 2, §1),
-**patient-entry API built** (step 3 backend), and **clinician confirmation API built**
-(step 4 backend — see below). Remaining: the iOS patient UI (step 3 frontend), the
-dashboard Medications tab (step 4 frontend), photo/OCR (step 5).
+Status: **all five steps built.** Schema (1), RxNorm autocomplete (2, §1),
+patient-entry API + iOS UI (3), clinician confirmation API + dashboard tab (4), and
+photo → on-device OCR → draft (5, §2). The only thing NOT built is retaining the label
+photo — deliberately: it's discarded after the read, and the `document_key` /
+`document_sha256` hooks stay unused until S3 exists.
 
 ### Step 3 backend — patient entry API (built)
 
@@ -160,6 +161,19 @@ cloud model, that is an explicit BAA decision, not a default.
 score: OCR only pre-fills an editable draft → the patient reviews/corrects → the
 entry enters `unconfirmed` → a clinician must explicitly confirm. There is no path
 from camera to confirmed. `source=photo` grants zero trust.
+
+**Built (step 5, iOS):** `labelOcr.js` captures via the OS camera
+(`react-native-image-picker`, `saveToPhotos:false`), reads the label on-device with ML
+Kit (`@react-native-ml-kit/text-recognition`), parses a best-effort name + strength, and
+**discards the image immediately** (`react-native-fs` unlink in a `finally`). The result
+only pre-fills the entry form (`MedicationCapture.js` → `MedicationEntryScreen.js`), where
+the patient must review and correct every field — a "Filled in from your photo — check the
+dose" banner makes that explicit — before it's submitted as `unconfirmed` (`source=photo`).
+**Nothing is stored:** not in the camera roll, not uploaded, and `document_key` /
+`document_sha256` stay NULL until S3 exists. The capture screen says so in one line: "The
+photo is only used to read the label on your phone. It isn't saved or sent anywhere."
+Native modules + `NSCameraUsageDescription` are part of the device build (see the iOS
+`MEDICATIONS_FOLLOWUPS.md`).
 
 **The strength guard catches invalid strengths, not misreads — say it plainly.** If
 an OCR-read strength isn't among the chosen drug's known RxNorm strengths, we flag
