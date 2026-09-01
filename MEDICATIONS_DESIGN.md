@@ -22,6 +22,13 @@ frontend cannot drop the flag):
 - **Patient list:** unconfirmed entries badged ("Pending review by your care team"),
   visually distinct, never rendered as established fact.
 - **Clinician list:** unconfirmed badged, in a review queue, confirm/reject per entry.
+- **Unmatched entries flagged distinctly (in addition to unconfirmed).** An
+  `rxcui = null` medication was never matched against RxNorm — whether the patient
+  free-texted it or picked it from a degraded cache — so the name may be misspelled or
+  ambiguous. On the clinician confirmation screen this must be **obvious** —
+  "not matched to a drug database" — not merely an absent field. It is the entry most
+  likely to need correction. The read/confirm API exposes `matched` (= `rxcui != null`)
+  so the frontend cannot infer it from an absent value. (Step-4 requirement.)
 - **Counts/summaries:** unconfirmed **excluded** from any confirmed count, or split
   explicitly ("3 confirmed · 2 pending"). Never one number that reads as verified.
 - **The note:** unconfirmed entries never render. (For now, nothing renders — see
@@ -29,28 +36,63 @@ frontend cannot drop the flag):
 
 If the distinction only exists in the database, it doesn't exist.
 
-## 1. RxNorm — API vs import, and the down-mid-entry fallback
+## 1. RxNorm — built (step 2). Live-first search, cache fallback, free text
 
-RxNorm (NLM/NIH) is the drug database for autocomplete. **API-first with a cached
-snapshot** (chosen):
+RxNorm (NLM/NIH) is the drug database for autocomplete. **Built:**
+`services/rxnorm.service.js`, `controllers/rxnorm.controller.js`,
+`routes/medications.routes.js` (mounted at `/api/medications`),
+`scripts/refreshRxNormCache.js`, and the `rxnorm_drugs` + `rxnorm_refresh_log` tables
+(`config/migrations/20260831150000_create_rxnorm_cache.js`, applied to dev, replayed
+clean from scratch). None of this is PHI — RxNorm is public reference data. **Never
+attach a patient identifier to an RxNav request.**
 
-- **RxNav REST API** — free, no key, no license. `approximateTerm` for fuzzy match;
-  `rxcui` lookup returns strengths/forms for pre-fill. External dependency (uptime,
-  latency). Never attach a patient identifier to a request — a bare drug-name query
-  is not PHI, a query tied to a patient is.
-- **Cached display-names snapshot** — pull RxNav's name list on a schedule into a
-  small local table so typeahead works with no live call. Removes the runtime
-  dependency for the path patients hit constantly.
-- **Local import** (RRF release files, free UMLS/UTS account for the full release; a
-  license-free prescribable subset also exists) — deferred. An option later if we
-  want zero external calls.
+**Why live-first (not cache-first):** the live `drugs.json?name=` endpoint returns an
+`rxcui`, so a match is a *verified* match — which is what makes the clinician's "not
+matched" flag a rare, real signal instead of constant noise. A name-only cache served
+first would make almost everything unmatched. So: **live search first, cache only as
+an availability fallback.** This is the "live → cache → free text" order, refined for
+autocomplete quality.
 
-**Fallback when RxNav is down/slow mid-entry — free text always works; autocomplete
-is never a gate.** Three tiers, degrading silently: live RxNav → cached snapshot →
-free text with `rxcui = null`. **Submission never depends on an RxNorm call.** A
-slow NIH API costs the patient autocomplete, never the ability to record their
-medication. `rxcui` is nullable by design for exactly this; a null just means
-"unmatched," which is fine because every entry goes through human review regardless.
+Three tiers, degrading silently (`searchDrugs`):
+1. **Live** — `GET drugs.json?name=<q>`, 2.5s timeout. Returns products with `rxcui`
+   and the strength embedded in the name ("lisinopril 10 MG Oral Tablet").
+2. **Cache** — local `rxnorm_drugs` (prefix LIKE), used only when RxNav is
+   slow/down; response carries `degraded: true` so the client can nudge "search is
+   limited — you can type your medication name". A cache row may have `rxcui` (from
+   warming) or NULL (name-only seed).
+3. **Free text** — the patient submits a typed name with `rxcui = null`. **Submission
+   never depends on an RxNorm call.** A slow NIH API costs autocomplete, never the
+   ability to record a medication.
+
+**Two cache sources:** seeded broad from RxNav `displaynames` (~28k names, `rxcui`
+NULL) for offline breadth, and **warmed** from live results (name + `rxcui`) for the
+drugs patients actually use — so the fallback gets better with use. (Verified: after a
+live lisinopril search, a forced-outage fallback returned rxcui-bearing rows.)
+
+Rate-limit posture: typeahead is live per *search*, not per keystroke — the client
+must debounce, and the service enforces a 2-char minimum and a 20-result cap.
+
+**Local import** (RRF release files; free UMLS/UTS account for the full release, or the
+license-free prescribable subset) — deferred; an option later for zero external calls.
+
+### Cache refresh & staleness (designed behavior, not a surprise)
+
+- **How it refreshes:** `node scripts/refreshRxNormCache.js` (also `POST
+  /api/medications/rxnorm/refresh`, super-admin). Additive + non-destructive
+  (`INSERT IGNORE`) so warmed `rxcui` rows survive. RxNorm publishes monthly, so
+  ~monthly is the natural cadence.
+- **Scheduling is external** (cron / launchd / CI). The cache is **not**
+  self-scheduling — no cron dependency was added speculatively. (Followup #6.)
+- **The cache never auto-expires.** A stale cache still serves every drug it already
+  knows. `STALE_AFTER_DAYS = 90` only drives a *warning* on `GET
+  /api/medications/rxnorm/status` (last refresh, age, `stale` flag); it disables
+  nothing.
+- **If nobody refreshes for a year:** a patient on a *newly approved* drug isn't in
+  the stale cache, so the live search finds it (RxNav is always current) — and only if
+  RxNav is *also* down does that patient fall to free text (`rxcui = null`, unmatched,
+  flagged for the clinician). That is acceptable and is the **designed** tail behavior,
+  not a failure. The one thing a long-stale cache degrades is the *offline* experience
+  during an outage for the newest drugs.
 
 ## 2. What reads the label, and what the strength guard does NOT catch
 
@@ -150,3 +192,5 @@ of the note's care, not all:
    ties to the role model. (Confirmation is clinician-only as a role decision for now;
    whether care_manager is "clinical staff" enough for list-accuracy is unsettled.)
 5. **RxNorm local import** — if we later want zero external calls.
+6. **Schedule the cache refresh** — `scripts/refreshRxNormCache.js` is not
+   self-scheduling. Wire it to cron/launchd/CI (~monthly) in the deploy environment.
