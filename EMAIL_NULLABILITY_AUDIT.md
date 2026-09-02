@@ -1,9 +1,15 @@
 # Audit: making `users.email` nullable (phone-only patients)
 
-Checklist for anyone touching patient email. Written before the `users.email`
-NOT NULL → NULL migration, which is **deferred** — enrollment currently still
-requires an email. The migration itself is low-risk (`users_email_unique` already
-tolerates multiple NULLs); the risk is in the paths below.
+Checklist for anyone touching patient email.
+
+**DONE (2026-09-02):** the `users.email` NOT NULL → NULL migration shipped
+(`20260902130000_make_users_email_nullable.js`), and enrollment + edit now enforce
+**email OR phone, at least one** (never email-required). A phone-only patient logs
+in by SMS OTP. The A-items below remain the standing checklist for any new
+email-touching path. (Original note, for history: this was written before the
+migration, while enrollment still required an email.) The migration itself is
+low-risk (`users_email_unique` already tolerates multiple NULLs); the risk is in
+the paths below.
 
 ## The new invariant this creates
 Every user needs a way to log in. Today that's guaranteed by email being NOT

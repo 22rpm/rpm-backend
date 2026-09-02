@@ -45,10 +45,12 @@ function validate(b) {
     errors.push("secondary_insurance_payer_id must be an integer");
   if (b.mrn != null && String(b.mrn).trim().length > 64)
     errors.push("mrn must be 64 characters or fewer");
-  // email/phone are the login identifiers; validate when present. "" is allowed
-  // for phone (clears it) but not email (an empty email can't identify anyone).
-  if (b.email != null && (b.email === "" || !EMAIL_RE.test(String(b.email).trim())))
-    errors.push("a valid email is required");
+  // email/phone are the login identifiers. Validate email FORMAT only when a
+  // non-empty value is given; "" is allowed (clears it). The "at least one
+  // identifier" rule is enforced in the service, which knows the current values
+  // (keep-if-absent means the controller can't see them).
+  if (b.email != null && b.email !== "" && !EMAIL_RE.test(String(b.email).trim()))
+    errors.push("email is not valid");
   if (b.phoneNumber != null && String(b.phoneNumber).trim().length > 32)
     errors.push("phone number must be 32 characters or fewer");
   const condErr = validateConditions(b.conditions);

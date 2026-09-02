@@ -44,8 +44,14 @@ function validate(body) {
   const b = body || {};
 
   if (typeof b.name !== "string" || !b.name.trim()) errors.push("name is required");
-  if (typeof b.email !== "string" || !EMAIL_RE.test(b.email.trim()))
-    errors.push("a valid email is required");
+  // Email is OPTIONAL. Validate format only when given; require at least one login
+  // identifier (email OR phone) — a phone-only patient logs in by SMS OTP.
+  if (b.email != null && b.email !== "" && !EMAIL_RE.test(String(b.email).trim()))
+    errors.push("email is not valid");
+  const hasEmail = b.email != null && String(b.email).trim() !== "";
+  const hasPhone = b.phoneNumber != null && String(b.phoneNumber).trim() !== "";
+  if (!hasEmail && !hasPhone)
+    errors.push("a patient needs at least one login identifier — email or phone");
 
   if (b.username != null && (typeof b.username !== "string" || !b.username.trim()))
     errors.push("username must be a non-empty string");
@@ -125,12 +131,15 @@ async function enrollPatient(req, res) {
     const b = req.body;
     const enrolledAt = b.enrolled_at || todayISO();
     const programStatus = b.program_status || "active";
+    // Email is optional now; null when absent/blank (phone-only patient).
+    const emailVal =
+      b.email != null && String(b.email).trim() ? b.email.trim() : null;
 
     const result = await enrollmentService.enrollPatient({
       actorId: req.user.id, // server-side
       organizationId: req.orgScope, // server-side
       name: b.name.trim(),
-      email: b.email.trim(),
+      email: emailVal,
       username: b.username ? b.username.trim() : null,
       phoneNumber: b.phoneNumber ? String(b.phoneNumber).trim() : null,
       dateOfBirth: b.date_of_birth || null,
@@ -181,7 +190,7 @@ async function enrollPatient(req, res) {
         id: result.patientId,
         name: b.name.trim(),
         username: result.username,
-        email: b.email.trim(),
+        email: emailVal,
         phoneNumber: b.phoneNumber || null,
         organization_id: req.orgScope,
         program_status: programStatus,

@@ -94,11 +94,14 @@ async function enrollPatient({
       if (u.length) throw httpError(409, "Username already exists");
     }
 
-    const [e] = await conn.query(
-      "SELECT id FROM users WHERE email = ? LIMIT 1",
-      [email]
-    );
-    if (e.length) throw httpError(409, "Email already exists");
+    // Email is optional (phone-only patients). Dup-check only when one was given.
+    if (email) {
+      const [e] = await conn.query(
+        "SELECT id FROM users WHERE email = ? LIMIT 1",
+        [email]
+      );
+      if (e.length) throw httpError(409, "Email already exists");
+    }
 
     // Block a duplicate phone at enrollment too — phoneNumber has no UNIQUE index,
     // and two users sharing a number makes OTP login ambiguous for both (the

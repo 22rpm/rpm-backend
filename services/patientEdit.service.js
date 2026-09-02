@@ -160,14 +160,16 @@ async function updatePatient({ patientId, orgScope, actorId, data }) {
 
   let newEmail = curEmail;
   if (data.email !== undefined) {
-    const e = String(data.email).trim();
-    if (!e) throw httpError(400, "email cannot be empty");
-    newEmail = e;
+    newEmail = String(data.email).trim() || null; // "" clears to null
   }
   let newPhone = curPhone;
   if (data.phoneNumber !== undefined) {
     newPhone = String(data.phoneNumber).trim() || null;
   }
+  // At least one login identifier must remain — email OR phone. Never both empty
+  // (that patient could never sign in). Email alone or phone alone is fine.
+  if (!newEmail && !newPhone)
+    throw httpError(400, "a patient needs at least one login identifier — email or phone");
   const emailChanged = (newEmail || null) !== (curEmail || null);
   const phoneChanged = (newPhone || null) !== (curPhone || null);
 
