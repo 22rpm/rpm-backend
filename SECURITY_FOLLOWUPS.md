@@ -28,20 +28,29 @@ privilege-escalation fix for the admin user-mutation and care-team routes.
   app user, not root) on a scheduled window. Not blocking a code merge, but a
   standing infrastructure risk.
 
-## 5. Production working tree had drifted from git — process, not code
-- During deploy prep (2026-08-19) the box's `server.js` was found to carry an
-  uncommitted, load-bearing CORS change (origins pointed at
+## 5. Production working tree drifts from git — process, not code (NOW TWICE)
+- **Occurrence 1 (2026-08-19, backend):** during deploy prep the box's `server.js`
+  was found to carry an uncommitted, load-bearing CORS change (origins pointed at
   `api.twentytwohealth.com`) that existed nowhere in git. Deploying `main` as-is
   would have silently reverted it and broken the dashboard for every user. The
-  change has since been brought into `main` (`e9d9901`), but the underlying
-  problem is infrastructural: files are being edited directly on the production
-  box, so the deployed state is not reproducible from the repo and every deploy
-  risks clobbering unrecorded changes.
-- This is an infrastructure/process issue, not a code defect. For Husnain:
-  production should be deployed only from committed refs, with no manual edits on
-  the box; if a hotfix must be made on the box, it needs to be committed and
-  pushed the same day. Consider a pre-deploy `git status` gate that refuses to
-  deploy when the working tree is dirty.
+  change has since been brought into `main` (`e9d9901`).
+- **Occurrence 2 (2026-09-02, dashboard):** during dashboard deploy prep, the prod
+  box's `src/pages/VitalSigns.jsx` carried an uncommitted hot patch to
+  `handleExport` (fixing it to pass its arguments) — a working export on prod that
+  existed nowhere in git. Discarded during this deploy because
+  `feature/vitals-integrated` supersedes it (its export path is already correct),
+  so nothing was lost — but only by luck of the superseding branch. Any deploy of a
+  branch that predated the fix would have silently regressed a working export.
+- **This is now a pattern, not a one-off.** Both times a real, load-bearing fix was
+  applied directly to prod and left outside version control — once on the backend,
+  once on the dashboard — so the deployed state of BOTH repos has been
+  non-reproducible from git, and each deploy has silently risked clobbering an
+  unrecorded fix.
+- Infrastructure/process issue, not a code defect. For Husnain: production must be
+  deployed only from committed refs, with no manual edits on the box; a hotfix made
+  on the box must be committed and pushed the same day. The pre-deploy `git status`
+  gate that refuses to deploy on a dirty tree is no longer optional — two
+  occurrences across two repos is the evidence it's needed.
 
 ## 6. IDOR: cross-org clinician read on `getDoctorsByOrganization` — LIVE in prod
 - `GET /api/org/organization/:organizationId`
