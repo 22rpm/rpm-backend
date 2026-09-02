@@ -160,3 +160,25 @@ care_manager), so the role gate is only "is this staff at all."
 set duplicated in two files, plus the worklist inline — a shared exported constant (or a
 `requireStaff` middleware) would stop the next role from having to be added in N places.
 Same as the frontend followups.
+
+## care_manager: patient edit enabled + enrollment-options opened (2026-09-01)
+
+Decision (confirmed): care_manager edits patient demographics — they do the calls and see
+patients daily, so they're first to learn a phone/dialysis-clinic change; routing that
+through a physician is the wrong bottleneck. Editing demographics is not a clinical
+judgment. What STAYS clinician-only, as built: consent attestation and medication
+confirmation.
+
+- `GET /api/patients/enrollment-options` opened to clinical staff (added care_manager).
+  Read-only reference (active payers, device types, org clinician roster) — no PHI — used
+  by BOTH the enroll and edit forms; care_manager needs it for the edit modal's payer +
+  care-team lookups. The enroll POST stays gated (creating patients isn't care_manager's job).
+
+- **ORG_CONTEXT #5 care-team preservation — TESTED for care_manager, not assumed.** With
+  an assigned clinician deactivated (out-of-roster), a care_manager's getPatientForEdit
+  returns them in care_team with status='deactivated'; the edit modal merges them into the
+  picker (checked) and submits the complete `form.care_team`; the PATCH validates only
+  newly-added members, so the deactivated member is preserved. Verified end-to-end
+  (patient 48, clinician 47 toggled inactive then restored): complete-team save kept the
+  member; a save that omitted it dropped it (proving the protection is the frontend sending
+  the full set, which the merge does). Role-independent — same path as clinician/admin.

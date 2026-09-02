@@ -45,10 +45,15 @@ router.post(
 // GET /api/patients/enrollment-options — lookups for the enrollment form:
 // active payers + active device types (global) and the org-scoped clinician
 // roster. Same auth + scope as the POST (super-admin passes ?organizationId=).
+// Read-only reference lookups (active payers, device types, org clinician roster) used by
+// BOTH the enroll form and the patient EDIT form. No PHI. Open to all clinical staff —
+// care_manager edits patients (they do the calls and learn when a phone/clinic changed),
+// so they need these lookups. The enroll POST below stays gated (creating patients is not
+// a care_manager task).
 router.get(
   "/enrollment-options",
   authRequired,
-  requireRole("clinician", "admin", "super-admin"),
+  requireRole("clinician", "admin", "super-admin", "care_manager"),
   resolveOrgScope,
   getEnrollmentOptions
 );
