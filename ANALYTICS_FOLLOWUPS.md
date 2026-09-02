@@ -62,3 +62,43 @@ Ship the **dated medication-change history** (`medication_events` or equivalent)
 as part of the medications feature regardless — it's cheap now, it's the hard
 prerequisite, and without it this analysis can never be built retroactively (you
 can't reconstruct when a dose changed after the fact).
+
+## 2. Drug interaction warnings
+
+**Idea (deferred, Phase 2):** warn when two of a patient's medications interact.
+There is a placeholder for this flag reserved below the drug-allergy banner on the
+patient profile (`AllergyBanner` sits above it), intentionally left unpopulated
+until a real data source exists.
+
+**Status:** scoped as an idea only. Do NOT build yet. Recorded 2026-09-02.
+
+### Why it is not built — the three blockers
+
+1. **No free authoritative data source.** RxNorm (which we already use for the
+   medication autocomplete) has **no interaction data**. The NIH RxNav
+   drug-interaction API — the obvious free option — was **retired in 2024** and is
+   gone; there is no free NIH replacement.
+
+2. **The remaining sources are commercial and expensive.** Interaction content is
+   licensed from vendors like **First Databank (FDB)** or **Medi-Span** (Wolters
+   Kluwer). These are paid licenses in the **five-figure** range, with their own
+   integration and update obligations. This is a real budget/contract decision,
+   not a coding task.
+
+3. **An AI model is explicitly rejected for this — for now.** An LLM would answer
+   **confidently and be wrong in both directions** (inventing interactions that
+   don't exist AND missing real ones), and it would be doing so over a
+   **patient-reported medication list that is probably incomplete** to begin with.
+   The asymmetry is the point: **once we show interaction warnings, we own their
+   correctness** — and a *missed* interaction on a screen that advertises
+   interaction checking is **worse than the same miss on a screen that never
+   claimed to check.** Showing warnings creates a reliance we cannot honor without
+   an authoritative source, so we show none until we have one.
+
+### When it is picked up
+
+The decision to make first is the **data source** (license FDB/Medi-Span, or
+another vetted authoritative feed) — not the UI. The placeholder below the allergy
+banner is where the flag renders once that source is in place; the same
+never-interchangeable discipline as the allergy states applies (a definite "no
+interactions found" from a real source is different from "not checked").
