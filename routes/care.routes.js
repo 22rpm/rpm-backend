@@ -30,7 +30,7 @@ const { listStaff, getCallOutcomes } = require("../controllers/careStaff.control
 // clinical staff — logging call/RPM-management time as themselves is the whole point of
 // the role (99457 clinical-staff time), so it must be able to log calls, time, and notes.
 // Per-patient access is enforced downstream (canAccessPatient: org-wide for care_manager).
-const CLINICAL_STAFF = ["clinician", "admin", "super-admin", "care_manager"];
+const { CLINICAL_STAFF } = require("../config/roles");
 
 // Staff-name lookup for attribution. Org-scoped but NOT patient-linked, so it
 // uses resolveOrgScope without scopePatientParam.

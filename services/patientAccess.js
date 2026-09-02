@@ -24,7 +24,10 @@ const db = require("../config/db");
 
 // Roles whose patient VISIBILITY is org-wide (not gated by assignment).
 // care_manager is the org-wide clinical-staff monitor; admin/super-admin manage.
-const ORG_WIDE_ROLES = new Set(["super-admin", "admin", "care_manager"]);
+// Sourced from config/roles.js so the role set lives in ONE place (both the route
+// gates and this visibility axis reference the same definition).
+const { ORG_WIDE_ROLES: ORG_WIDE_LIST } = require("../config/roles");
+const ORG_WIDE_ROLES = new Set(ORG_WIDE_LIST);
 
 const roleOf = (user) => user?.role_type || user?.role || null;
 

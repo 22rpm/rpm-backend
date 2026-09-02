@@ -156,7 +156,7 @@ async function authRequired(req, res, next) {
 // Role guard. Must run AFTER authRequired so req.user (from the JWT) is set.
 // Usage: router.get("/x", authRequired, requireRole("super-admin"), handler)
 function requireRole(...allowedRoles) {
-  return function (req, res, next) {
+  const mw = function (req, res, next) {
     const role = req.user && req.user.role_type;
     if (!role || !allowedRoles.includes(role)) {
       return res.status(403).json({
@@ -166,6 +166,10 @@ function requireRole(...allowedRoles) {
     }
     next();
   };
+  // Expose the resolved role set so the gate-audit tool can enumerate each route's
+  // effective roles from the mounted router stack (behavior-neutral metadata).
+  mw.allowedRoles = allowedRoles;
+  return mw;
 }
 
 // this is being used in live chat messageService

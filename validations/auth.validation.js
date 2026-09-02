@@ -1,4 +1,5 @@
 const Joi = require("joi");
+const { ALL_ROLES } = require("../config/roles");
 
 const loginSchema = Joi.object({
   email: Joi.string().email().required().messages({
@@ -40,7 +41,7 @@ const registerSchema = Joi.object({
     "string.max": "Password cannot exceed 128 characters",
   }),
   role: Joi.string()
-    .valid("admin", "clinician", "care_manager", "patient", "super-admin")
+    .valid(...ALL_ROLES)
     .required()
     .messages({
       "any.required": "Role is required",

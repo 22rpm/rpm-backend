@@ -6,6 +6,7 @@
 const express = require("express");
 const router = express.Router();
 const { authRequired, requireRole } = require("../middleware/auth");
+const { ADMIN_ROLES, SUPER_ADMIN_ONLY, CLINICIAN_ONLY } = require("../config/roles");
 const { resolveOrgScope } = require("../middleware/orgScope");
 const { drugSearch, ndcLookup, cacheStatus, refreshCache } = require("../controllers/rxnorm.controller");
 const {
@@ -30,11 +31,11 @@ router.get("/drug-search", drugSearch);
 router.get("/ndc/:ndc", ndcLookup);
 
 // Ops: cache freshness (last refresh, age, stale flag). Staff only.
-router.get("/rxnorm/status", authRequired, requireRole("super-admin", "admin"), cacheStatus);
+router.get("/rxnorm/status", authRequired, requireRole(...ADMIN_ROLES), cacheStatus);
 
 // Ops: refresh the cached snapshot from RxNav. Super-admin only; also runnable as a
 // CLI (scripts/refreshRxNormCache.js) for scheduled refreshes.
-router.post("/rxnorm/refresh", authRequired, requireRole("super-admin"), refreshCache);
+router.post("/rxnorm/refresh", authRequired, requireRole(...SUPER_ADMIN_ONLY), refreshCache);
 
 // --- Patient entry (step 3). A patient manages their OWN reported medications. ---
 // Everything created here is `unconfirmed`; a clinician confirms later (step 4).
@@ -50,7 +51,7 @@ router.get("/patient/:patientId", authRequired, resolveOrgScope, getPatientMedic
 // CONFIRM / REJECT: CLINICIAN-ONLY — the same gate as signing the note. A care_manager
 // can read the list but confirming what a patient is taking is a clinical judgment.
 // canAccessPatient (assignment) is re-checked in the service.
-router.patch("/:id/confirm", authRequired, resolveOrgScope, requireRole("clinician"), confirmMedication);
-router.patch("/:id/reject", authRequired, resolveOrgScope, requireRole("clinician"), rejectMedication);
+router.patch("/:id/confirm", authRequired, resolveOrgScope, requireRole(...CLINICIAN_ONLY), confirmMedication);
+router.patch("/:id/reject", authRequired, resolveOrgScope, requireRole(...CLINICIAN_ONLY), rejectMedication);
 
 module.exports = router;

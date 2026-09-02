@@ -41,7 +41,8 @@ router.post("/sms-inbound", twilioBody, verifyTwilioSignature, smsInbound);
 router.post("/sms-status", twilioBody, verifyTwilioSignature, smsStatus);
 
 // Staff: org-scoped health + failures.
-const STAFF = requireRole("clinician", "admin", "super-admin", "care_manager");
+const { CLINICAL_STAFF } = require("../config/roles");
+const STAFF = requireRole(...CLINICAL_STAFF);
 router.get("/health", authRequired, STAFF, resolveOrgScope, getHealth);
 router.get("/failures", authRequired, STAFF, resolveOrgScope, getFailures);
 

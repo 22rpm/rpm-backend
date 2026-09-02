@@ -22,19 +22,19 @@ const {
 // all schedule and log. (Org boundary is still enforced by resolveOrgScope + the
 // service: create checks canAccessPatient, so a clinician can only schedule for a patient
 // they're assigned to; care_manager/admin are org-wide.)
-const STAFF = ["clinician", "admin", "super-admin", "care_manager"];
+const { CLINICAL_STAFF } = require("../config/roles");
 
 // Read: calendar window + overdue list.
-router.get("/", authRequired, resolveOrgScope, requireRole(...STAFF), list);
-router.get("/overdue", authRequired, resolveOrgScope, requireRole(...STAFF), overdue);
+router.get("/", authRequired, resolveOrgScope, requireRole(...CLINICAL_STAFF), list);
+router.get("/overdue", authRequired, resolveOrgScope, requireRole(...CLINICAL_STAFF), overdue);
 
 // Schedule / reschedule / cancel / no-show — clinical staff.
-router.post("/", authRequired, resolveOrgScope, requireRole(...STAFF), create);
-router.patch("/:id", authRequired, resolveOrgScope, requireRole(...STAFF), update);
-router.patch("/:id/cancel", authRequired, resolveOrgScope, requireRole(...STAFF), cancel);
-router.patch("/:id/no-show", authRequired, resolveOrgScope, requireRole(...STAFF), noShow);
+router.post("/", authRequired, resolveOrgScope, requireRole(...CLINICAL_STAFF), create);
+router.patch("/:id", authRequired, resolveOrgScope, requireRole(...CLINICAL_STAFF), update);
+router.patch("/:id/cancel", authRequired, resolveOrgScope, requireRole(...CLINICAL_STAFF), cancel);
+router.patch("/:id/no-show", authRequired, resolveOrgScope, requireRole(...CLINICAL_STAFF), noShow);
 
 // Complete = link to the patient_calls row the call-logging flow created.
-router.patch("/:id/complete", authRequired, resolveOrgScope, requireRole(...STAFF), complete);
+router.patch("/:id/complete", authRequired, resolveOrgScope, requireRole(...CLINICAL_STAFF), complete);
 
 module.exports = router;

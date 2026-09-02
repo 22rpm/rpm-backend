@@ -164,6 +164,11 @@ const medicationsRoutes = require("./routes/medications.routes");
 const scheduledCallsRoutes = require("./routes/scheduledCall.routes");
 const notificationsRoutes = require("./routes/notifications.routes");
 const notificationScheduler = require("./services/notificationScheduler");
+const { assertRoleGates } = require("./scripts/checkRoleGates");
+// Fail-fast if any route gate reintroduces a scattered role string (SECURITY_FOLLOWUPS
+// process guard). Throws in dev/test; logs loudly in production (never crashes a
+// running deploy over a lint issue — the pre-deploy `npm run check:roles` is the hard gate).
+assertRoleGates();
 const fs = require("fs");
 const path = require("path");
 

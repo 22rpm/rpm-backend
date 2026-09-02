@@ -3,6 +3,7 @@ const router = express.Router();
 const organizationController = require("../controllers/organization.controller");
 const validateRequest = require("../middleware/validate");
 const { authRequired, requireRole } = require("../middleware/auth");
+const { SUPER_ADMIN_ONLY, ADMIN_ROLES } = require("../config/roles");
 const {
   addOrganizationSchema,
   editOrganizationSchema,
@@ -15,8 +16,8 @@ const {
 // Organization and admin management is a super-admin capability. The one
 // exception is listing an organization's doctors, which org admins also use
 // (AddUser/EditUser flows), so that route allows admin OR super-admin.
-const superAdminOnly = requireRole("super-admin");
-const adminOrSuperAdmin = requireRole("admin", "super-admin");
+const superAdminOnly = requireRole(...SUPER_ADMIN_ONLY);
+const adminOrSuperAdmin = requireRole(...ADMIN_ROLES);
 
 // GET /api/org/me — the caller's own organization (id + name only), for the
 // clinic-context top bar. Any authenticated user; returns only their own org

@@ -8,6 +8,7 @@ const {
   updateDoctorAssignments,
 } = require("../controllers/admin.controller");
 const { authRequired, requireRole } = require("../middleware/auth");
+const { ADMIN_ROLES, ADMIN_OR_CLINICIAN } = require("../config/roles");
 const { resolveOrgScope, scopePatientParam } = require("../middleware/orgScope");
 
 const router = express.Router();
@@ -20,7 +21,7 @@ router.get("/getAllusers", authRequired, resolveOrgScope, getAllUsers);
 router.put(
   "/users/:userId",
   authRequired,
-  requireRole("admin", "super-admin"),
+  requireRole(...ADMIN_ROLES),
   resolveOrgScope,
   scopePatientParam("userId"),
   updateUser
@@ -30,7 +31,7 @@ router.put(
 router.patch(
   "/users/:userId/status",
   authRequired,
-  requireRole("admin", "super-admin"),
+  requireRole(...ADMIN_ROLES),
   resolveOrgScope,
   scopePatientParam("userId"),
   toggleUserStatus
@@ -38,7 +39,7 @@ router.patch(
 router.delete(
   "/users/:userId",
   authRequired,
-  requireRole("admin", "super-admin"),
+  requireRole(...ADMIN_ROLES),
   resolveOrgScope,
   scopePatientParam("userId"),
   deleteUser
@@ -48,7 +49,7 @@ router.delete(
 router.get(
   "/patients/:patientId/doctors",
   authRequired,
-  requireRole("admin", "super-admin", "clinician"),
+  requireRole(...ADMIN_OR_CLINICIAN),
   resolveOrgScope,
   scopePatientParam("patientId"),
   getAssignedDoctors
@@ -58,7 +59,7 @@ router.get(
 router.put(
   "/patients/:patientId/doctors",
   authRequired,
-  requireRole("admin", "super-admin"),
+  requireRole(...ADMIN_ROLES),
   resolveOrgScope,
   scopePatientParam("patientId"),
   updateDoctorAssignments

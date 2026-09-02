@@ -7,6 +7,12 @@ const router = express.Router();
 const { authRequired, requireRole } = require("../middleware/auth");
 const { resolveOrgScope, scopePatientParam } = require("../middleware/orgScope");
 const {
+  CLINICAL_STAFF,
+  ENROLL_ROLES,
+  CONSENT_ROLES,
+  CLINICIAN_ONLY,
+} = require("../config/roles");
+const {
   enrollPatient,
   getEnrollmentOptions,
 } = require("../controllers/patientEnrollment.controller");
@@ -36,7 +42,7 @@ const {
 // for care_manager, assignment-scoped for a clinician). NOTE the deliberate exceptions
 // that are NOT this set: enroll (create patient), consent (attestation), and note-sign
 // are gated separately below.
-const staffRoles = requireRole("clinician", "admin", "super-admin", "care_manager");
+const staffRoles = requireRole(...CLINICAL_STAFF);
 
 // POST /api/patients — enroll a patient into the caller's organization
 // (super-admin passes ?organizationId=). Not patient-linked (creating a new
@@ -44,7 +50,7 @@ const staffRoles = requireRole("clinician", "admin", "super-admin", "care_manage
 router.post(
   "/",
   authRequired,
-  requireRole("clinician", "admin", "super-admin"),
+  requireRole(...ENROLL_ROLES),
   resolveOrgScope,
   enrollPatient
 );
@@ -60,7 +66,7 @@ router.post(
 router.get(
   "/enrollment-options",
   authRequired,
-  requireRole("clinician", "admin", "super-admin", "care_manager"),
+  staffRoles,
   resolveOrgScope,
   getEnrollmentOptions
 );
@@ -70,7 +76,7 @@ router.get(
 router.get(
   "/dialysis-clinics",
   authRequired,
-  requireRole("clinician", "admin", "super-admin", "care_manager"),
+  staffRoles,
   resolveOrgScope,
   getDialysisClinics
 );
@@ -82,7 +88,7 @@ router.get(
 router.get(
   "/worklist",
   authRequired,
-  requireRole("clinician", "admin", "super-admin", "care_manager"),
+  staffRoles,
   resolveOrgScope,
   getWorklist
 );
@@ -92,7 +98,7 @@ router.get(
 router.get(
   "/billing-summary",
   authRequired,
-  requireRole("clinician", "admin", "super-admin", "care_manager"),
+  staffRoles,
   resolveOrgScope,
   getBillingSummary
 );
@@ -129,7 +135,7 @@ router.get(
 router.post(
   "/:patientId/consent",
   authRequired,
-  requireRole("clinician", "super-admin"),
+  requireRole(...CONSENT_ROLES),
   resolveOrgScope,
   scopePatientParam("patientId"),
   recordConsent
@@ -230,7 +236,7 @@ router.get(
 router.post(
   "/:patientId/rpm-note/sign",
   authRequired,
-  requireRole("clinician"),
+  requireRole(...CLINICIAN_ONLY),
   resolveOrgScope,
   scopePatientParam("patientId"),
   signRpmNote
