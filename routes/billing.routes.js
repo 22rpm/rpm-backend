@@ -7,12 +7,9 @@
 const express = require("express");
 const router = express.Router();
 const { authRequired, requireRole } = require("../middleware/auth");
-const { resolveOrgScope, scopePatientParam } = require("../middleware/orgScope");
 const { BILLING_READ_ROLES, SUPER_ADMIN_ONLY } = require("../config/roles");
 const {
   getMyOrgs,
-  getBillingNote,
-  getBillingDemographics,
   listBillers,
   createBiller,
   setBillerOrgs,
@@ -22,24 +19,9 @@ const {
 // pre-selection (which clinics may I pick).
 router.get("/my-orgs", authRequired, requireRole(...BILLING_READ_ROLES), getMyOrgs);
 
-// Per-patient billing reads. resolveOrgScope validates the biller's org (allowed
-// set); scopePatientParam confirms the patient is in that org.
-router.get(
-  "/patients/:patientId/note",
-  authRequired,
-  requireRole(...BILLING_READ_ROLES),
-  resolveOrgScope,
-  scopePatientParam("patientId"),
-  getBillingNote
-);
-router.get(
-  "/patients/:patientId/demographics",
-  authRequired,
-  requireRole(...BILLING_READ_ROLES),
-  resolveOrgScope,
-  scopePatientParam("patientId"),
-  getBillingDemographics
-);
+// NOTE: the reduced per-patient billing note/demographics endpoints were REMOVED
+// in the reversal — a biller now reads the FULL RPM note via
+// /api/patients/:patientId/rpm-note (org-scoped, read-only). See BILLER_DESIGN.
 
 // Super-admin: manage billers + their clinic assignments (the assignment UI).
 router.get("/billers", authRequired, requireRole(...SUPER_ADMIN_ONLY), listBillers);

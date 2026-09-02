@@ -7,8 +7,6 @@
 const db = require("../config/db");
 const bcrypt = require("bcrypt");
 const crypto = require("crypto");
-const { getRpmNote } = require("./rpmNote.service");
-const { getSignedHead } = require("./rpmNoteSign.service");
 const { ROLES } = require("../config/roles");
 
 function httpError(status, message) {
@@ -30,77 +28,11 @@ async function listBillerOrgs(billerUserId) {
   return rows;
 }
 
-// Reduced RPM note for billing — MINIMUM NECESSARY. A WHITELIST projection over
-// the note (whitelist so a new clinical field added to the note can't leak here):
-// codes/DOS/units, the threshold facts that justify them, demographics, provider,
-// consent status, ICD-10 flags. OMITS vitals values, the provider's clinical-note
-// narrative, and the call log — a biller doesn't need PHI a claim doesn't carry.
-async function getBillingNote({ patientId, orgScope, month }) {
-  const note = await getRpmNote({ patientId, orgScope, month });
-  const signed = await getSignedHead({ patientId, orgScope, month });
-  const t = note.time_documentation || {};
-  return {
-    month: note.month,
-    period: note.period,
-    date_of_service: note.date_of_service,
-    patient: note.patient, // id, name, dob, mrn, enrolled, enrolled_at, program_status
-    provider: note.provider, // rendering-provider name(s) + multiple flag
-    consent: note.consent, // billing prerequisite (status/date), no narrative
-    device_education: note.device_education, // 99453 basis
-    monitoring: note.monitoring, // days_with_readings
-    time_documentation: {
-      setup_education_minutes: t.setup_education_minutes,
-      data_review_interaction_minutes: t.data_review_interaction_minutes,
-      total_minutes: t.total_minutes,
-      provider_minutes: t.provider_minutes,
-      clinical_staff_minutes: t.clinical_staff_minutes,
-      // by_actor (per-person names) intentionally omitted — not claim-necessary
-    },
-    billing: note.billing, // codes, per-code DOS, units, interactive test detail
-    attestation: note.attestation,
-    signed: signed
-      ? { by: signed.signed_by_name || null, at: signed.signed_at_iso || signed.signed_at || null }
-      : null,
-    missing: note.missing,
-    compliance_checks: note.compliance_checks,
-    // OMITTED on purpose (minimum necessary): note.vitals (BP/HR values),
-    // note.reference.clinical_notes (provider narrative), note.reference.calls
-    // (call log + notes), note.communication.
-  };
-}
-
-// Demographics + insurance + diagnosis codes — exactly what a claim needs. Org
-// boundary already enforced by scopePatientParam; query is by id.
-async function getBillingDemographics(patientId, orgScope) {
-  const [rows] = await db.query(
-    `SELECT u.id, u.name,
-            DATE_FORMAT(pp.date_of_birth, '%Y-%m-%d') AS date_of_birth,
-            pp.mrn,
-            ip1.name AS insurance_primary,
-            ip2.name AS insurance_secondary
-       FROM users u
-       LEFT JOIN patient_profiles pp ON pp.user_id = u.id
-       LEFT JOIN insurance_payers ip1 ON ip1.id = pp.insurance_payer_id
-       LEFT JOIN insurance_payers ip2 ON ip2.id = pp.secondary_insurance_payer_id
-      WHERE u.id = ? LIMIT 1`,
-    [patientId]
-  );
-  if (!rows.length) throw httpError(404, "Patient not found");
-  const [conds] = await db.query(
-    "SELECT name, icd10_code FROM patient_conditions WHERE patient_id = ? ORDER BY name",
-    [patientId]
-  );
-  const p = rows[0];
-  return {
-    id: p.id,
-    name: p.name,
-    date_of_birth: p.date_of_birth || null,
-    mrn: p.mrn || null,
-    insurance_primary: p.insurance_primary || null,
-    insurance_secondary: p.insurance_secondary || null, // recorded; note bills primary
-    conditions: conds.map((c) => ({ name: c.name, icd10_code: c.icd10_code || null })),
-  };
-}
+// NOTE: getBillingNote / getBillingDemographics (the reduced per-patient
+// projection) were REMOVED in the reversal — a biller now reads the FULL RPM note
+// via /api/patients/:patientId/rpm-note (org-scoped, read-only). Kept here only in
+// spirit via BILLER_DESIGN's reversal note; the code is gone so it can't drift
+// back into use.
 
 // ---- super-admin management ----
 
@@ -227,8 +159,6 @@ async function setBillerOrgs({ billerId, orgIds, actorId }) {
 
 module.exports = {
   listBillerOrgs,
-  getBillingNote,
-  getBillingDemographics,
   listBillers,
   createBiller,
   setBillerOrgs,

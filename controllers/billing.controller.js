@@ -6,10 +6,6 @@
 const billing = require("../services/billing.service");
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const currentYm = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-};
 
 // GET /api/billing/my-orgs — the caller's allowed clinics (for the biller's
 // clinic selector). Empty for a non-biller / unassigned biller.
@@ -23,36 +19,9 @@ async function getMyOrgs(req, res) {
   }
 }
 
-// GET /api/billing/patients/:patientId/note?month=YYYY-MM — reduced billing note.
-async function getBillingNote(req, res) {
-  try {
-    const month = /^\d{4}-\d{2}$/.test(req.query.month || "") ? req.query.month : currentYm();
-    const note = await billing.getBillingNote({
-      patientId: Number(req.params.patientId),
-      orgScope: req.orgScope,
-      month,
-    });
-    return res.status(200).json({ ok: true, note });
-  } catch (err) {
-    if (err && err.httpStatus)
-      return res.status(err.httpStatus).json({ ok: false, message: err.message });
-    console.error("getBillingNote error:", err.message);
-    return res.status(500).json({ ok: false, message: "Server error" });
-  }
-}
-
-// GET /api/billing/patients/:patientId/demographics — demographics + insurance + ICD-10.
-async function getBillingDemographics(req, res) {
-  try {
-    const demo = await billing.getBillingDemographics(Number(req.params.patientId), req.orgScope);
-    return res.status(200).json({ ok: true, demographics: demo });
-  } catch (err) {
-    if (err && err.httpStatus)
-      return res.status(err.httpStatus).json({ ok: false, message: err.message });
-    console.error("getBillingDemographics error:", err.message);
-    return res.status(500).json({ ok: false, message: "Server error" });
-  }
-}
+// NOTE: getBillingNote / getBillingDemographics (the reduced per-patient
+// projection) were REMOVED in the reversal — a biller now reads the full RPM note
+// via /api/patients/:patientId/rpm-note. See BILLER_DESIGN.
 
 // ---- super-admin management ----
 
@@ -117,8 +86,6 @@ async function setBillerOrgs(req, res) {
 
 module.exports = {
   getMyOrgs,
-  getBillingNote,
-  getBillingDemographics,
   listBillers,
   createBiller,
   setBillerOrgs,

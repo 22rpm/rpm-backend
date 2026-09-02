@@ -209,21 +209,25 @@ router.post(
 
 // GET /api/patients/:patientId/rpm-note?month=YYYY-MM — read-only pre-fill for
 // the RPM monthly note. Computes what we have; never fills clinical judgment.
+// BILLING_OVERVIEW_ROLES = clinical staff + biller: a biller reads the FULL note
+// to bill (deliberate reversal of PR B's reduced projection — see BILLER_DESIGN).
+// Still org-scoped (resolveOrgScope biller allowed-set + scopePatientParam) and
+// still READ-only — signing stays clinician-only below.
 router.get(
   "/:patientId/rpm-note",
   authRequired,
-  staffRoles,
+  requireRole(...BILLING_OVERVIEW_ROLES),
   resolveOrgScope,
   scopePatientParam("patientId"),
   getRpmNote
 );
 
 // GET /api/patients/:patientId/rpm-note/signed?month=YYYY-MM — current signed
-// head for the month (or null). Read-only.
+// head for the month (or null). Read-only. Clinical staff + biller.
 router.get(
   "/:patientId/rpm-note/signed",
   authRequired,
-  staffRoles,
+  requireRole(...BILLING_OVERVIEW_ROLES),
   resolveOrgScope,
   scopePatientParam("patientId"),
   getSignedRpmNote
