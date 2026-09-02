@@ -352,3 +352,26 @@ transmission days for every offline reading. One deploy, not two:
 - backend: the `data.timestamp` bucketing/windowing change (this item + #11).
 Gate the outbox app release on the backend change being live. (Mirrored in
 TZ_FIX_DESIGN.md.)
+
+### #14 — note's Billing Codes Reference table now DIFFERS from the Quantix template (Rosemary)
+The RPM note's "Billing Codes Reference" table was copied verbatim from the Quantix
+template we were given, which lists only 99453 / 99454 / 99457 / 99458 — it predates
+the 2026 codes. But the determination (`rpmNote.service`) computes 99445 (device
+supply, 2–15 transmission days) and 99470 (management, 10–19 min clinical-staff
+time) as well, so a biller could see a code on the note that wasn't in the
+reference table beside it.
+
+Fixed on the note (dashboard `RpmNote.jsx`), so the table stops being wrong while
+we wait:
+- Added **99445** — Device Supply & Transmission, 2–15 days in a 30-day period.
+- Added **99470** — Management, 10–19 minutes of clinical staff time.
+- Corrected **99454** — was "Per 30-day period" (no threshold); now "16 or more
+  days in a 30-day period", which is what distinguishes it from 99445.
+- Also reordered the billing section so the computed determination ("Codes
+  supported this month") leads and the reference table is secondary below it.
+
+**Open for Rosemary:** confirm whether Quantix has an updated template that
+includes the 2026 codes (99445/99470) and the corrected 99454 wording. If so, align
+to theirs; until then the note's table is intentionally ahead of the Quantix copy.
+This is the same Quantix-template thread as the attestation wording
+(ATTESTATION_REVIEW_FOR_ROSEMARY.md) — the template we hold is stale.
