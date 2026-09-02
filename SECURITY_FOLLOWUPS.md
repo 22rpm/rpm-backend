@@ -28,7 +28,7 @@ privilege-escalation fix for the admin user-mutation and care-team routes.
   app user, not root) on a scheduled window. Not blocking a code merge, but a
   standing infrastructure risk.
 
-## 5. Production working tree drifts from git — process, not code (NOW TWICE)
+## 5. Production working tree drifts from git — process, not code (NOW THREE TIMES)
 - **Occurrence 1 (2026-08-19, backend):** during deploy prep the box's `server.js`
   was found to carry an uncommitted, load-bearing CORS change (origins pointed at
   `api.twentytwohealth.com`) that existed nowhere in git. Deploying `main` as-is
@@ -41,16 +41,26 @@ privilege-escalation fix for the admin user-mutation and care-team routes.
   `feature/vitals-integrated` supersedes it (its export path is already correct),
   so nothing was lost — but only by luck of the superseding branch. Any deploy of a
   branch that predated the fix would have silently regressed a working export.
-- **This is now a pattern, not a one-off.** Both times a real, load-bearing fix was
-  applied directly to prod and left outside version control — once on the backend,
-  once on the dashboard — so the deployed state of BOTH repos has been
-  non-reproducible from git, and each deploy has silently risked clobbering an
-  unrecorded fix.
+- **Occurrence 3 (2026-09-02, dashboard):** during the dashboard deploy, `npm ci`
+  produced a tree missing `react-is`, which `recharts` imports — the app broke
+  until `react-is` was `npm install`ed directly on the box, leaving `package.json`
+  and `package-lock.json` uncommitted. Slightly different in kind from 1 and 2
+  (a missing DECLARED dependency, not a hand-edited source fix), but the same drift
+  shape: an uncommitted change the deploy needed, that a clean checkout would lose.
+  **Root-fixed:** `react-is@^19.x` is now a direct dependency (committed), so a
+  clean checkout installs it and this specific break can't recur.
+- **This is now a pattern, not a one-off — three times across both repos.** Twice a
+  real, load-bearing source fix was applied directly to prod and left outside git
+  (CORS, export); once a required dependency was installed on the box and left
+  uncommitted. Each time the deployed state was non-reproducible from git and a
+  clean checkout would have regressed.
 - Infrastructure/process issue, not a code defect. For Husnain: production must be
-  deployed only from committed refs, with no manual edits on the box; a hotfix made
-  on the box must be committed and pushed the same day. The pre-deploy `git status`
-  gate that refuses to deploy on a dirty tree is no longer optional — two
-  occurrences across two repos is the evidence it's needed.
+  deployed only from committed refs, with no manual edits on the box; a hotfix or a
+  dependency added on the box must be committed and pushed the same day. The
+  pre-deploy `git status` gate that refuses to deploy on a dirty tree is no longer
+  optional — three occurrences across two repos is the evidence it's needed. A
+  clean-room deploy check (`npm ci` from the committed lock on a fresh clone, build,
+  smoke test) would have caught occurrence 3 before it hit prod.
 
 ## 6. IDOR: cross-org clinician read on `getDoctorsByOrganization` — LIVE in prod
 - `GET /api/org/organization/:organizationId`
