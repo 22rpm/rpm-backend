@@ -24,7 +24,7 @@ const {
   listNotes,
   correctNote,
 } = require("../controllers/clinicalNote.controller");
-const { listStaff } = require("../controllers/careStaff.controller");
+const { listStaff, getCallOutcomes } = require("../controllers/careStaff.controller");
 
 // Who may log/read clinical time, calls, and notes. Patients never. care_manager IS
 // clinical staff — logging call/RPM-management time as themselves is the whole point of
@@ -41,6 +41,10 @@ router.get(
   resolveOrgScope,
   listStaff
 );
+
+// Constrained call-outcome list for LogCallForm. Config only (no PHI, no org scope) —
+// all clinical staff, care_manager included.
+router.get("/call-outcomes", authRequired, requireRole(...CLINICAL_STAFF), getCallOutcomes);
 
 router.post(
   "/patients/:patientId/time-entries",
