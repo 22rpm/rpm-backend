@@ -10,7 +10,7 @@ const {
   enrollPatient,
   getEnrollmentOptions,
 } = require("../controllers/patientEnrollment.controller");
-const { getWorklist, getDialysisClinics } = require("../controllers/patientWorklist.controller");
+const { getWorklist, getDialysisClinics, getBillingSummary } = require("../controllers/patientWorklist.controller");
 const {
   getPatientForEdit,
   updatePatient,
@@ -78,6 +78,16 @@ router.get(
   requireRole("clinician", "admin", "super-admin", "care_manager"),
   resolveOrgScope,
   getWorklist
+);
+
+// GET /api/patients/billing-summary?month=YYYY-MM — roster-wide RPM billing overview.
+// Numbers come from the note's own determination per patient (see the service).
+router.get(
+  "/billing-summary",
+  authRequired,
+  requireRole("clinician", "admin", "super-admin", "care_manager"),
+  resolveOrgScope,
+  getBillingSummary
 );
 
 // Patient-scoped routes come LAST so the static paths above (/enrollment-options,
