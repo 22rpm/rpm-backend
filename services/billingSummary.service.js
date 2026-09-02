@@ -42,6 +42,26 @@ async function patientIdsInScope(orgScope, userId, isClinicianOnly) {
   return rows.map((r) => r.id);
 }
 
+// Care team per patient (one batched query, no N+1), as [{id, name}] — mirrors
+// the worklist's shape so the billing overview can show who covers each patient.
+async function careTeamMap(ids) {
+  const map = new Map();
+  if (!ids.length) return map;
+  const [rows] = await db.query(
+    `SELECT pda.patient_id, u.id AS doctor_id, u.name
+       FROM patient_doctor_assignments pda
+       JOIN users u ON u.id = pda.doctor_id
+      WHERE pda.patient_id IN (?)
+      ORDER BY u.name`,
+    [ids]
+  );
+  for (const r of rows) {
+    if (!map.has(r.patient_id)) map.set(r.patient_id, []);
+    map.get(r.patient_id).push({ id: r.doctor_id, name: r.name });
+  }
+  return map;
+}
+
 function flatCodes(note) {
   const codes = [];
   if (note.billing.setup && note.billing.setup.code) codes.push(note.billing.setup.code);
@@ -66,6 +86,7 @@ function deriveState(note, signed) {
 async function getBillingSummary({ orgScope, userId, role, month }) {
   const isClinicianOnly = role === "clinician"; // org-wide roles see the whole clinic
   const ids = await patientIdsInScope(orgScope, userId, isClinicianOnly);
+  const teamMap = await careTeamMap(ids);
 
   const patients = [];
   for (const id of ids) {
@@ -77,6 +98,7 @@ async function getBillingSummary({ orgScope, userId, role, month }) {
       patient_id: note.patient.id,
       name: note.patient.name,
       mrn: note.patient.mrn,
+      care_team: teamMap.get(id) || [],
       days_with_readings: note.monitoring.days_with_readings,
       days_threshold: DAYS_THRESHOLD,
       data_review_minutes: note.time_documentation.data_review_interaction_minutes,
