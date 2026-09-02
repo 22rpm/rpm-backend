@@ -23,6 +23,10 @@ const {
   signRpmNote,
   getSignedRpmNote,
 } = require("../controllers/rpmNote.controller");
+const {
+  getPatientComms,
+  setPatientComms,
+} = require("../controllers/notification.controller");
 
 // Clinical staff who can SEE/act on patients. care_manager is org-wide clinical staff
 // (a monitor who also calls patients), so it belongs here for visibility + edit — the
@@ -151,6 +155,26 @@ router.post(
   resolveOrgScope,
   scopePatientParam("patientId"),
   recordAllergies
+);
+
+// GET/PUT /api/patients/:patientId/comm-prefs — automated-notification consent
+// (separate from RPM consent) + the per-type toggles. staffRoles: a care_manager
+// who does the calls can manage these; the send pipeline still gates on consent.
+router.get(
+  "/:patientId/comm-prefs",
+  authRequired,
+  staffRoles,
+  resolveOrgScope,
+  scopePatientParam("patientId"),
+  getPatientComms
+);
+router.put(
+  "/:patientId/comm-prefs",
+  authRequired,
+  staffRoles,
+  resolveOrgScope,
+  scopePatientParam("patientId"),
+  setPatientComms
 );
 
 // GET /api/patients/:patientId/rpm-note?month=YYYY-MM — read-only pre-fill for

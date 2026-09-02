@@ -147,6 +147,7 @@ async function enrollPatient(req, res) {
       dialysisClinic: b.dialysis_clinic != null ? String(b.dialysis_clinic).trim().slice(0, 255) || null : null,
       conditions: normalizeConditions(b.conditions),
       allergies: b.allergies || null,
+      smsConsent: b.sms_consent === true,
       careTeam: Array.isArray(b.care_team) ? b.care_team.map(Number) : [],
       consent: b.consent
         ? {

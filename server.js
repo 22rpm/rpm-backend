@@ -162,6 +162,8 @@ const careRoutes = require("./routes/care.routes");
 const patientsRoutes = require("./routes/patients.routes");
 const medicationsRoutes = require("./routes/medications.routes");
 const scheduledCallsRoutes = require("./routes/scheduledCall.routes");
+const notificationsRoutes = require("./routes/notifications.routes");
+const notificationScheduler = require("./services/notificationScheduler");
 const fs = require("fs");
 const path = require("path");
 
@@ -224,6 +226,7 @@ app.use("/api/care", careRoutes);
 app.use("/api/patients", patientsRoutes);
 app.use("/api/medications", medicationsRoutes);
 app.use("/api/scheduled-calls", scheduledCallsRoutes);
+app.use("/api/notifications", notificationsRoutes);
 // Add this temporary test route to check your current setup
 app.get("/debug-twilio", (req, res) => {
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
@@ -341,4 +344,7 @@ server.listen(port, "0.0.0.0", () => {
   console.log(`🏥 Health check: http://localhost:${port}/health`);
   console.log(`🔧 Socket debug: http://localhost:${port}/socket-debug`);
   console.log(`🔧 Nginx test: http://localhost:${port}/nginx-test`);
+  // Automated patient-notification scheduler (opt-in via patient comm prefs;
+  // send window is clinic-local). Disable with NOTIFICATIONS_SCHEDULER=off.
+  notificationScheduler.start();
 });

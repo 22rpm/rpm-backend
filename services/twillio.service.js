@@ -12,7 +12,7 @@ class TwilioService {
     this.fromNumber = process.env.TWILIO_PHONE_NUMBER;
   }
 
-  async sendSMS(to, message) {
+  async sendSMS(to, message, opts = {}) {
     try {
       // Validate phone number format
       if (!to || !to.startsWith("+")) {
@@ -20,11 +20,12 @@ class TwilioService {
         return { success: false, error: "Invalid phone number format" };
       }
 
-      const response = await this.client.messages.create({
-        body: message,
-        from: this.fromNumber,
-        to: to,
-      });
+      const payload = { body: message, from: this.fromNumber, to };
+      // Optional delivery status callback (Twilio POSTs status updates here) —
+      // used by the automated-notification pipeline to record delivered/failed.
+      if (opts.statusCallback) payload.statusCallback = opts.statusCallback;
+
+      const response = await this.client.messages.create(payload);
 
       console.log(`✅ SMS sent to ${to}: ${response.sid}`);
       return {

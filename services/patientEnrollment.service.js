@@ -62,6 +62,7 @@ async function enrollPatient({
   dialysisClinic,
   conditions,
   allergies,
+  smsConsent,
   careTeam,
   consent,
   device,
@@ -211,6 +212,16 @@ async function enrollPatient({
         [alg.substances.map((s) => [patientId, s, actorId])]
       );
       allergiesCount = alg.substances.length;
+    }
+
+    // Automated-SMS consent (separate from RPM consent). Only write a row when
+    // consent is given; no row = no consent = the send gate's safe default.
+    if (smsConsent) {
+      await conn.query(
+        `INSERT INTO patient_comm_prefs (patient_id, sms_consent, sms_consent_at, sms_consent_by)
+         VALUES (?, 1, NOW(), ?)`,
+        [patientId, actorId]
+      );
     }
 
     let careTeamCount = 0;
