@@ -26,8 +26,11 @@ const {
 } = require("../controllers/clinicalNote.controller");
 const { listStaff } = require("../controllers/careStaff.controller");
 
-// Who may log/read clinical time, calls, and notes. Patients never.
-const CLINICAL_STAFF = ["clinician", "admin", "super-admin"];
+// Who may log/read clinical time, calls, and notes. Patients never. care_manager IS
+// clinical staff — logging call/RPM-management time as themselves is the whole point of
+// the role (99457 clinical-staff time), so it must be able to log calls, time, and notes.
+// Per-patient access is enforced downstream (canAccessPatient: org-wide for care_manager).
+const CLINICAL_STAFF = ["clinician", "admin", "super-admin", "care_manager"];
 
 // Staff-name lookup for attribution. Org-scoped but NOT patient-linked, so it
 // uses resolveOrgScope without scopePatientParam.

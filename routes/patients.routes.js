@@ -23,7 +23,13 @@ const {
   getSignedRpmNote,
 } = require("../controllers/rpmNote.controller");
 
-const staffRoles = requireRole("clinician", "admin", "super-admin");
+// Clinical staff who can SEE/act on patients. care_manager is org-wide clinical staff
+// (a monitor who also calls patients), so it belongs here for visibility + edit — the
+// per-patient boundary is still enforced by scopePatientParam/canAccessPatient (org-wide
+// for care_manager, assignment-scoped for a clinician). NOTE the deliberate exceptions
+// that are NOT this set: enroll (create patient), consent (attestation), and note-sign
+// are gated separately below.
+const staffRoles = requireRole("clinician", "admin", "super-admin", "care_manager");
 
 // POST /api/patients — enroll a patient into the caller's organization
 // (super-admin passes ?organizationId=). Not patient-linked (creating a new
@@ -64,7 +70,7 @@ router.get(
 router.get(
   "/worklist",
   authRequired,
-  requireRole("clinician", "admin", "super-admin"),
+  requireRole("clinician", "admin", "super-admin", "care_manager"),
   resolveOrgScope,
   getWorklist
 );

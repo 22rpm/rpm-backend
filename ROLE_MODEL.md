@@ -131,3 +131,32 @@ supervision — and the new breakdown now makes that mismatch visible on the sam
 page. Written up in `ATTESTATION_REVIEW_FOR_ROSEMARY.md`, deliberately unchanged
 pending compliance. Note that the wording is unreleased: `rpm_notes` has zero
 signed notes and the note feature is absent from `origin/main`.
+
+## care_manager: by-name role gates that omitted it (backend audit, 2026-09-01)
+
+First live care_manager exercise (the attestation-flagged untested path) surfaced backend
+route gates that enumerate roles by name and had never included `care_manager` — the same
+scattered-enumeration root cause as FRONTEND_FOLLOWUPS #1/#3, on the backend. Symptom:
+Dashboard worked (its `/doctor/*` endpoints use the `isOrgWide` helper, which includes
+care_manager), but the Patients page 403'd and Call Schedule silently emptied — both
+consume `/api/patients/worklist`.
+
+**Audited every dashboard-called endpoint.** By-name gates that wrongly omitted
+care_manager, now fixed (16 endpoints across 3 gate definitions):
+- `patients.routes` `staffRoles` (5: GET /:patientId, GET /:patientId/consent, PATCH
+  /:patientId, GET rpm-note, GET rpm-note/signed) — added care_manager.
+- `patients.routes` `/worklist` inline (1) — added care_manager.
+- `care.routes` `CLINICAL_STAFF` (10: staff lookup, time entries list/create/correct,
+  calls list/create/correct, notes list/create/correct) — added care_manager (logging
+  calls/time as themselves is the role's whole point for 99457).
+
+**Deliberately still exclude care_manager** (not bugs): enroll + enrollment-options
+(patient creation), consent POST (clinician+super-admin attestation), rpm-note sign
+(clinician-only), medication confirm/reject (clinician-only), admin/org routes. Per-patient
+access everywhere is enforced by `scopePatientParam`/`canAccessPatient` (org-wide for
+care_manager), so the role gate is only "is this staff at all."
+
+**Consolidation (recommended, not done):** `staffRoles` and `CLINICAL_STAFF` are the same
+set duplicated in two files, plus the worklist inline — a shared exported constant (or a
+`requireStaff` middleware) would stop the next role from having to be added in N places.
+Same as the frontend followups.
