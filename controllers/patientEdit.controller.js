@@ -15,6 +15,7 @@ const {
 
 const PROGRAM_STATUSES = ["active", "pending", "discharged"];
 const isValidDate = (s) => !Number.isNaN(new Date(s).getTime());
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function validate(b) {
   const errors = [];
@@ -44,6 +45,12 @@ function validate(b) {
     errors.push("secondary_insurance_payer_id must be an integer");
   if (b.mrn != null && String(b.mrn).trim().length > 64)
     errors.push("mrn must be 64 characters or fewer");
+  // email/phone are the login identifiers; validate when present. "" is allowed
+  // for phone (clears it) but not email (an empty email can't identify anyone).
+  if (b.email != null && (b.email === "" || !EMAIL_RE.test(String(b.email).trim())))
+    errors.push("a valid email is required");
+  if (b.phoneNumber != null && String(b.phoneNumber).trim().length > 32)
+    errors.push("phone number must be 32 characters or fewer");
   const condErr = validateConditions(b.conditions);
   if (condErr) errors.push(condErr);
   if (!Array.isArray(b.care_team) || b.care_team.length === 0)
@@ -79,6 +86,10 @@ async function updatePatient(req, res) {
 
     const patientId = Number(req.params.patientId);
     const data = {
+      // Identity (users table). Raw pass-through (like mrn): undefined = keep
+      // existing; a value = set (phone "" clears to null; email "" is rejected above).
+      email: b.email !== undefined ? String(b.email).trim() : undefined,
+      phoneNumber: b.phoneNumber !== undefined ? String(b.phoneNumber) : undefined,
       date_of_birth: b.date_of_birth || null,
       enrolled_at: b.enrolled_at || null,
       program_status: b.program_status || "active",
@@ -110,13 +121,19 @@ async function updatePatient(req, res) {
     // NOT req.user.org_id — which is NULL for a super-admin and would misattribute
     // the entry. Values in metadata are ids/flags and (for enrolment) the dates
     // the change exists to record.
+    const sections = ["profile", "conditions", "care_team"];
+    if (result.emailChanged || result.phoneChanged) sections.push("identity");
     audit.recordAsync({
       req,
       action: audit.ACTIONS.PATIENT_UPDATE,
       entityType: "patient",
       entityId: patientId,
       organizationId: req.orgScope,
-      metadata: { sections: ["profile", "conditions", "care_team"] },
+      metadata: {
+        sections,
+        email_changed: !!result.emailChanged,
+        phone_changed: !!result.phoneChanged,
+      },
     });
     if (result.enrolledAtChanged) {
       audit.recordAsync({

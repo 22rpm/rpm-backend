@@ -35,7 +35,7 @@ function careTeamStatus(m, orgScope) {
 
 async function getPatientForEdit(patientId, orgScope) {
   const [u] = await db.query(
-    `SELECT u.id, u.name
+    `SELECT u.id, u.name, u.email, u.phoneNumber
        FROM users u
        JOIN role r ON r.user_id = u.id AND r.role_type = 'patient'
       WHERE u.id = ?`,
@@ -78,6 +78,8 @@ async function getPatientForEdit(patientId, orgScope) {
   return {
     id: u[0].id,
     name: u[0].name,
+    email: u[0].email ?? null,
+    phoneNumber: u[0].phoneNumber ?? null,
     date_of_birth: p.date_of_birth ?? null,
     enrolled_at: p.enrolled_at ?? null,
     program_status: p.program_status ?? null,
@@ -144,11 +146,66 @@ async function updatePatient({ patientId, orgScope, actorId, data }) {
       throw httpError(400, "Unknown or inactive secondary_insurance_payer_id");
   }
 
+  // Identity fields (email/phone) live on `users`, not patient_profiles. They are
+  // the LOGIN identifiers and the OTP destination, so we validate, BLOCK
+  // duplicates (an ambiguous phone breaks OTP for both patients — the bug that has
+  // bitten twice), and only write what actually changed. Keep-if-absent: an
+  // undefined key leaves the value untouched (older clients don't wipe it).
+  const [urow] = await db.query(
+    "SELECT email, phoneNumber FROM users WHERE id = ?",
+    [patientId]
+  );
+  const curEmail = urow.length ? urow[0].email : null;
+  const curPhone = urow.length ? urow[0].phoneNumber : null;
+
+  let newEmail = curEmail;
+  if (data.email !== undefined) {
+    const e = String(data.email).trim();
+    if (!e) throw httpError(400, "email cannot be empty");
+    newEmail = e;
+  }
+  let newPhone = curPhone;
+  if (data.phoneNumber !== undefined) {
+    newPhone = String(data.phoneNumber).trim() || null;
+  }
+  const emailChanged = (newEmail || null) !== (curEmail || null);
+  const phoneChanged = (newPhone || null) !== (curPhone || null);
+
+  if (emailChanged && newEmail) {
+    const [dup] = await db.query(
+      "SELECT id, name FROM users WHERE email = ? AND id <> ? LIMIT 1",
+      [newEmail, patientId]
+    );
+    if (dup.length)
+      throw httpError(409, `email already in use by ${dup[0].name} (patient #${dup[0].id})`);
+  }
+  if (phoneChanged && newPhone) {
+    const [dup] = await db.query(
+      "SELECT id, name FROM users WHERE phoneNumber = ? AND id <> ? LIMIT 1",
+      [newPhone, patientId]
+    );
+    if (dup.length)
+      throw httpError(
+        409,
+        `phone number already belongs to ${dup[0].name} (patient #${dup[0].id})`
+      );
+  }
+
   const careTeam = data.care_team;
 
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
+
+    // Identity update on `users` (only when changed). email has a UNIQUE index as
+    // a backstop against a race; phoneNumber does not, so the app-level check
+    // above is its only guard (also enforced on enroll).
+    if (emailChanged || phoneChanged) {
+      await conn.query(
+        "UPDATE users SET email = ?, phoneNumber = ?, updated_at = NOW() WHERE id = ?",
+        [newEmail, newPhone, patientId]
+      );
+    }
 
     const [cur] = await conn.query(
       "SELECT DATE_FORMAT(enrolled_at, '%Y-%m-%d') AS enrolled_at, mrn, is_dialysis, dialysis_clinic FROM patient_profiles WHERE user_id = ?",
@@ -266,9 +323,14 @@ async function updatePatient({ patientId, orgScope, actorId, data }) {
       enrolledAtChanged: (prevEnrolledAt || null) !== (newEnrolledAt || null),
       from: prevEnrolledAt || null,
       to: newEnrolledAt || null,
+      emailChanged,
+      phoneChanged,
     };
   } catch (err) {
     await conn.rollback();
+    // UNIQUE(email) backstop for a race between the dup-check and the UPDATE.
+    if (err && err.code === "ER_DUP_ENTRY")
+      throw httpError(409, "email already in use by another patient");
     throw err;
   } finally {
     conn.release();

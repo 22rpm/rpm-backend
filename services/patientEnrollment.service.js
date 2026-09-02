@@ -100,6 +100,21 @@ async function enrollPatient({
     );
     if (e.length) throw httpError(409, "Email already exists");
 
+    // Block a duplicate phone at enrollment too — phoneNumber has no UNIQUE index,
+    // and two users sharing a number makes OTP login ambiguous for both (the
+    // bug that has bitten twice). Warn with WHO already has it.
+    if (phoneNumber && String(phoneNumber).trim()) {
+      const [ph] = await conn.query(
+        "SELECT id, name FROM users WHERE phoneNumber = ? LIMIT 1",
+        [String(phoneNumber).trim()]
+      );
+      if (ph.length)
+        throw httpError(
+          409,
+          `phone number already belongs to ${ph[0].name} (patient #${ph[0].id})`
+        );
+    }
+
     if (insurancePayerId != null) {
       const [p] = await conn.query(
         "SELECT id FROM insurance_payers WHERE id = ? AND is_active = 1",
