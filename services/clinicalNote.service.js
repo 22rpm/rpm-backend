@@ -27,9 +27,13 @@ async function findNoteSupersededBy(id) {
 // started_at, so order by created_at.
 async function listHeadNotesForPatient(patientId, organizationId) {
   const [rows] = await db.query(
-    `SELECT n.*
+    // staff_user_id on the head row is the ORIGINAL author — corrections preserve it
+    // (see correctNote: staffUserId = original.staff_user_id). LEFT JOIN so a deleted user
+    // never hides a note.
+    `SELECT n.*, u.name AS staff_name
        FROM clinical_notes n
        LEFT JOIN clinical_notes s ON s.supersedes = n.id
+       LEFT JOIN users u ON u.id = n.staff_user_id
       WHERE n.patient_id = ?
         AND n.organization_id = ?
         AND s.id IS NULL

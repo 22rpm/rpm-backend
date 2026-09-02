@@ -95,9 +95,13 @@ async function createManualEntry(
 // drops any row that another row supersedes, so only current versions show.
 async function listHeadEntriesForPatient(patientId, organizationId) {
   const [rows] = await db.query(
-    `SELECT t.*
+    // staff_user_id on the head row is the ORIGINAL actor — corrections carry it
+    // forward (see care.controller.correctTimeEntry), so this attributes the work to who
+    // did it, not who corrected it. LEFT JOIN so a deleted user never hides an entry.
+    `SELECT t.*, u.name AS staff_name
        FROM time_entries t
        LEFT JOIN time_entries s ON s.supersedes = t.id
+       LEFT JOIN users u ON u.id = t.staff_user_id
       WHERE t.patient_id = ?
         AND t.organization_id = ?
         AND s.id IS NULL

@@ -30,10 +30,14 @@ async function findCallSupersededBy(id) {
 // entry's duration when present.
 async function listHeadCallsForPatient(patientId, organizationId) {
   const [rows] = await db.query(
-    `SELECT c.*, te.duration_seconds AS time_duration_seconds
+    // staff_user_id on the head row is the ORIGINAL actor — corrections preserve it
+    // (see insertCorrection: staffUserId = original.staff_user_id), so this shows who made
+    // the call, not who corrected it. LEFT JOIN so a deleted user never hides an entry.
+    `SELECT c.*, te.duration_seconds AS time_duration_seconds, u.name AS staff_name
        FROM patient_calls c
        LEFT JOIN patient_calls s ON s.supersedes = c.id
        LEFT JOIN time_entries te ON te.id = c.time_entry_id
+       LEFT JOIN users u ON u.id = c.staff_user_id
       WHERE c.patient_id = ?
         AND c.organization_id = ?
         AND s.id IS NULL
