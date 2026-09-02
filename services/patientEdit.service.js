@@ -44,15 +44,24 @@ async function getPatientForEdit(patientId, orgScope) {
   if (!u.length) throw httpError(404, "Patient not found");
 
   const [prof] = await db.query(
-    `SELECT DATE_FORMAT(date_of_birth, '%Y-%m-%d') AS date_of_birth,
-            DATE_FORMAT(enrolled_at, '%Y-%m-%d') AS enrolled_at,
-            program_status, insurance_payer_id, comments, mrn,
-            is_dialysis, dialysis_clinic
-       FROM patient_profiles WHERE user_id = ?`,
+    `SELECT DATE_FORMAT(pp.date_of_birth, '%Y-%m-%d') AS date_of_birth,
+            DATE_FORMAT(pp.enrolled_at, '%Y-%m-%d') AS enrolled_at,
+            pp.program_status, pp.insurance_payer_id, pp.secondary_insurance_payer_id,
+            pp.comments, pp.mrn, pp.is_dialysis, pp.dialysis_clinic,
+            pp.nkda,
+            DATE_FORMAT(pp.allergies_reviewed_at, '%Y-%m-%d') AS allergies_reviewed_at,
+            rb.name AS allergies_reviewed_by_name
+       FROM patient_profiles pp
+       LEFT JOIN users rb ON rb.id = pp.allergies_reviewed_by
+      WHERE pp.user_id = ?`,
     [patientId]
   );
   const [conds] = await db.query(
-    "SELECT name FROM patient_conditions WHERE patient_id = ? ORDER BY name",
+    "SELECT name, icd10_code FROM patient_conditions WHERE patient_id = ? ORDER BY name",
+    [patientId]
+  );
+  const [allergyRows] = await db.query(
+    "SELECT substance FROM patient_allergies WHERE patient_id = ? ORDER BY substance",
     [patientId]
   );
   const [team] = await db.query(
@@ -73,11 +82,25 @@ async function getPatientForEdit(patientId, orgScope) {
     enrolled_at: p.enrolled_at ?? null,
     program_status: p.program_status ?? null,
     insurance_payer_id: p.insurance_payer_id ?? null,
+    secondary_insurance_payer_id: p.secondary_insurance_payer_id ?? null,
     comments: p.comments ?? null,
     mrn: p.mrn ?? null,
     is_dialysis: !!p.is_dialysis,
     dialysis_clinic: p.dialysis_clinic ?? null,
-    conditions: conds.map((c) => c.name),
+    conditions: conds.map((c) => ({ name: c.name, icd10_code: c.icd10_code ?? null })),
+    // Drug allergies + the tri-state the profile banner needs. `allergy_status` is
+    // derived server-side so the client can't accidentally render NKDA (green,
+    // "safe to rely") when nothing was actually recorded:
+    //   has_allergies (substances) > nkda (attested) > none_recorded (default).
+    allergies: allergyRows.map((r) => r.substance),
+    nkda: !!p.nkda,
+    allergy_status: allergyRows.length
+      ? "has_allergies"
+      : p.nkda
+      ? "nkda"
+      : "none_recorded",
+    allergies_reviewed_at: p.allergies_reviewed_at ?? null,
+    allergies_reviewed_by_name: p.allergies_reviewed_by_name ?? null,
     care_team: team.map((m) => ({
       id: m.id,
       name: m.name,
@@ -109,6 +132,16 @@ async function updatePatient({ patientId, orgScope, actorId, data }) {
     );
     if (!pay.length)
       throw httpError(400, "Unknown or inactive insurance_payer_id");
+  }
+  if (data.secondary_insurance_payer_id != null) {
+    if (data.secondary_insurance_payer_id === data.insurance_payer_id)
+      throw httpError(400, "secondary insurance cannot be the same as primary");
+    const [pay2] = await db.query(
+      "SELECT id FROM insurance_payers WHERE id = ? AND is_active = 1",
+      [data.secondary_insurance_payer_id]
+    );
+    if (!pay2.length)
+      throw httpError(400, "Unknown or inactive secondary_insurance_payer_id");
   }
 
   const careTeam = data.care_team;
@@ -146,14 +179,15 @@ async function updatePatient({ patientId, orgScope, actorId, data }) {
 
     await conn.query(
       `INSERT INTO patient_profiles
-         (user_id, date_of_birth, enrolled_at, program_status, insurance_payer_id, comments, mrn,
-          is_dialysis, dialysis_clinic)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         (user_id, date_of_birth, enrolled_at, program_status, insurance_payer_id,
+          secondary_insurance_payer_id, comments, mrn, is_dialysis, dialysis_clinic)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
          date_of_birth = VALUES(date_of_birth),
          enrolled_at = VALUES(enrolled_at),
          program_status = VALUES(program_status),
          insurance_payer_id = VALUES(insurance_payer_id),
+         secondary_insurance_payer_id = VALUES(secondary_insurance_payer_id),
          comments = VALUES(comments),
          mrn = VALUES(mrn),
          is_dialysis = VALUES(is_dialysis),
@@ -165,6 +199,7 @@ async function updatePatient({ patientId, orgScope, actorId, data }) {
         newEnrolledAt,
         data.program_status,
         data.insurance_payer_id ?? null,
+        data.secondary_insurance_payer_id ?? null,
         data.comments || null,
         newMrn,
         newIsDialysis,
@@ -172,14 +207,15 @@ async function updatePatient({ patientId, orgScope, actorId, data }) {
       ]
     );
 
-    // Conditions: replace-all (no history/billing significance).
+    // Conditions: replace-all (no history/billing significance). Each carries an
+    // optional curated ICD-10 code (null = free text).
     await conn.query("DELETE FROM patient_conditions WHERE patient_id = ?", [
       patientId,
     ]);
     if (data.conditions.length) {
       await conn.query(
-        "INSERT INTO patient_conditions (patient_id, name) VALUES ?",
-        [data.conditions.map((n) => [patientId, n])]
+        "INSERT INTO patient_conditions (patient_id, name, icd10_code) VALUES ?",
+        [data.conditions.map((c) => [patientId, c.name, c.icd10_code || null])]
       );
     }
 
@@ -237,6 +273,66 @@ async function updatePatient({ patientId, orgScope, actorId, data }) {
   } finally {
     conn.release();
   }
+}
+
+// Record drug-allergy status for a patient (the profile banner's write path).
+// This is a DELIBERATE act — the ONLY thing that moves a patient off "not
+// recorded" — so it always stamps allergies_reviewed_at/by. NKDA and a substance
+// list are mutually exclusive; a non-empty list wins (nkda forced false).
+//   substances non-empty -> those substances, nkda 0
+//   nkda === true         -> no substances, nkda 1 (attested "no known allergies")
+//   both empty            -> clears back to "not recorded" (rows gone, nkda 0),
+//                            but still stamps reviewed (someone looked and cleared it)
+// Upserts patient_profiles because some patients predate enrollment (no row yet);
+// only user_id lacks a column default, so the minimal insert is safe.
+async function recordAllergies({ patientId, orgScope, actorId, substances, nkda }) {
+  const [u] = await db.query(
+    "SELECT r.role_type FROM users u JOIN role r ON r.user_id = u.id WHERE u.id = ?",
+    [patientId]
+  );
+  if (!u.length) throw httpError(404, "Patient not found");
+  if (u[0].role_type !== "patient")
+    throw httpError(400, "Target user is not a patient");
+
+  const list = Array.isArray(substances)
+    ? [...new Set(substances.map((s) => String(s).trim()).filter(Boolean))].slice(0, 50)
+    : [];
+  const finalNkda = list.length ? false : nkda === true;
+
+  const conn = await db.getConnection();
+  try {
+    await conn.beginTransaction();
+    await conn.query(
+      `INSERT INTO patient_profiles (user_id, nkda, allergies_reviewed_at, allergies_reviewed_by)
+       VALUES (?, ?, NOW(), ?)
+       ON DUPLICATE KEY UPDATE
+         nkda = VALUES(nkda),
+         allergies_reviewed_at = VALUES(allergies_reviewed_at),
+         allergies_reviewed_by = VALUES(allergies_reviewed_by),
+         updated_at = NOW()`,
+      [patientId, finalNkda ? 1 : 0, actorId]
+    );
+    await conn.query("DELETE FROM patient_allergies WHERE patient_id = ?", [
+      patientId,
+    ]);
+    if (list.length) {
+      await conn.query(
+        "INSERT INTO patient_allergies (patient_id, substance, recorded_by) VALUES ?",
+        [list.map((s) => [patientId, s, actorId])]
+      );
+    }
+    await conn.commit();
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+  return {
+    allergies: list,
+    nkda: finalNkda,
+    allergy_status: list.length ? "has_allergies" : finalNkda ? "nkda" : "none_recorded",
+  };
 }
 
 // Latest-wins consent row for the READ-ONLY consent view. patient_consents is an
@@ -309,6 +405,7 @@ async function recordConsent({
 module.exports = {
   getPatientForEdit,
   updatePatient,
+  recordAllergies,
   getLatestConsent,
   recordConsent,
 };

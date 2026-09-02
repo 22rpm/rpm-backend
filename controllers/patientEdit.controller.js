@@ -8,6 +8,10 @@
 // management. Devices and consent are append-only ledgers handled elsewhere.
 const editService = require("../services/patientEdit.service");
 const audit = require("../services/audit.service");
+const {
+  normalizeConditions,
+  validateConditions,
+} = require("../config/icd10Conditions");
 
 const PROGRAM_STATUSES = ["active", "pending", "discharged"];
 const isValidDate = (s) => !Number.isNaN(new Date(s).getTime());
@@ -33,14 +37,15 @@ function validate(b) {
     !Number.isInteger(Number(b.insurance_payer_id))
   )
     errors.push("insurance_payer_id must be an integer");
+  if (
+    b.secondary_insurance_payer_id != null &&
+    !Number.isInteger(Number(b.secondary_insurance_payer_id))
+  )
+    errors.push("secondary_insurance_payer_id must be an integer");
   if (b.mrn != null && String(b.mrn).trim().length > 64)
     errors.push("mrn must be 64 characters or fewer");
-  if (
-    b.conditions != null &&
-    (!Array.isArray(b.conditions) ||
-      b.conditions.some((c) => typeof c !== "string" || !c.trim()))
-  )
-    errors.push("conditions must be an array of non-empty strings");
+  const condErr = validateConditions(b.conditions);
+  if (condErr) errors.push(condErr);
   if (!Array.isArray(b.care_team) || b.care_team.length === 0)
     errors.push("care_team is required — assign at least one clinician");
   else if (b.care_team.some((id) => !Number.isInteger(Number(id))))
@@ -79,6 +84,10 @@ async function updatePatient(req, res) {
       program_status: b.program_status || "active",
       insurance_payer_id:
         b.insurance_payer_id != null ? Number(b.insurance_payer_id) : null,
+      secondary_insurance_payer_id:
+        b.secondary_insurance_payer_id != null
+          ? Number(b.secondary_insurance_payer_id)
+          : null,
       comments: b.comments || null,
       // Pass mrn through RAW (not `|| null`) so the service can tell "absent,
       // keep existing" (undefined) from "explicit clear" (""). See the service.
@@ -86,9 +95,7 @@ async function updatePatient(req, res) {
       // Raw pass-through (like mrn): undefined = keep existing, else set/clear.
       is_dialysis: b.is_dialysis,
       dialysis_clinic: b.dialysis_clinic,
-      conditions: Array.isArray(b.conditions)
-        ? b.conditions.map((c) => c.trim()).filter(Boolean)
-        : [],
+      conditions: normalizeConditions(b.conditions),
       care_team: b.care_team.map((id) => Number(id)),
     };
 
@@ -129,6 +136,61 @@ async function updatePatient(req, res) {
     if (err && err.httpStatus)
       return res.status(err.httpStatus).json({ ok: false, message: err.message });
     console.error("updatePatient error:", err);
+    return res.status(500).json({ ok: false, message: "Server error" });
+  }
+}
+
+// POST /api/patients/:patientId/allergies — record drug-allergy status (the
+// profile banner's write path). Body: { substances: string[], nkda: boolean }.
+// This is the ONLY way a patient leaves "not recorded" — so "no known drug
+// allergies" is always a claim someone actively made, never a default.
+async function recordAllergies(req, res) {
+  try {
+    const b = req.body || {};
+    const errors = [];
+    if (b.substances != null) {
+      if (
+        !Array.isArray(b.substances) ||
+        b.substances.some((s) => typeof s !== "string")
+      )
+        errors.push("substances must be an array of strings");
+    }
+    if (b.nkda != null && typeof b.nkda !== "boolean")
+      errors.push("nkda must be a boolean");
+    const hasList =
+      Array.isArray(b.substances) && b.substances.some((s) => String(s).trim());
+    if (b.nkda === true && hasList)
+      errors.push(
+        "cannot record 'no known drug allergies' together with a list of allergies"
+      );
+    if (errors.length)
+      return res
+        .status(400)
+        .json({ ok: false, message: "Validation failed", errors });
+
+    const patientId = Number(req.params.patientId);
+    const result = await editService.recordAllergies({
+      patientId,
+      orgScope: req.orgScope,
+      actorId: req.user.id, // the recorder — never client input
+      substances: Array.isArray(b.substances) ? b.substances : [],
+      nkda: b.nkda === true,
+    });
+
+    audit.recordAsync({
+      req,
+      action: audit.ACTIONS.PATIENT_UPDATE,
+      entityType: "patient",
+      entityId: patientId,
+      organizationId: req.orgScope,
+      metadata: { sections: ["allergies"], allergy_status: result.allergy_status },
+    });
+
+    return res.status(200).json({ ok: true, ...result });
+  } catch (err) {
+    if (err && err.httpStatus)
+      return res.status(err.httpStatus).json({ ok: false, message: err.message });
+    console.error("recordAllergies error:", err);
     return res.status(500).json({ ok: false, message: "Server error" });
   }
 }
@@ -217,6 +279,7 @@ async function recordConsent(req, res) {
 module.exports = {
   getPatientForEdit,
   updatePatient,
+  recordAllergies,
   getPatientConsent,
   recordConsent,
 };

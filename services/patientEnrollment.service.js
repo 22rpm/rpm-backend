@@ -10,11 +10,26 @@
 const db = require("../config/db");
 const bcrypt = require("bcrypt");
 const crypto = require("crypto");
+const { ICD10_CONDITIONS } = require("../config/icd10Conditions");
 
 function httpError(status, message) {
   const e = new Error(message);
   e.httpStatus = status;
   return e;
+}
+
+// Resolve an allergy input block into { substances, nkda, recorded }.
+// - substances present -> those substances, nkda=false, recorded=true
+// - nkda === true (and no substances) -> [], nkda=true, recorded=true (attested)
+// - neither -> [], nkda=false, recorded=false ("not recorded", the safe default)
+function normalizeAllergyInput(allergies) {
+  const a = allergies || {};
+  const substances = Array.isArray(a.substances)
+    ? [...new Set(a.substances.map((s) => String(s).trim()).filter(Boolean))].slice(0, 50)
+    : [];
+  if (substances.length) return { substances, nkda: false, recorded: true };
+  if (a.nkda === true) return { substances: [], nkda: true, recorded: true };
+  return { substances: [], nkda: false, recorded: false };
 }
 
 async function generateUniqueUsername(conn) {
@@ -40,15 +55,23 @@ async function enrollPatient({
   enrolledAt,
   programStatus,
   insurancePayerId,
+  secondaryInsurancePayerId,
   comments,
   mrn,
   isDialysis,
   dialysisClinic,
   conditions,
+  allergies,
   careTeam,
   consent,
   device,
 }) {
+  // Allergy input -> a resolved shape. NKDA and a substance list are mutually
+  // exclusive; a list wins (nkda forced false). `recorded` is true only when the
+  // clinician actually asserted something (a list OR an explicit NKDA) — the
+  // green "no known allergies" state must be a claim someone made, never a
+  // default, so we only stamp reviewed_at/by when recorded.
+  const alg = normalizeAllergyInput(allergies);
   // Hash a random password OUTSIDE the transaction (in-memory compute, can't
   // half-commit). Never returned to anyone.
   const randomPassword = crypto.randomBytes(24).toString("base64");
@@ -82,6 +105,16 @@ async function enrollPatient({
         [insurancePayerId]
       );
       if (!p.length) throw httpError(400, "Unknown or inactive insurance_payer_id");
+    }
+    if (secondaryInsurancePayerId != null) {
+      if (secondaryInsurancePayerId === insurancePayerId)
+        throw httpError(400, "secondary insurance cannot be the same as primary");
+      const [p2] = await conn.query(
+        "SELECT id FROM insurance_payers WHERE id = ? AND is_active = 1",
+        [secondaryInsurancePayerId]
+      );
+      if (!p2.length)
+        throw httpError(400, "Unknown or inactive secondary_insurance_payer_id");
     }
 
     if (device) {
@@ -139,29 +172,45 @@ async function enrollPatient({
 
     await conn.query(
       `INSERT INTO patient_profiles
-         (user_id, date_of_birth, enrolled_at, program_status, insurance_payer_id, comments, mrn,
-          is_dialysis, dialysis_clinic)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (user_id, date_of_birth, enrolled_at, program_status, insurance_payer_id,
+          secondary_insurance_payer_id, comments, mrn, is_dialysis, dialysis_clinic,
+          nkda, allergies_reviewed_at, allergies_reviewed_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${alg.recorded ? "NOW()" : "NULL"}, ?)`,
       [
         patientId,
         dateOfBirth,
         enrolledAt,
         programStatus,
         insurancePayerId,
+        secondaryInsurancePayerId ?? null,
         comments,
         (mrn && String(mrn).trim()) || null,
         isDialysis ? 1 : 0,
         dialysisClinic || null,
+        alg.nkda ? 1 : 0,
+        alg.recorded ? actorId : null,
       ]
     );
 
+    // Conditions carry an optional curated ICD-10 code (null = free text).
     let conditionsCount = 0;
     if (conditions && conditions.length) {
       await conn.query(
-        "INSERT INTO patient_conditions (patient_id, name) VALUES ?",
-        [conditions.map((c) => [patientId, c])]
+        "INSERT INTO patient_conditions (patient_id, name, icd10_code) VALUES ?",
+        [conditions.map((c) => [patientId, c.name, c.icd10_code || null])]
       );
       conditionsCount = conditions.length;
+    }
+
+    // Drug allergies: substance rows (only when a list was given). NKDA + the
+    // reviewed stamp were written on the profile above.
+    let allergiesCount = 0;
+    if (alg.substances.length) {
+      await conn.query(
+        "INSERT INTO patient_allergies (patient_id, substance, recorded_by) VALUES ?",
+        [alg.substances.map((s) => [patientId, s, actorId])]
+      );
+      allergiesCount = alg.substances.length;
     }
 
     let careTeamCount = 0;
@@ -234,6 +283,8 @@ async function enrollPatient({
       patientId,
       username: finalUsername,
       conditionsCount,
+      allergiesCount,
+      nkda: alg.nkda,
       careTeamCount,
       consentCreated: !!consent,
       deviceCreated,
@@ -274,7 +325,14 @@ async function getEnrollmentOptions(orgScope) {
       ORDER BY u.name`,
     [orgScope]
   );
-  return { payers, device_types: deviceTypes, clinicians };
+  // icd10_conditions is the curated static shortlist (config, not a table) — the
+  // pickable diagnoses for the conditions field, grouped by category client-side.
+  return {
+    payers,
+    device_types: deviceTypes,
+    clinicians,
+    icd10_conditions: ICD10_CONDITIONS,
+  };
 }
 
 module.exports = { enrollPatient, getEnrollmentOptions };

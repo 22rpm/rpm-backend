@@ -14,6 +14,7 @@ const { getWorklist, getDialysisClinics, getBillingSummary } = require("../contr
 const {
   getPatientForEdit,
   updatePatient,
+  recordAllergies,
   getPatientConsent,
   recordConsent,
 } = require("../controllers/patientEdit.controller");
@@ -137,6 +138,19 @@ router.patch(
   resolveOrgScope,
   scopePatientParam("patientId"),
   updatePatient
+);
+
+// POST /api/patients/:patientId/allergies — record drug-allergy status
+// (substances + NKDA). staffRoles (clinician + care_manager + admin/super-admin):
+// allergies are clinical info the care team records, not a clinician-only
+// attestation like consent or note-signing. The recorder is req.user.id.
+router.post(
+  "/:patientId/allergies",
+  authRequired,
+  staffRoles,
+  resolveOrgScope,
+  scopePatientParam("patientId"),
+  recordAllergies
 );
 
 // GET /api/patients/:patientId/rpm-note?month=YYYY-MM — read-only pre-fill for

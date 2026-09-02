@@ -16,7 +16,7 @@ async function getWorklist(req, res) {
     const mine = req.query.mine === "true" || req.query.mine === "1";
     const result = await worklistService.getWorklist({
       orgScope: req.orgScope,
-      userId: req.user.id,
+      user: req.user, // role_type + id — the hard access floor is role-based
       month: req.query.month,
       mine,
     });

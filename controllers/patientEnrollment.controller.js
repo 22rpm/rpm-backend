@@ -7,6 +7,30 @@
 // nullability migration is deferred — see EMAIL_NULLABILITY_AUDIT.md).
 const enrollmentService = require("../services/patientEnrollment.service");
 const { CALL_OUTCOMES } = require("../config/callOutcomes");
+const {
+  normalizeConditions,
+  validateConditions,
+} = require("../config/icd10Conditions");
+
+function validateAllergies(raw) {
+  if (raw == null) return null;
+  if (typeof raw !== "object") return "allergies must be an object";
+  if (raw.substances != null) {
+    if (
+      !Array.isArray(raw.substances) ||
+      raw.substances.some((s) => typeof s !== "string")
+    )
+      return "allergies.substances must be an array of strings";
+  }
+  if (raw.nkda != null && typeof raw.nkda !== "boolean")
+    return "allergies.nkda must be a boolean";
+  const hasList =
+    Array.isArray(raw.substances) &&
+    raw.substances.some((s) => String(s).trim());
+  if (raw.nkda === true && hasList)
+    return "cannot record 'no known drug allergies' together with a list of allergies";
+  return null;
+}
 
 const PROGRAM_STATUSES = ["active", "pending", "discharged"];
 const CONSENT_METHODS = ["verbal", "written"];
@@ -41,14 +65,16 @@ function validate(body) {
 
   if (b.insurance_payer_id != null && !Number.isInteger(Number(b.insurance_payer_id)))
     errors.push("insurance_payer_id must be an integer");
+  if (
+    b.secondary_insurance_payer_id != null &&
+    !Number.isInteger(Number(b.secondary_insurance_payer_id))
+  )
+    errors.push("secondary_insurance_payer_id must be an integer");
 
-  if (b.conditions != null) {
-    if (
-      !Array.isArray(b.conditions) ||
-      b.conditions.some((c) => typeof c !== "string" || !c.trim())
-    )
-      errors.push("conditions must be an array of non-empty strings");
-  }
+  const condErr = validateConditions(b.conditions);
+  if (condErr) errors.push(condErr);
+  const algErr = validateAllergies(b.allergies);
+  if (algErr) errors.push(algErr);
 
   if (b.care_team != null) {
     if (
@@ -111,11 +137,16 @@ async function enrollPatient(req, res) {
       enrolledAt,
       programStatus,
       insurancePayerId: b.insurance_payer_id != null ? Number(b.insurance_payer_id) : null,
+      secondaryInsurancePayerId:
+        b.secondary_insurance_payer_id != null
+          ? Number(b.secondary_insurance_payer_id)
+          : null,
       comments: b.comments != null ? String(b.comments) : null,
       mrn: b.mrn != null ? String(b.mrn) : null,
       isDialysis: b.is_dialysis === true || b.is_dialysis === 1 || b.is_dialysis === "true",
       dialysisClinic: b.dialysis_clinic != null ? String(b.dialysis_clinic).trim().slice(0, 255) || null : null,
-      conditions: Array.isArray(b.conditions) ? b.conditions.map((c) => c.trim()) : [],
+      conditions: normalizeConditions(b.conditions),
+      allergies: b.allergies || null,
       careTeam: Array.isArray(b.care_team) ? b.care_team.map(Number) : [],
       consent: b.consent
         ? {
@@ -157,6 +188,8 @@ async function enrollPatient(req, res) {
       },
       created: {
         conditions: result.conditionsCount,
+        allergies: result.allergiesCount,
+        nkda: result.nkda,
         care_team: result.careTeamCount,
         consent: result.consentCreated,
         device: result.deviceCreated,
@@ -181,13 +214,14 @@ async function enrollPatient(req, res) {
 // drifted hardcoded copy in the frontend would produce 400s.
 async function getEnrollmentOptions(req, res) {
   try {
-    const { payers, device_types, clinicians } =
+    const { payers, device_types, clinicians, icd10_conditions } =
       await enrollmentService.getEnrollmentOptions(req.orgScope);
     return res.status(200).json({
       ok: true,
       payers,
       device_types,
       clinicians,
+      icd10_conditions,
       call_outcomes: CALL_OUTCOMES,
     });
   } catch (err) {

@@ -5,11 +5,19 @@
 // batched queries (no N+1) and stitched in JS. A single mega-join is avoided
 // because the array columns (conditions, care team) would fan the row set out.
 //
-// `mine` is a FILTER — patients whose care team includes the caller — never a
-// permission boundary. A clinician may still request the whole clinic (§3.2);
-// org scoping (req.orgScope) is the only boundary and is applied by the caller.
+// ACCESS BOUNDARY (fixed 2026-09): a clinician is HARD-LIMITED to their assigned
+// patients here, server-side, via assignmentScope() — independent of `mine`.
+// Previously `mine` was the ONLY thing restricting a clinician's list, which made
+// it a UI-state filter over a real access boundary: a clinician who didn't send
+// mine=true (the "All patients" toggle) got the whole clinic's roster. That is
+// the assignment gate being bypassed by UI state — an access-control defect, not
+// a filter quirk. Now: org-wide roles (super-admin/admin/care_manager) see the
+// whole org and may use `mine` as an OPTIONAL filter for their own panel; a
+// clinician always sees only assigned patients and `mine` is a no-op for them.
+// Org scoping (req.orgScope) remains the outer boundary, applied by the caller.
 const db = require("../config/db");
 const tzq = require("../config/billingTz");
+const { assignmentScope, isOrgWide } = require("./patientAccess");
 
 // "YYYY-MM" -> { start:'YYYY-MM-01', next: first day of next month, label }.
 // Falls back to the current (UTC) month for missing/invalid input.
@@ -44,7 +52,7 @@ function groupBy(rows, key, mapFn) {
   return m;
 }
 
-async function getWorklist({ orgScope, userId, month, mine }) {
+async function getWorklist({ orgScope, user, month, mine }) {
   const win = monthWindow(month); // calendar-month LABELS
 
   // Clinic-tz month window, matching rpmNote.service so the worklist's monthly
@@ -59,13 +67,17 @@ async function getWorklist({ orgScope, userId, month, mine }) {
   await tzq.assertClinicTz(db, clinicTz);
   const L = tzq.monthLabels(month);
 
-  // 1) Base patient rows (org-scoped). `mine` only adds an EXISTS filter.
-  const params = [orgScope];
-  let mineClause = "";
-  if (mine) {
-    mineClause =
-      "AND EXISTS (SELECT 1 FROM patient_doctor_assignments pda WHERE pda.patient_id = u.id AND pda.doctor_id = ?)";
-    params.push(userId);
+  // 1) Base patient rows (org-scoped). The hard floor is role-based: a clinician
+  // is restricted to assigned patients (assignmentScope), org-wide roles add
+  // nothing. `mine` is layered ON TOP only as an optional filter for org-wide
+  // roles wanting just their own panel — for a clinician it's redundant/no-op.
+  const scope = assignmentScope(user, "u.id");
+  const params = [orgScope, ...scope.params];
+  let scopeClause = scope.clause;
+  if (mine && isOrgWide(user)) {
+    scopeClause +=
+      " AND EXISTS (SELECT 1 FROM patient_doctor_assignments pda WHERE pda.patient_id = u.id AND pda.doctor_id = ?)";
+    params.push(user.id);
   }
   const [rows] = await db.query(
     // DATE columns are formatted to plain 'YYYY-MM-DD' strings in SQL: mysql2
@@ -83,7 +95,7 @@ async function getWorklist({ orgScope, userId, month, mine }) {
        LEFT JOIN patient_profiles p ON p.user_id = u.id
        LEFT JOIN insurance_payers ip ON ip.id = p.insurance_payer_id
       WHERE u.organization_id = ?
-      ${mineClause}
+      ${scopeClause}
       ORDER BY u.name`,
     params
   );
