@@ -20,14 +20,17 @@ const ROLES = Object.freeze({
   CARE_MANAGER: "care_manager",
   CLINICIAN: "clinician",
   PATIENT: "patient",
-  // (The read-only multi-org BILLER role is added here in its own PR, on top of
-  //  this consolidation — kept out of this change so it stays a pure no-op.)
+  // Read-only, multi-org billing role. org-scoped per request to ONE of its
+  // allowed clinics (biller_organizations) via resolveOrgScope. Deliberately NOT
+  // in ORG_WIDE_ROLES — it must not inherit alert/vitals exposure — and NOT in
+  // CLINICAL_STAFF — it can't write anything.
+  BILLER: "biller",
 });
 
-const { SUPER_ADMIN, ADMIN, CARE_MANAGER, CLINICIAN, PATIENT } = ROLES;
+const { SUPER_ADMIN, ADMIN, CARE_MANAGER, CLINICIAN, PATIENT, BILLER } = ROLES;
 
 // Every valid role (for the auth create-user enum). Order kept as the enum had it.
-const ALL_ROLES = [ADMIN, CLINICIAN, CARE_MANAGER, PATIENT, SUPER_ADMIN];
+const ALL_ROLES = [ADMIN, CLINICIAN, CARE_MANAGER, PATIENT, SUPER_ADMIN, BILLER];
 
 // --- gate groups (each named for its MEANING) ---
 
@@ -58,6 +61,15 @@ const ADMIN_ROLES = [ADMIN, SUPER_ADMIN];
 const ADMIN_OR_CLINICIAN = [ADMIN, SUPER_ADMIN, CLINICIAN];
 const SUPER_ADMIN_ONLY = [SUPER_ADMIN];
 
+// Read-only billing surface: the biller, plus admin/super-admin for oversight
+// (they can see what a biller sees). Grants READ of the reduced billing-note +
+// billing demographics only — never any write route.
+const BILLING_READ_ROLES = [BILLER, ADMIN, SUPER_ADMIN];
+
+// The roster billing overview (/billing-summary): clinical staff see it in their
+// workflow AND billers bill from it. Union of CLINICAL_STAFF + biller.
+const BILLING_OVERVIEW_ROLES = [...CLINICAL_STAFF, BILLER];
+
 module.exports = Object.freeze({
   ROLES,
   ALL_ROLES,
@@ -69,4 +81,6 @@ module.exports = Object.freeze({
   ADMIN_ROLES,
   ADMIN_OR_CLINICIAN,
   SUPER_ADMIN_ONLY,
+  BILLING_READ_ROLES,
+  BILLING_OVERVIEW_ROLES,
 });

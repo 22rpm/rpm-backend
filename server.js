@@ -163,6 +163,7 @@ const patientsRoutes = require("./routes/patients.routes");
 const medicationsRoutes = require("./routes/medications.routes");
 const scheduledCallsRoutes = require("./routes/scheduledCall.routes");
 const notificationsRoutes = require("./routes/notifications.routes");
+const billingRoutes = require("./routes/billing.routes");
 const notificationScheduler = require("./services/notificationScheduler");
 const { assertRoleGates } = require("./scripts/checkRoleGates");
 // Fail-fast if any route gate reintroduces a scattered role string (SECURITY_FOLLOWUPS
@@ -232,6 +233,7 @@ app.use("/api/patients", patientsRoutes);
 app.use("/api/medications", medicationsRoutes);
 app.use("/api/scheduled-calls", scheduledCallsRoutes);
 app.use("/api/notifications", notificationsRoutes);
+app.use("/api/billing", billingRoutes);
 // Add this temporary test route to check your current setup
 app.get("/debug-twilio", (req, res) => {
   const accountSid = process.env.TWILIO_ACCOUNT_SID;

@@ -20,8 +20,10 @@
 
 const db = require("../config/db");
 const audit = require("../services/audit.service");
+const { ROLES } = require("../config/roles");
 
-const SUPER_ADMIN = "super-admin";
+const SUPER_ADMIN = ROLES.SUPER_ADMIN;
+const BILLER = ROLES.BILLER;
 
 /**
  * Resolve `req.orgScope` for the current request.
@@ -53,6 +55,37 @@ async function resolveOrgScope(req, res, next) {
           .json({ ok: false, message: "Organization not found" });
       }
 
+      req.orgScope = orgId;
+      return next();
+    }
+
+    if (role === BILLER) {
+      // A biller (org_id NULL) selects ONE of its ALLOWED clinics per request,
+      // like super-admin — but the requested org must be in biller_organizations
+      // for THIS biller. FAIL-CLOSED: no membership row (incl. an unassigned
+      // biller with an empty set) → refused. An empty set is zero access, never all.
+      const raw = req.query.organizationId;
+      const orgId = Number.parseInt(raw, 10);
+      if (raw === undefined || raw === null || raw === "" || Number.isNaN(orgId)) {
+        return res.status(400).json({
+          ok: false,
+          message: "organizationId query parameter is required for biller",
+        });
+      }
+      const [rows] = await db.query(
+        `SELECT 1 FROM biller_organizations bo
+           JOIN organizations o ON o.id = bo.organization_id AND o.is_deleted = 0
+          WHERE bo.biller_user_id = ? AND bo.organization_id = ? LIMIT 1`,
+        [req.user.id, orgId]
+      );
+      if (rows.length === 0) {
+        // Not a member of this org (or org gone). 403 — the biller exists but is
+        // not entitled to this clinic. Never reveal other clinics' data.
+        return res.status(403).json({
+          ok: false,
+          message: "Not authorized for this organization",
+        });
+      }
       req.orgScope = orgId;
       return next();
     }

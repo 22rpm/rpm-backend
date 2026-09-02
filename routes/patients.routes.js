@@ -11,6 +11,7 @@ const {
   ENROLL_ROLES,
   CONSENT_ROLES,
   CLINICIAN_ONLY,
+  BILLING_OVERVIEW_ROLES,
 } = require("../config/roles");
 const {
   enrollPatient,
@@ -95,10 +96,12 @@ router.get(
 
 // GET /api/patients/billing-summary?month=YYYY-MM — roster-wide RPM billing overview.
 // Numbers come from the note's own determination per patient (see the service).
+// Clinical staff AND billers (billers bill from this roster); a biller's orgScope
+// is validated to one of their allowed clinics by resolveOrgScope.
 router.get(
   "/billing-summary",
   authRequired,
-  staffRoles,
+  requireRole(...BILLING_OVERVIEW_ROLES),
   resolveOrgScope,
   getBillingSummary
 );
