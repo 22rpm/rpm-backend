@@ -26,6 +26,8 @@ const {
 const {
   getPatientComms,
   setPatientComms,
+  sendNow,
+  getPatientNotificationLog,
 } = require("../controllers/notification.controller");
 
 // Clinical staff who can SEE/act on patients. care_manager is org-wide clinical staff
@@ -175,6 +177,25 @@ router.put(
   resolveOrgScope,
   scopePatientParam("patientId"),
   setPatientComms
+);
+
+// GET /api/patients/:patientId/notifications — the patient's notification log
+// (the Notifications tab). POST .../send — fire a template on demand (send-now).
+router.get(
+  "/:patientId/notifications",
+  authRequired,
+  staffRoles,
+  resolveOrgScope,
+  scopePatientParam("patientId"),
+  getPatientNotificationLog
+);
+router.post(
+  "/:patientId/notifications/send",
+  authRequired,
+  staffRoles,
+  resolveOrgScope,
+  scopePatientParam("patientId"),
+  sendNow
 );
 
 // GET /api/patients/:patientId/rpm-note?month=YYYY-MM — read-only pre-fill for

@@ -161,6 +161,39 @@ async function setPatientComms(req, res) {
   }
 }
 
+// POST /api/patients/:patientId/notifications/send — fire an existing template
+// NOW. Body: { type, force }. Returns the outcome so the UI can react:
+//   sent | compliant (patient is current; re-send with force) |
+//   skipped (no_consent | opted_out) | failed.
+async function sendNow(req, res) {
+  try {
+    const patientId = Number(req.params.patientId);
+    const { type, force } = req.body || {};
+    const result = await notif.sendOnDemand({
+      patientId,
+      type,
+      force: force === true,
+    });
+    return res.status(200).json({ ok: true, ...result });
+  } catch (err) {
+    if (err && err.httpStatus)
+      return res.status(err.httpStatus).json({ ok: false, message: err.message });
+    console.error("sendNow error:", err.message);
+    return res.status(500).json({ ok: false, message: "Server error" });
+  }
+}
+
+// GET /api/patients/:patientId/notifications — the patient's notification log.
+async function getPatientNotificationLog(req, res) {
+  try {
+    const log = await notif.getPatientLog(Number(req.params.patientId));
+    return res.status(200).json({ ok: true, log });
+  } catch (err) {
+    console.error("getPatientNotificationLog error:", err.message);
+    return res.status(500).json({ ok: false, message: "Server error" });
+  }
+}
+
 function escapeXml(s) {
   return String(s).replace(/[<>&'"]/g, (c) =>
     ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", '"': "&quot;" }[c])
@@ -174,4 +207,6 @@ module.exports = {
   getFailures,
   getPatientComms,
   setPatientComms,
+  sendNow,
+  getPatientNotificationLog,
 };

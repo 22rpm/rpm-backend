@@ -358,6 +358,54 @@ async function recordSkip({ patientId, organizationId, type, reason }) {
   await safeLog({ patient_id: patientId, organization_id: organizationId ?? null, type, status: "skipped", skip_reason: reason });
 }
 
+// The reading-reminder cadence configured for a patient (default 3).
+async function readingCadence(patientId) {
+  const [rows] = await db.query(
+    "SELECT cadence_days FROM patient_notification_settings WHERE patient_id = ? AND type = 'reading_reminder' LIMIT 1",
+    [patientId]
+  );
+  return (rows[0] && rows[0].cadence_days) || 3;
+}
+
+// On-demand send: a clinician/admin fires an existing template NOW rather than
+// waiting for the schedule. Same pipeline (consent + opt-out + log), with two
+// deliberate differences from the scheduler:
+//   - NO send window. A person choosing to send at 8pm is deliberate; the 9–6
+//     window only exists to stop the scheduler firing overnight.
+//   - Compliance dedupe still applies to reading_reminder, but is a WARNING, not
+//     a hard block: without `force`, a current patient returns { outcome:
+//     "compliant" } and nothing is sent; the caller can re-send with force=true.
+// Consent and opt-out are NEVER overridable by force — only compliance is.
+async function sendOnDemand({ patientId, type, force }) {
+  const def = TYPES[type];
+  if (!def || !def.live) {
+    const e = new Error(`Cannot send type on demand: ${type}`);
+    e.httpStatus = 400;
+    throw e;
+  }
+  if (type === "reading_reminder" && !force) {
+    const cadence = await readingCadence(patientId);
+    if (await hasRecentReading(patientId, cadence)) {
+      return { outcome: "compliant", cadence };
+    }
+  }
+  return sendNotification({ patientId, type });
+}
+
+// The per-patient notification log (for the patient's Notifications tab).
+async function getPatientLog(patientId, limit = 50) {
+  const [rows] = await db.query(
+    `SELECT id, type, status, skip_reason, error_code, error_message,
+            created_at, sent_at, delivered_at
+       FROM notification_log
+      WHERE patient_id = ?
+      ORDER BY created_at DESC
+      LIMIT ?`,
+    [patientId, Number(limit)]
+  );
+  return rows;
+}
+
 module.exports = {
   getPrefs,
   setConsent,
@@ -373,4 +421,6 @@ module.exports = {
   sentTypeToday,
   sentTypeWithinDays,
   recordSkip,
+  sendOnDemand,
+  getPatientLog,
 };
