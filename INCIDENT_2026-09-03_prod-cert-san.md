@@ -77,13 +77,19 @@ been failing cert validation since Aug 22:
 2. **iOS app — privacy-policy link (minor).** `Settings.js` / `PrivacySecurityScreen.js`
    `Linking.openURL('https://rmtrpm.duckdns.org/privacy')` — opens in the browser and
    also fails cert; a broken privacy link, not data, but App-Review-visible.
-3. **Twilio callbacks (SECOND SYSTEM — env-dependent, safety-relevant).** The SMS
-   `statusCallback` is built from `PUBLIC_BASE_URL` (`notification.service.js:241`), and
-   the inbound SMS webhook URL is set in the Twilio console. IF either is
-   `rmtrpm.duckdns.org`, Twilio's strict TLS validation fails → **error 11235**, and:
-   - inbound patient replies + **STOP/opt-out** never reach the backend (an opt-out that
-     doesn't register — the fail-closed concern), and
-   - delivery status is never recorded.
+3. **Twilio callbacks (SECOND SYSTEM — env-dependent). This is DATA INTEGRITY, not a
+   compliance breach.** The SMS `statusCallback` is built from `PUBLIC_BASE_URL`
+   (`notification.service.js:241`), and the inbound SMS webhook URL is set in the Twilio
+   console. IF either is `rmtrpm.duckdns.org`, Twilio's strict TLS validation fails →
+   **error 11235**, and:
+   - **STOP/opt-out is still enforced at the carrier.** Twilio blocks STOP at its own
+     layer (Advanced Opt-Out) by default, so those patients are almost certainly still
+     opted out and receiving nothing. What breaks is that **our DB copy of their
+     opt-out/consent state never learns of the STOP and drifts out of sync** with
+     Twilio's authoritative state — a records-accuracy problem, not a missed opt-out.
+   - **Inbound non-STOP replies are lost** — patient messages that aren't keywords never
+     reach the backend (the reply-capture added earlier receives nothing).
+   - **Delivery status is never recorded** (the statusCallback silently fails).
    Confirm `PUBLIC_BASE_URL` on the box and the Twilio console webhook URL.
 
 **NOT affected (both use `api.twentytwohealth.com`, valid cert):** the Android app
