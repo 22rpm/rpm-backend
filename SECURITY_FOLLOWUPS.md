@@ -396,3 +396,14 @@ prod. Concrete guardrails, cheapest first:
    basing on `main` is exactly how the fix gets orphaned.
 4. **A leak sweep greps for the data, not the transport** (see 13b) — `otp`, `hash`,
    `password`, `req.user`, whole-object/row dumps, not just `cookie`/`token`/`header`.
+
+## 14. Prod TLS cert dropped the rmtrpm.duckdns.org SAN — suspected silent iOS outage since ~Aug 22 — OPEN
+The cert served by `rmtrpm.duckdns.org` (50.18.96.20) covers only `api.twentytwohealth.com`
+(SAN has no `rmtrpm.duckdns.org`), issued Aug 22 2026. The iOS app hardcodes
+`rmtrpm.duckdns.org` with strict ATS and no trust bypass, so every HTTPS/WSS call fails
+cert validation — likely ~12 days of lost iOS reading ingestion (no durable outbox on
+1.0.49 → readings are lost, not queued). Billing (99454) + monitoring impact. Full
+finding, blast-radius SQL, cert-renewal-config bug hypothesis, and the certbot --expand
+remediation: **`INCIDENT_2026-09-03_prod-cert-san.md`**. Possibly the same root cause as
+Twilio 11235 (webhook cert-invalid). Fix pending; archive of iOS 1.0.50 held until cert
+covers both SANs.
