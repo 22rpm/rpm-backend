@@ -2,12 +2,13 @@
 const db = require("../config/db");
 
 async function findUserByEmail(email) {
-  console.log("🧠 findUserByEmail called with:", email);
   const [rows] = await db.query(
     "SELECT id, username, name, email, password, phoneNumber, created_at, organization_id, updated_at FROM users WHERE email = ? LIMIT 1",
     [email]
   );
-  console.log("📊 Query result for email:", rows);
+  // REDACTED: never log the lookup value (PII) or the returned row — the row
+  // carries the bcrypt password hash + email + phone. Id only. See SECURITY_FOLLOWUPS.
+  console.log("findUserByEmail:", rows[0] ? `user ${rows[0].id}` : "no match");
   return rows[0] || null;
 }
 
@@ -74,12 +75,13 @@ async function getUserById(userId) {
   return rows[0] || null;
 }
 async function findUserByUsername(username) {
-  console.log("🧠 findUserByUsername called with:", username);
   const [rows] = await db.query(
     "SELECT id, username, name, email, password, phoneNumber, created_at, organization_id, updated_at FROM users WHERE username = ? LIMIT 1",
     [username]
   );
-  console.log("📊 Query result for username:", rows);
+  // REDACTED: never log the lookup value or the returned row (bcrypt hash + PII).
+  // Id only. See SECURITY_FOLLOWUPS.
+  console.log("findUserByUsername:", rows[0] ? `user ${rows[0].id}` : "no match");
   return rows[0] || null;
 }
 // Look up a user by phone number.

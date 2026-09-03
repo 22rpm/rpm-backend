@@ -72,7 +72,8 @@ class MessageController {
 
   async getUserConversations(req, res) {
     try {
-      console.log(req.user);
+      // REDACTED: req.user is the full JWT payload (PII). Id only.
+      console.log("getUserConversations — actor:", req.user?.id);
       const userId = req.user.id;
       console.log("Fetching conversations for userId:", userId);
       const conversations = await messageService.getUserConversations(userId);
@@ -111,7 +112,8 @@ class MessageController {
 
   async getPatients(req, res) {
     try {
-      console.log("getPatients called", req.user);
+      // REDACTED: req.user is the full JWT payload (PII). Id only.
+      console.log("getPatients called — actor:", req.user?.id);
 
       // Visibility scoped by role in the service: org-wide roles see the org's
       // patients (req.orgScope), a clinician sees their assigned patients.

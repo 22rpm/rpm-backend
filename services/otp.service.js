@@ -19,8 +19,9 @@ async function verifyOtp(userId, otp, type = "login") {
     [userId, otp, type]
   );
 
-  console.log(rows);
-  
+  // REDACTED: never log the otp_tokens rows — they contain the plaintext
+  // otp_code. Log only whether a match was found. See SECURITY_FOLLOWUPS.
+  console.log("otp verify match:", rows.length > 0);
 
   if (rows.length === 0) return false;
 

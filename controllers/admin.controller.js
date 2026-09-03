@@ -233,7 +233,8 @@ export async function getAssignedDoctors(req, res) {
       `SELECT organization_id FROM users WHERE id = ?`,
       [patientId]
     );
-    console.log("patientRows", patientRows);
+    // REDACTED: log a count, not the rows. See SECURITY_FOLLOWUPS.
+    console.log("patientRows count:", patientRows.length);
 
     if (patientRows.length === 0) {
       return res.status(404).json({
@@ -269,7 +270,8 @@ export async function updateDoctorAssignments(req, res) {
 
   const { addDoctorIds = [], removeDoctorIds = [] } = req.body;
   const assignedBy = req.user.id;
-  console.log("user req", req.user);
+  // REDACTED: req.user is the full JWT payload (name/email/phone/role/org). Id only.
+  console.log("assign doctors — actor:", req.user?.id);
 
   console.log("addDoctorIds", addDoctorIds);
   console.log("removeDoctorIds", removeDoctorIds);

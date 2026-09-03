@@ -385,7 +385,10 @@ if (!user) {
       if (sendOtpEmail) {
         await sendOtpEmail(user.email, otp);
       } else {
-        console.log(`OTP for ${identifier}: ${otp}`);
+        // REDACTED: never log the OTP or the identifier — a live auth credential
+        // + PII. If email transport is unavailable the OTP cannot be delivered;
+        // surface that as an error, not by printing the code. See SECURITY_FOLLOWUPS.
+        console.error(`Email OTP transport unavailable for user ${user.id}`);
       }
     } catch (mailErr) {
       console.error(`Email OTP failed for user ${user.id}:`, mailErr.message);

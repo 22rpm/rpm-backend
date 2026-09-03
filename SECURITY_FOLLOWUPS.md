@@ -342,3 +342,57 @@ branch. The redaction didn't "not survive a merge" — there was no merge.
 - Longer term: a redaction layer on the logger so header/cookie objects can never be
   logged whole, and fold #5's branch-cut discipline in so a security fix on one
   branch is reconciled onto all active branches.
+
+### 13b. Reconciliation of the sibling branches — a SECOND redaction pass was also stranded
+Triggered by 13's branch-cut discovery, we diffed the three siblings
+(`fix/device-upsert-idempotent`, `feature/apple-review-bypass`, `fix/messages-e2e`)
+against `feature/care-activity` (`git log --right-only --cherry-pick`). Findings:
+
+- **`04e3f20` "Redact auth/user-service log leaks (2nd pass)" was ALSO not on this
+  branch** — the same class as `1eb41cd`, stranded the same way. As a result
+  `feature/care-activity` was **live-leaking, on every login**: the **plaintext OTP**
+  (`services/mail.service.js:14`, `controllers/auth.controller.js:388`,
+  `services/otp.service.js:22` dumping `otp_tokens` rows incl. `otp_code`), the
+  **bcrypt password hash + email + phone** (`services/user.service.js:10,82` dumping
+  the full user row), settings field **values** (`settings.controller.js:30`), and
+  `req.user`/`patientRows` **PII dumps** (`admin.controller.js:236,272`,
+  `messageController.js:75,114`). An OTP in the log lets anyone with log access
+  complete a login during the OTP window; a bcrypt hash is offline-crackable.
+  **All re-redacted on `feature/care-activity` in this pass** (ids/booleans only).
+- The first sweep for 13 pattern-matched header/cookie/token/authorization and
+  **missed the OTP/hash/row leaks** because those log lines say "OTP is" / `rows` /
+  "Query result". Lesson: a leak sweep must grep for the *data* (otp, hash, password,
+  `req.user`, row dumps), not just the transport words.
+- **Not gaps (already correct here):** `1dd987e` (socket auth reading
+  `decoded.role_type`) — `socketServer.js` already reads `decoded.role_type || decoded.role`;
+  `723d984` (`getCliniciansByPatient` assigned+active+org scoping) — `messageService.js`
+  already scopes (with an org-bounded orphan fallback). Reproduced independently on
+  this branch, so no action.
+- **Intentional divergence, NOT a fix to pull:** `9e75310`/`b54a683`/`862cccb` — the
+  Apple-review OTP bypass (seeded user 44). Prod moved OFF `feature/apple-review-bypass`
+  ONTO `feature/care-activity`, which does **not** carry the bypass — confirm the iOS
+  review no longer depends on it before assuming that's fine.
+- **Also stranded, non-security (data integrity):** `a21702a` (idempotent device
+  upsert — a devices-table race could abort/lose a reading) and `5830953` (idempotent
+  `dev_data` insert — a retry could duplicate a reading), documented in
+  `DATA_INTEGRITY_FINDINGS.md`. Worth reconciling separately — they concern lost/dup
+  clinical readings, not disclosure.
+
+### 13c. Prevention — third time a branch-cut gap has cost real debugging
+This is the **third** incident (see #5) where a fix on one branch was silently absent
+from the active branch. The pattern is always: a fix lands on branch X; a feature
+branch was cut before it (or from `main`); the fix never merges; it re-manifests in
+prod. Concrete guardrails, cheapest first:
+1. **Reconcile before every prod deploy.** Add to the deploy checklist:
+   `for b in <all active branches>; do git log --right-only --cherry-pick --oneline HEAD...$b; done`
+   and eyeball anything that looks like a fix/security commit not on HEAD. This diff
+   is what caught 13b; it takes seconds.
+2. **Security fixes go to a shared base, not a feature tip.** A redaction/authz fix
+   should land on `main` (or the migration-reconcile base) and every active branch
+   rebased/merged forward — never committed only onto whatever branch happened to be
+   checked out. (Both `1eb41cd` and `04e3f20` were committed onto a sibling and never
+   propagated.)
+3. **Cut branches from the active branch, not `main`** (already a standing rule) —
+   basing on `main` is exactly how the fix gets orphaned.
+4. **A leak sweep greps for the data, not the transport** (see 13b) — `otp`, `hash`,
+   `password`, `req.user`, whole-object/row dumps, not just `cookie`/`token`/`header`.

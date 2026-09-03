@@ -11,7 +11,8 @@ const transporter = nodemailer.createTransport({
 });
 
 async function sendOtpEmail(to, otp) {
-  console.log("OTP is", otp);
+  // REDACTED: never log the OTP — it's a live auth credential. Anyone with log
+  // access could complete a login during the OTP window. See SECURITY_FOLLOWUPS.
 
   await transporter.sendMail({
     from: `"TwentyTwo RPM" <${process.env.GMAIL_USER}>`,
