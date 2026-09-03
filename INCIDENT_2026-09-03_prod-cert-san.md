@@ -1,10 +1,36 @@
-# INCIDENT — prod TLS cert dropped the `rmtrpm.duckdns.org` SAN (likely silent iOS outage since ~Aug 22 2026)
+# RESOLVED (FALSE ALARM) — prod cert SAN mismatch did NOT cause an outage
 
-**Status:** OPEN — investigating blast radius, cert fix pending.
-**Opened:** 2026-09-03, while pre-flighting the iOS 1.0.50 build.
-**Severity:** HIGH — suspected multi-week production outage of iOS reading ingestion,
-with billing (99454) and clinical-monitoring impact. No durable outbox on live 1.0.49,
-so any readings taken during the outage are **lost, not queued**.
+**Status:** CLOSED — no incident. **Do NOT reissue the cert.**
+**Opened:** 2026-09-03, pre-flighting the iOS 1.0.50 build. **Closed:** same day, by log evidence.
+**Severity:** none (originally raised HIGH on a code+cert prediction that was wrong).
+
+## Resolution — the code-only conclusion was overturned by the nginx logs
+The prediction below (strict ATS + a cert lacking the `rmtrpm.duckdns.org` SAN ⇒ every
+iOS call fails) **did not hold in practice.** The prod nginx logs show the **iOS client
+(CFNetwork) connecting successfully throughout, including today** — there was no outage
+at any point. The SAN observation (via `curl`/`openssl`) is real, but the live client
+tolerates it; whatever the exact reason, the authoritative evidence is the server logs,
+and they show continuous successful iOS traffic. **No cert change is needed; do not
+reissue.**
+
+- **The low ingest volume is expected, not a symptom.** There is exactly **one real
+  patient** on prod. Device **`7C46598B`** is that patient; everything else in `dev_data`
+  is test devices.
+- **Billing is correct.** June (17 transmission days) and July (24) are legitimate 99454.
+  **August (9 days) is correctly NOT billable** — below the 16-day threshold, as designed.
+  The August "drop" is one patient having fewer reading-days that month, not a failure.
+- **Lesson:** a code + cert reading predicted a client failure the real client never
+  exhibited. Verify against actual client/server evidence (logs) before declaring an
+  incident — the code-only theory was confidently wrong in the failing direction.
+
+*The original investigation is preserved below as the record of what was checked and why
+the theory looked right on paper. It is CLOSED — read it as history, not an open action.*
+
+---
+
+**[SUPERSEDED — original theory, kept for the record]** Severity was raised HIGH on a
+suspected multi-week outage of iOS reading ingestion. That conclusion was wrong (see
+Resolution above).
 
 ## Finding
 The iOS app (1.0.49 live, and 1.0.50 in prep) connects to

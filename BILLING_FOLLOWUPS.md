@@ -414,3 +414,29 @@ selector's head:
   first-listed diagnosis; manifestation codes remain pickable as *secondary* problem-
   list entries. Design the manifestation exclusion and the primary-selection rule in
   the same change — not bolted on after.
+
+## 15. Test/non-patient devices write into `dev_data` and can inflate billing day-counts — DESIGN NOTE, don't build yet
+The 99454/99445 transmission-day count is `SELECT DISTINCT <clinic-tz day of created_at>
+FROM dev_data WHERE user_id = ? AND <month window>` (`services/rpmNote.service.js:139-146`,
+surfaced via `getRpmNote` → `billingSummary.service.js:102`). It counts **any device
+type**, and **test devices land in the same `dev_data` table as real readings** — e.g.
+`review_cuff_001` put 6 days into August; `bp_device_001` (iOS fallback) and `'unknown'`
+(Android fallback) are shared sentinel `dev_id`s used across accounts.
+
+**Today it's harmless because there is one real patient** (device `7C46598B`) and the
+noise is obvious by eye. **At twenty patients it won't be** — a test session or a shared
+fallback `dev_id` attributed to a real patient's `user_id` would silently add billable
+transmission days, and nobody would catch it in a roster.
+
+**We need a way to exclude non-patient devices from billing day-counts before the roster
+grows.** Options (pick at build time, not now):
+1. **A device registry flag.** Give `devices` (or `patient_devices`) an `is_billable` /
+   `is_test` boolean; the day-count joins it and counts only real, patient-registered
+   devices. Cleanest; needs devices to be reliably registered per patient.
+2. **Count only registered patient devices.** Restrict the count to `dev_id`s linked to
+   that patient in a devices table, so unlinked/test/sentinel ids never count.
+3. **Exclude a sentinel denylist** (`review_cuff_001`, `bp_device_001`, `'unknown'`, …).
+   Brittle stopgap — every new test id must be remembered; use only as a short-term guard.
+Recommended direction: (1) or (2) — attribute billing to *registered patient devices*,
+not to raw `dev_data` rows. **Design note only — do not build until the roster is about to
+grow.**
