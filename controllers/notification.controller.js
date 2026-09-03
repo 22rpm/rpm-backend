@@ -36,19 +36,39 @@ async function smsInbound(req, res) {
 
     let reply = "";
     if (patientId) {
+      const [[u]] = [
+        await db.query(
+          `SELECT u.organization_id, o.name AS org_name
+             FROM users u LEFT JOIN organizations o ON o.id = u.organization_id
+            WHERE u.id = ?`,
+          [patientId]
+        ),
+      ];
+      const orgId = u[0] ? u[0].organization_id : null;
       if (STOP_WORDS.has(body)) {
         await notif.setOptOut({ patientId, source: "stop_keyword" });
       } else if (START_WORDS.has(body)) {
         await notif.clearOptOut({ patientId, source: "start_keyword" });
       } else if (HELP_WORDS.has(body)) {
-        const [[org]] = [
-          await db.query(
-            `SELECT o.name FROM users u LEFT JOIN organizations o ON o.id = u.organization_id WHERE u.id = ?`,
-            [patientId]
-          ),
-        ];
-        reply = HELP_BODY({ clinicName: (org && org.name) || "Your clinic" });
+        reply = HELP_BODY({ clinicName: (u[0] && u[0].org_name) || "Your clinic" });
+      } else {
+        // A real reply — store it so a clinician can see it. Previously DROPPED:
+        // the webhook received every message, handled the keywords, and silently
+        // discarded the rest (SECURITY_FOLLOWUPS — patient texting into silence).
+        // Store the ORIGINAL text (req.body.Body), not the lowercased keyword copy.
+        await notif.recordInboundReply({
+          patientId,
+          organizationId: orgId,
+          from,
+          body: String(req.body.Body || "").trim(),
+        });
       }
+    }
+    // else: unknown number (not an enrolled patient) — nothing to attach it to;
+    // notification_log.patient_id is NOT NULL. Logged and dropped (rare: the clinic
+    // number only texts enrolled patients). See SECURITY_FOLLOWUPS for the catch-table option.
+    if (!patientId) {
+      console.warn("smsInbound: reply from unmatched number", from);
     }
     // TwiML response (empty, or a HELP reply). Twilio also applies its own default
     // STOP/HELP handling regardless.
@@ -194,6 +214,21 @@ async function getPatientNotificationLog(req, res) {
   }
 }
 
+// POST /api/patients/:patientId/notifications/ack — mark this patient's inbound
+// replies seen (clears the "reply waiting" signal on the patient list).
+async function acknowledgeInbound(req, res) {
+  try {
+    const cleared = await notif.acknowledgeInbound({
+      patientId: Number(req.params.patientId),
+      actorId: req.user.id,
+    });
+    return res.status(200).json({ ok: true, cleared });
+  } catch (err) {
+    console.error("acknowledgeInbound error:", err.message);
+    return res.status(500).json({ ok: false, message: "Server error" });
+  }
+}
+
 function escapeXml(s) {
   return String(s).replace(/[<>&'"]/g, (c) =>
     ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", '"': "&quot;" }[c])
@@ -209,4 +244,5 @@ module.exports = {
   setPatientComms,
   sendNow,
   getPatientNotificationLog,
+  acknowledgeInbound,
 };

@@ -118,13 +118,14 @@ async function loadSendContext(patientId) {
 async function insertLog(row) {
   const [res] = await db.query(
     `INSERT INTO notification_log
-       (patient_id, organization_id, type, channel, to_number, body, twilio_sid,
-        status, skip_reason, error_code, error_message, scheduled_for, sent_at)
-     VALUES (?, ?, ?, 'sms', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (patient_id, organization_id, type, channel, direction, to_number, body,
+        twilio_sid, status, skip_reason, error_code, error_message, scheduled_for, sent_at)
+     VALUES (?, ?, ?, 'sms', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       row.patient_id,
       row.organization_id ?? null,
       row.type,
+      row.direction || "outbound",
       row.to_number ?? null,
       row.body ?? null,
       row.twilio_sid ?? null,
@@ -137,6 +138,49 @@ async function insertLog(row) {
     ]
   );
   return res.insertId;
+}
+
+// Store an inbound patient SMS reply (a non-keyword message — STOP/START/HELP are
+// handled as commands separately). This is what the webhook used to drop.
+async function recordInboundReply({ patientId, organizationId, from, body }) {
+  return insertLog({
+    patient_id: patientId,
+    organization_id: organizationId ?? null,
+    type: "reply",
+    direction: "inbound",
+    to_number: from || null,
+    body: body || null,
+    status: "received",
+  });
+}
+
+// Mark every unacknowledged inbound reply for a patient as seen (clears the
+// "reply waiting" signal). Returns how many were cleared.
+async function acknowledgeInbound({ patientId, actorId }) {
+  const [res] = await db.query(
+    `UPDATE notification_log
+        SET acknowledged_at = NOW(), acknowledged_by = ?
+      WHERE patient_id = ? AND direction = 'inbound' AND acknowledged_at IS NULL`,
+    [actorId ?? null, patientId]
+  );
+  return res.affectedRows || 0;
+}
+
+// Unacknowledged-inbound summary per patient for a set of ids (patient-list badge):
+// { [patient_id]: { count, oldest } }. Oldest drives the aging emphasis.
+async function unreadInboundByPatient(patientIds) {
+  const map = {};
+  if (!patientIds || !patientIds.length) return map;
+  const [rows] = await db.query(
+    `SELECT patient_id, COUNT(*) AS count, MIN(created_at) AS oldest
+       FROM notification_log
+      WHERE direction = 'inbound' AND acknowledged_at IS NULL
+        AND patient_id IN (?)
+      GROUP BY patient_id`,
+    [patientIds]
+  );
+  for (const r of rows) map[r.patient_id] = { count: Number(r.count), oldest: r.oldest };
+  return map;
 }
 
 // Send one notification of `type` to one patient. Returns { outcome, ... }.
@@ -395,8 +439,8 @@ async function sendOnDemand({ patientId, type, force }) {
 // The per-patient notification log (for the patient's Notifications tab).
 async function getPatientLog(patientId, limit = 50) {
   const [rows] = await db.query(
-    `SELECT id, type, status, skip_reason, error_code, error_message,
-            created_at, sent_at, delivered_at
+    `SELECT id, type, direction, body, status, skip_reason, error_code, error_message,
+            created_at, sent_at, delivered_at, acknowledged_at
        FROM notification_log
       WHERE patient_id = ?
       ORDER BY created_at DESC
@@ -423,4 +467,7 @@ module.exports = {
   recordSkip,
   sendOnDemand,
   getPatientLog,
+  recordInboundReply,
+  acknowledgeInbound,
+  unreadInboundByPatient,
 };

@@ -139,3 +139,26 @@ not ship until those land, because they'd make promises we can't keep.
 6. **Self-booking link / patient web surface** — a separate project (#2). Not a
    prerequisite for the call *prompt*; required only if we want true self-booking.
 7. **Push (APNs/FCM)** — a separate infrastructure project (#1). SMS ships without it.
+
+---
+
+## Scheduling link — smallest version (SCOPED, HELD — do not build)
+
+Still blocked on a patient web surface + a real notion of availability; neither
+exists. "Expect a call" stays. Recorded so the smallest viable shape is findable:
+
+1. **Signed single-use link** — an opaque token in the SMS → patient_id + org +
+   short expiry; no PHI in the URL. This token/magic-link primitive does not exist
+   yet and is the core new piece.
+2. **One public page, no login** — a minimal standalone page (outside the staff
+   dashboard, which is auth-only) that validates the token and shows choices. This
+   is the new patient web surface.
+3. **Coarse slot picker, not a calendar** — a handful of clinic-defined windows
+   (e.g. 3 fixed slots, or morning/afternoon), because real availability/slots
+   don't exist. Patient picks one.
+4. **Token-scoped booking endpoint** — validates the token, writes a
+   `scheduled_calls` row (or a requested-time preference) for that patient;
+   single-use so the link can't be replayed.
+
+Its own project (token primitive + unauthenticated page + coarse availability +
+scoped endpoint), separate from inbound-SMS. Held deliberately, not forgotten.

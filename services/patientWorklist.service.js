@@ -18,6 +18,7 @@
 const db = require("../config/db");
 const tzq = require("../config/billingTz");
 const { assignmentScope, isOrgWide } = require("./patientAccess");
+const notif = require("./notification.service");
 
 // "YYYY-MM" -> { start:'YYYY-MM-01', next: first day of next month, label }.
 // Falls back to the current (UTC) month for missing/invalid input.
@@ -191,6 +192,9 @@ async function getWorklist({ orgScope, user, month, mine }) {
   );
   const schedMap = new Map(sched.map((r) => [r.patient_id, r]));
   const lastCallMap = new Map(lastCall.map((r) => [r.patient_id, r.last_call]));
+  // Unacknowledged inbound SMS replies per patient — powers the "reply waiting"
+  // badge on the list, so a reply isn't buried inside the Notifications tab.
+  const replyMap = await notif.unreadInboundByPatient(ids);
 
   const lastMap = new Map();
   for (const r of inter) {
@@ -221,6 +225,8 @@ async function getWorklist({ orgScope, user, month, mine }) {
     last_call: lastCallMap.get(r.id) || null,
     next_scheduled_call: schedMap.get(r.id)?.next_scheduled || null,
     scheduled_overdue: !!(schedMap.get(r.id)?.overdue),
+    reply_waiting: replyMap[r.id]?.count || 0,
+    reply_oldest: replyMap[r.id]?.oldest || null,
   }));
 
   return { month: win.label, mine: !!mine, patients };

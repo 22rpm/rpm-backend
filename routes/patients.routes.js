@@ -35,6 +35,7 @@ const {
   setPatientComms,
   sendNow,
   getPatientNotificationLog,
+  acknowledgeInbound,
 } = require("../controllers/notification.controller");
 
 // Clinical staff who can SEE/act on patients. care_manager is org-wide clinical staff
@@ -205,6 +206,15 @@ router.post(
   resolveOrgScope,
   scopePatientParam("patientId"),
   sendNow
+);
+// POST .../notifications/ack — mark inbound replies seen (clears the list badge).
+router.post(
+  "/:patientId/notifications/ack",
+  authRequired,
+  staffRoles,
+  resolveOrgScope,
+  scopePatientParam("patientId"),
+  acknowledgeInbound
 );
 
 // GET /api/patients/:patientId/rpm-note?month=YYYY-MM — read-only pre-fill for

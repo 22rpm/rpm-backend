@@ -274,3 +274,26 @@ unit** (like the role-model units): audit every route's middleware (`authRequire
 vs `authMiddleware`), define one middleware that accepts cookie-or-Bearer, confirm
 refresh/TTL works on the header path, and decide the web dashboard's stance
 explicitly. Cross-ref #10.
+
+## 12. Inbound patient SMS replies were silently DISCARDED — FIXED
+- The Twilio inbound webhook (`controllers/notification.controller.js` `smsInbound`)
+  handled STOP/START/HELP keywords and dropped everything else. A patient who
+  texted back anything real — "my BP was high this morning", "I don't understand
+  the reminder", "please call me" — reached the server (received, signature-
+  verified) and **vanished**. `notification_log` was outbound-only, so there was
+  nowhere for it to land and nowhere a clinician could see it. A patient was
+  texting into silence, and nobody knew because nothing recorded the loss.
+- **Impact:** clinical/safety — a patient could report a symptom or a problem by
+  reply and no one would ever see it. It also silently undercut the "your care
+  team will review this" acknowledgement that was (correctly) held.
+- **Found:** 2026-09-03, scoping the inbound-SMS work. It had been live since the
+  notification webhook shipped.
+- **Fix (this change):** added `direction`/`acknowledged_at`/`acknowledged_by` to
+  `notification_log`; the webhook now STORES non-keyword replies as inbound rows;
+  the Notifications tab shows the thread both ways; and the patient list carries a
+  "reply waiting" badge (unacknowledged inbound) so a reply isn't buried in a tab
+  nobody opens. Keyword handling (STOP/START/HELP) is unchanged.
+- **Not covered (see the aging question / follow-ups):** an *unanswered* reply
+  doesn't yet escalate beyond the badge, and a clinician still can't send a
+  free-text SMS reply back (only templates). Unknown-number inbound is logged and
+  dropped (notification_log.patient_id is NOT NULL) rather than kept in a catch table.
