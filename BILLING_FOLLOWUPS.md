@@ -375,3 +375,42 @@ includes the 2026 codes (99445/99470) and the corrected 99454 wording. If so, al
 to theirs; until then the note's table is intentionally ahead of the Quantix copy.
 This is the same Quantix-template thread as the attestation wording
 (ATTESTATION_REVIEW_FOR_ROSEMARY.md) — the template we hold is stale.
+
+## 14. Manifestation ICD-10 codes must never be first-listed — guard belongs at the (not-yet-built) problem-list → claim wiring
+Some diagnoses can only ever be *secondary* on a claim — "manifestation" codes that
+carry a "code first the underlying condition" rule and are invalid as the primary/
+first-listed diagnosis. Two are in play for the conditions shortlist
+(`config/icd10Conditions.js`), both HELD pending Cleo:
+- **I32** — Uremic pericarditis (pericarditis in diseases classified elsewhere);
+  code first the CKD/uremia.
+- **F02.80** — Dementia in other diseases classified elsewhere; code first the
+  underlying physiological condition. (Not the same as F03.90 "unspecified dementia,"
+  which IS first-listable and is on the list.)
+Also held with them: **L29.8** (uremic/CKD-associated pruritus — needs the N18.x CKD
+stage alongside). None of I32 / L29.8 / F02.80 are added yet.
+
+**There is no primary-diagnosis selection anywhere today, so nothing can mis-first-list
+these right now.** Verified across note generation and the billing determination:
+- `services/rpmNote.service.js:529` — the note explicitly carries NO ICD-10: a hard-
+  coded compliance check says a diagnosis "is required on the claim — the biller must
+  add it. This note is NOT a submittable claim on its own." `getRpmNote` never reads
+  `patient_conditions` / `icd10_code`.
+- `services/rpmNote.service.js:437` — the note's "PRIMARY" (`primaryDos`) is the
+  primary billable **CPT** code's date of service, not a diagnosis.
+- `services/billingSummary.service.js` — the roster/determination loops `getRpmNote`
+  per patient, so it inherits the same CPT-only, no-diagnosis behavior.
+- dashboard `src/components/rpmNote/RpmNote.jsx:471` — the only "primary" is the
+  `rn-computed-primary` CSS class on the CPT determination box; no diagnosis picker.
+
+**Where the guard goes (future).** The shortlist header (`config/icd10Conditions.js`)
+anticipates wiring `patient_conditions.icd10_code` into the note/claim "when the
+billers confirm the wiring." Whoever builds that is who must exclude manifestation
+codes from primary selection. Make the constraint live in the data, not in the
+selector's head:
+- Add a **`firstListable: false`** flag to the manifestation entries (I32, F02.80,
+  and any future manifestation code). NOT built now — there is no consumer today, so
+  it would be dead infrastructure; add it together with the wiring.
+- The future primary-picker filters on `firstListable !== false` when choosing the
+  first-listed diagnosis; manifestation codes remain pickable as *secondary* problem-
+  list entries. Design the manifestation exclusion and the primary-selection rule in
+  the same change — not bolted on after.
