@@ -39,20 +39,62 @@ fails on a cert-trust error** — login, vitals ingest, everything.
   cleanly and its endpoints respond — so the backend itself is up; it is specifically
   the iOS host's TLS that is broken.
 
-## Blast-radius method (run on prod `rpm_db` — SQL in the session; results to be pasted here)
-`dev_data` has no source column and the dashboard writes no readings, so "iOS vs
-dashboard" isn't a column split. Instead: (1) daily `dev_data` volume over 45 days to
-find the cliff; (2) a clinician-driven control table (`time_entries`) over the same
-window to prove the backend stayed up while ingest died; (3) distinct patients + lost
-days before vs after Aug 22 for the 99454/September impact. Bucketed on `created_at`
-(server insert = transmission-success time). RESULTS: _pending_.
+## Blast-radius method + the CAUSATION LIMIT (stated plainly, not glossed)
+`dev_data` has **no platform/source column**. Both the iOS app and the Android app
+insert into it, and the dashboard writes no readings (it only GETs). So a single
+`dev_data` query CANNOT by itself separate iOS from Android, and a drop in the total
+at Aug 22 is **date alignment, not proof of cause** on its own.
 
-## Affected
-- iOS app 1.0.48 / 1.0.49 (live) and 1.0.50 (prep) — all point at `rmtrpm.duckdns.org`.
-- Suspected same-root-cause: **Twilio error 11235 (Certificate Invalid)** on the SMS
-  webhook/status callback, IF that callback URL uses `rmtrpm.duckdns.org` — Twilio does
-  strict TLS validation on callbacks, same as iOS. To confirm against the Twilio console
-  webhook URL; if so, the same SAN fix clears it.
+**The real control is the Android app.** iOS posts to `rmtrpm.duckdns.org` (broken
+cert); Android posts the same readings to the SAME `dev_data` table but over
+`api.twentytwohealth.com` (the always-valid host — `22-rpm-android-app/BloodPressure.js`
+`POST .../rpm-be/api/dev-data/devices/data`). So Android ingest should have CONTINUED
+past Aug 22. That gives three readable outcomes:
+- Total drops **partially** at Aug 22 (iOS share vanishes, Android continues) →
+  strong evidence the failure is iOS-host-specific, i.e. the cert.
+- Total drops to **zero** → Android stopped too → **NOT** the cert (or Android has ~no
+  active users; check its share first).
+- No drop → iOS was already ~zero going in.
+
+Because there's no platform column, split it by **`dev_id` last-seen clustering**:
+iOS devices flatline ~Aug 22 while Android devices keep reporting. If Android volume
+turns out negligible, then iOS is effectively the only ingest path, query A is
+**correlation only**, and the **definitive proof is box-side**: nginx access logs split
+by `Host` for `POST /rpm-be/api/dev-data/devices/data` (rmtrpm=iOS should stop,
+api.twentytwohealth.com=Android should continue), and/or nginx `error.log` TLS
+handshake failures for `rmtrpm.duckdns.org` since Aug 22 (handshake failures may not
+reach `access.log` at all — check `error.log`). RESULTS: _pending_.
+
+A 12-month monthly baseline is read FIRST: the handoff notes a prior ~9-month silent
+reading-loss failure, so Aug 22 must be judged against what "normal" and prior cliffs
+look like — it may be one of several, not a clean new edge.
+
+## Everything that talks TLS to `rmtrpm.duckdns.org` (the outage surface)
+Enumerated from all four repos (`grep rmtrpm.duckdns.org`). Anything on this host has
+been failing cert validation since Aug 22:
+1. **iOS app — API + WebSocket (PRIMARY).** `apiConfig.js` (API_BASE + SOCKET_BASE).
+   1.0.48/1.0.49 (live) and 1.0.50 (prep). All reads/writes + realtime dead.
+2. **iOS app — privacy-policy link (minor).** `Settings.js` / `PrivacySecurityScreen.js`
+   `Linking.openURL('https://rmtrpm.duckdns.org/privacy')` — opens in the browser and
+   also fails cert; a broken privacy link, not data, but App-Review-visible.
+3. **Twilio callbacks (SECOND SYSTEM — env-dependent, safety-relevant).** The SMS
+   `statusCallback` is built from `PUBLIC_BASE_URL` (`notification.service.js:241`), and
+   the inbound SMS webhook URL is set in the Twilio console. IF either is
+   `rmtrpm.duckdns.org`, Twilio's strict TLS validation fails → **error 11235**, and:
+   - inbound patient replies + **STOP/opt-out** never reach the backend (an opt-out that
+     doesn't register — the fail-closed concern), and
+   - delivery status is never recorded.
+   Confirm `PUBLIC_BASE_URL` on the box and the Twilio console webhook URL.
+
+**NOT affected (both use `api.twentytwohealth.com`, valid cert):** the Android app
+(reads AND writes readings — it is the control, above) and the dashboard (Cleo's login,
+read-only vitals). The `rmtrpm.duckdns.org` in `socket/socketServer.js:219` is a CORS
+allowed-ORIGIN entry (server-side), not an outbound client — not a casualty.
+
+**Still to enumerate ON THE BOX (cannot see from code):** any cron/systemd timer or
+external uptime monitor pointed at `rmtrpm.duckdns.org`, and any other integration whose
+URL env var resolves to it. Grep the box's crontab, systemd timers, and `.env` for the
+hostname.
 
 ## Remediation (option B — least app churn; fixes 1.0.49 and 1.0.50 without an app change)
 1. Confirm the certbot/Let's Encrypt renewal config and whether a prior archived cert
