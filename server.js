@@ -302,8 +302,9 @@ app.get("/socket-debug", (req, res) => {
 // Add to your server.js
 app.get("/rpm-be/test-socket", (req, res) => {
   console.log("✅ Test endpoint hit - Backend is running");
-  console.log("🍪 Cookies:", req.headers.cookie);
-  console.log("📋 Headers:", req.headers);
+  // REDACTED: do NOT log cookie/header VALUES — they carry live session JWTs
+  // (token + refresh_token). See SECURITY_FOLLOWUPS.
+  console.log("🍪 Cookie present:", !!req.headers.cookie);
 
   res.json({
     status: "running",

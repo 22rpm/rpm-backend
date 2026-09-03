@@ -17,7 +17,9 @@ const updateSettingsController = async (req, res) => {
     let decoded;
     try {
       decoded = jwt.verify(token, process.env.JWT_SECRET);
-      console.log("Decoded token:", decoded);
+      // REDACTED: the decoded JWT payload carries name/email/phone/role_type/org_id
+      // — do not log it. See SECURITY_FOLLOWUPS.
+      console.log("Token verified for user:", decoded?.id);
     } catch (err) {
       console.log("JWT verification error:", err);
       return res.status(401).json({ error: "Invalid or expired token" });

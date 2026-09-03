@@ -297,3 +297,48 @@ explicitly. Cross-ref #10.
   doesn't yet escalate beyond the badge, and a clinician still can't send a
   free-text SMS reply back (only templates). Unknown-number inbound is logged and
   dropped (notification_log.patient_id is NOT NULL) rather than kept in a catch table.
+
+## 13. Session cookies + JWTs logged in plaintext — RE-LEAKED on this branch via a branch-cut gap, re-redacted; plus a NEW plaintext-password leak
+The socket-auth handshake dump printed **full session cookies in plaintext** to the
+prod pm2 `out` log on every socket connection — `token=` and `refresh_token=` JWTs.
+The decoded payload carries **name, email, phone, role_type, org_id**, so anyone
+with box/log access could lift a live session and impersonate that user. The leaked
+token observed was for **user 1 — now super-admin with cross-org PHI access across
+every clinic**, so this is the highest-blast-radius session on the system.
+
+**Why it came back:** this exact leak was fixed once in `1eb41cd`
+("Redact session cookies/JWTs from logs"), but that commit lives on
+`fix/device-upsert-idempotent` / `feature/apple-review-bypass` / `fix/messages-e2e`
+and is **NOT an ancestor of `feature/care-activity`** — the branch was cut before
+the fix, so the fix never merged in. This is the recurring branch-cut process
+defect (see #5): a security fix on a sibling branch silently absent from the active
+branch. The redaction didn't "not survive a merge" — there was no merge.
+
+**Value-leak sites on this branch, now re-redacted to booleans/ids:**
+- `socket/socketServer.js:234-235` — `socket.handshake.headers` (cookie header) and
+  `socket.handshake.query` (query `token`) → now logs which auth source is present.
+  This is the line producing the reported pm2 leak.
+- `server.js:305-306` (`/rpm-be/test-socket`) — `req.headers.cookie` and full
+  `req.headers` → `Cookie present: <bool>`.
+- `controllers/settings.controller.js:20` — `console.log("Decoded token:", decoded)`
+  (whole JWT payload) → `Token verified for user: <id>`.
+- **NEW, not in `1eb41cd`'s scope — `controllers/organization.controller.js:416`**
+  (`resetPassword`) logged the **generated plaintext password** and account email:
+  `` `Password reset for ${email}. New password: ${newPassword}` `` → now logs a
+  user id only. Worse than the JWTs in one respect: **a password has no expiry** —
+  it is valid until the user changes it, whereas the access token dies in ~2h.
+- Left as-is (not value leaks): `middleware/auth.js:113` logs cookie NAMES
+  (`Object.keys(req.cookies)`); `server.js:245` logs the Twilio auth-token *length*
+  (a number, for the env self-check), not any session value.
+
+**Operational follow-ups (do these — the code fix doesn't undo the disclosure):**
+- **Treat every token already in the logs as compromised until expiry.** Purge/rotate
+  the affected pm2 `out` logs on prod (`pm2 flush`, and rotate any archived copies).
+- The user-1 super-admin refresh token is the priority: its refresh window is long,
+  so **invalidate existing sessions for user 1** (force re-login) rather than waiting
+  it out — the access token expires in ~2h but the refresh token does not.
+- Any account whose reset password passed through `resetPassword` while line 416 was
+  live should be **reset again** — that cleartext password sat in the logs.
+- Longer term: a redaction layer on the logger so header/cookie objects can never be
+  logged whole, and fold #5's branch-cut discipline in so a security fix on one
+  branch is reconciled onto all active branches.

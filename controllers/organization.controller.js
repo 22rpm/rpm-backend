@@ -413,7 +413,11 @@ async function resetPassword(req, res) {
     await organizationService.updateUserPassword(id, hashedPassword);
 
     // Placeholder for sending email
-    console.log(`Password reset for ${email}. New password: ${newPassword}`);
+    // REDACTED: never log the generated plaintext password (or the account email)
+    // — this is a live credential with no expiry until the user changes it. Log an
+    // id only. The password must reach the user by email/SMS, not the pm2 log.
+    // See SECURITY_FOLLOWUPS.
+    console.log(`Password reset issued for user id: ${id}`);
 
     return res
       .status(200)

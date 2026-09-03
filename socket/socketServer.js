@@ -231,8 +231,18 @@ const initializeSocket = (server) => {
     let token;
 
     console.log("🔐 Socket Auth Attempt");
-    console.log("📋 Headers:", socket.handshake.headers);
-    console.log("🔍 Query:", socket.handshake.query);
+    // REDACTED: never log raw handshake headers/query — the `cookie` header and a
+    // query `token` param carry live session JWTs (token + refresh_token). Logging
+    // them let anyone with log/box access lift a live session. Log only which auth
+    // source is present, never values. See SECURITY_FOLLOWUPS.
+    console.log(
+      "📋 Auth sources — cookie:",
+      !!socket.handshake.headers.cookie,
+      "query.token:",
+      !!socket.handshake.query.token,
+      "authorization:",
+      !!socket.handshake.headers.authorization
+    );
 
     // Try to get token from cookies
     if (socket.handshake.headers.cookie) {
