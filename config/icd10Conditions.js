@@ -21,6 +21,16 @@ const ICD10_CONDITIONS = [
   { code: "E11.9", label: "Type 2 diabetes mellitus, without complications", category: "Diabetes" },
   { code: "E11.65", label: "Type 2 diabetes mellitus with hyperglycemia", category: "Diabetes" },
   { code: "E11.22", label: "Type 2 diabetes mellitus with diabetic chronic kidney disease", category: "Diabetes" },
+  { code: "E11.21", label: "Type 2 diabetes mellitus with diabetic nephropathy", category: "Diabetes" },
+  { code: "E11.40", label: "Type 2 diabetes mellitus with diabetic neuropathy, unspecified", category: "Diabetes" },
+  { code: "E11.42", label: "Type 2 diabetes mellitus with diabetic polyneuropathy", category: "Diabetes" },
+  { code: "E11.319", label: "Type 2 diabetes mellitus with unspecified diabetic retinopathy without macular edema", category: "Diabetes" },
+  // Diabetic peripheral angiopathy — the diabetes-coded form of PVD (see I73.9 for
+  // PVD without diabetes). .51 without / .52 with gangrene are distinct billable
+  // states, and both differ from the Z89 amputation-status codes (angiopathy is
+  // active/present; Z89 is limb-already-absent).
+  { code: "E11.51", label: "Type 2 diabetes mellitus with diabetic peripheral angiopathy without gangrene", category: "Diabetes" },
+  { code: "E11.52", label: "Type 2 diabetes mellitus with diabetic peripheral angiopathy with gangrene", category: "Diabetes" },
   { code: "E10.9", label: "Type 1 diabetes mellitus, without complications", category: "Diabetes" },
 
   { code: "N18.1", label: "Chronic kidney disease, stage 1", category: "Chronic kidney disease" },
@@ -45,7 +55,27 @@ const ICD10_CONDITIONS = [
   { code: "I48.91", label: "Unspecified atrial fibrillation", category: "Other common" },
   { code: "E78.5", label: "Hyperlipidemia, unspecified", category: "Other common" },
   { code: "I25.10", label: "Atherosclerotic heart disease of native coronary artery without angina pectoris", category: "Other common" },
+  { code: "I25.119", label: "Atherosclerotic heart disease of native coronary artery with unspecified angina pectoris", category: "Other common" },
   { code: "E66.9", label: "Obesity, unspecified", category: "Other common" },
+
+  // Peripheral vascular disease WITHOUT diabetes. The diabetes-coded form is
+  // E11.51/.52 (diabetic peripheral angiopathy) under Diabetes above — which code
+  // applies is documentation-dependent, not a hard "diabetic => never I73.9" rule.
+  { code: "I73.9", label: "Peripheral vascular disease, unspecified", category: "Peripheral vascular disease" },
+
+  // Amputation STATUS (acquired absence) — for the problem list ("history of
+  // amputation"), not traumatic/procedural coding. Level + laterality both required;
+  // .51x = below knee, .61x = above knee (.62x is hip joint, deliberately not listed).
+  { code: "Z89.511", label: "Acquired absence of right leg below knee", category: "Amputation status" },
+  { code: "Z89.512", label: "Acquired absence of left leg below knee", category: "Amputation status" },
+  { code: "Z89.611", label: "Acquired absence of right leg above knee", category: "Amputation status" },
+  { code: "Z89.612", label: "Acquired absence of left leg above knee", category: "Amputation status" },
+
+  // Dementia — base "unspecified severity, without behavioral disturbance" entry for
+  // each. Non-vascular = unspecified (F03.90), not Alzheimer's specifically. The
+  // FY2024 severity/behavioral-disturbance variants are intentionally not listed.
+  { code: "F01.50", label: "Vascular dementia, unspecified severity, without behavioral disturbance", category: "Dementia" },
+  { code: "F03.90", label: "Unspecified dementia, unspecified severity, without behavioral disturbance", category: "Dementia" },
 ];
 
 // Fast membership check for validation: a stored icd10_code must be either null
