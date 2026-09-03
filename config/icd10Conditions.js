@@ -57,11 +57,14 @@ const ICD10_CONDITIONS = [
   { code: "I25.10", label: "Atherosclerotic heart disease of native coronary artery without angina pectoris", category: "Other common" },
   { code: "I25.119", label: "Atherosclerotic heart disease of native coronary artery with unspecified angina pectoris", category: "Other common" },
   { code: "E66.9", label: "Obesity, unspecified", category: "Other common" },
-
-  // Peripheral vascular disease WITHOUT diabetes. The diabetes-coded form is
-  // E11.51/.52 (diabetic peripheral angiopathy) under Diabetes above — which code
-  // applies is documentation-dependent, not a hard "diabetic => never I73.9" rule.
-  { code: "I73.9", label: "Peripheral vascular disease, unspecified", category: "Peripheral vascular disease" },
+  // PVD without diabetes. Folded into "Other common" on purpose — NOT a standalone
+  // "Peripheral vascular disease" category. A lone category holding only the
+  // non-diabetic code is the trap: someone coding a diabetic patient's PVD opens it,
+  // finds only I73.9, and picks it — when the correct code is the diabetic peripheral
+  // angiopathy E11.51/.52 under Diabetes. The label carries the pointer so the fork is
+  // visible at the moment of picking. Which applies is documentation-dependent, not a
+  // hard "diabetic => never I73.9" rule.
+  { code: "I73.9", label: "Peripheral vascular disease, unspecified (if diabetic, use diabetic peripheral angiopathy E11.51/.52)", category: "Other common" },
 
   // Amputation STATUS (acquired absence) — for the problem list ("history of
   // amputation"), not traumatic/procedural coding. Level + laterality both required;
