@@ -704,6 +704,21 @@ const calculateBPStatus = (systolic, diastolic) => {
     return "Normal";
   }
 };
+// Convert a client-supplied measurement time (epoch SECONDS, the device
+// measuring_timestamp) to a UTC 'YYYY-MM-DD HH:MM:SS' string for dev_data.measured_at,
+// or null if absent/implausible. Stored as UTC so it buckets like created_at
+// (the count does CONVERT_TZ(col,'+00:00',tz)). NULL falls back to created_at via
+// COALESCE. Sanity-bounded so a bad device clock can't misdate billing.
+function toUtcMeasuredAtOrNull(epochSeconds) {
+  const n = Number(epochSeconds);
+  if (!Number.isFinite(n)) return null;
+  const ms = n * 1000;
+  const min = Date.UTC(2020, 0, 1);
+  const max = Date.now() + 24 * 60 * 60 * 1000; // now + 1 day of slack
+  if (ms < min || ms > max) return null;
+  return new Date(ms).toISOString().slice(0, 19).replace("T", " ");
+}
+
 const createDeviceDataService = async (
   userId,
   devId,
@@ -814,10 +829,13 @@ const createDeviceDataService = async (
       );
     }
 
-    // 3) insert dev_data
+    // 3) insert dev_data. measured_at = the reading's true measurement time (device
+    // clock), from the client's data.measured_at; null (COALESCE -> created_at in the
+    // count) when absent/implausible or from an app version predating the client change.
+    const measuredAt = toUtcMeasuredAtOrNull(deviceData && deviceData.measured_at);
     const [insertResult] = await db.query(
-      "INSERT INTO dev_data (dev_id, user_id, dev_type, data) VALUES (?, ?, ?, ?)",
-      [devId, userId, devType, JSON.stringify(processedData)]
+      "INSERT INTO dev_data (dev_id, user_id, dev_type, data, measured_at) VALUES (?, ?, ?, ?, ?)",
+      [devId, userId, devType, JSON.stringify(processedData), measuredAt]
     );
 
     const serviceResponse = {
