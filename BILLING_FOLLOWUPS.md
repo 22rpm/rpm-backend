@@ -486,3 +486,15 @@ feature (DEVICE_HISTORY_DESIGN) must post backfilled readings against the measur
 > We're fixing it going forward so the count uses the reading's real measurement time.
 > **One question:** do you want past months recomputed on the corrected time, or is
 > forward-only fine given the error was in the conservative direction?
+
+### DECISION (2026-09-04): this is a bug fix, NOT a Cleo gate — proceed.
+Reversed the earlier "claims-affecting → Cleo signs off first" framing. The measurement day is
+the fact; receipt-date is simply wrong, and nobody would defend it if asked directly — so this
+is a bug fix, not a billing judgment call. The recount settled the only open question: **June and
+July are identical on the corrected count (17 and 24), so there is nothing to resubmit.** Cleo
+gets an **FYI note, not a decision** (drafted in `MEASURED_AT_PLAN.md`). Implementation is
+scoped in **`MEASURED_AT_PLAN.md`**: add a nullable UTC `dev_data.measured_at`, ingest accepts +
+persists it, and `rpmNote.service.js:140` (and the BP-stats window ~163) bucket on
+`COALESCE(measured_at, created_at)` — existing/old-client rows fall back to `created_at`, so the
+count cannot change for historical data. Backend lands + is verified first, then the iOS live
+path sends the device `measuring_timestamp`, then the history backfill.
