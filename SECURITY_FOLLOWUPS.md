@@ -397,13 +397,15 @@ prod. Concrete guardrails, cheapest first:
 4. **A leak sweep greps for the data, not the transport** (see 13b) — `otp`, `hash`,
    `password`, `req.user`, whole-object/row dumps, not just `cookie`/`token`/`header`.
 
-## 14. Prod cert SAN mismatch — RESOLVED, FALSE ALARM (no outage; do NOT reissue)
-Raised HIGH on a code+cert prediction: the cert at `rmtrpm.duckdns.org` (50.18.96.20)
-covers only `api.twentytwohealth.com`, and with the iOS app hardcoding `rmtrpm` under
-strict ATS, every call should fail. **The nginx logs overturned it** — the iOS client
-(CFNetwork) connected successfully throughout, including today. No outage; the SAN
-observation is real but the live client tolerates it. Low ingest volume is expected
-(one real patient, device `7C46598B`; the rest are test devices); June/July are
-legitimate 99454, August (9 days) correctly not billable. **Do not reissue the cert.**
-Lesson: verify a predicted client failure against real server/client evidence before
-declaring an incident. Full record + resolution: **`INCIDENT_2026-09-03_prod-cert-san.md`**.
+## 14. Prod cert lacks the rmtrpm.duckdns.org SAN — CONFIRMED, iOS TLS fails (reissue with both SANs)
+The cert at `rmtrpm.duckdns.org` (50.18.96.20) covers only `api.twentytwohealth.com`; the
+iOS app hardcodes `rmtrpm` under strict ATS, so `curl -sv` returns `SSL: no alternative
+certificate subject name matches` — the handshake dies at cert verification and never
+reaches nginx. An interim "FALSE ALARM / resolved" call was **WRONG**: it read the iOS
+client as "connecting throughout" from `rpm_access.log`, but that log **mixes both vhosts
+with no `$host` field**, so those `CFNetwork` entries were `api.twentytwohealth.com`, and a
+handshake failure produces no access-log line at all (its absence is the confirmation, not
+a refutation). **Reissue the cert with BOTH SANs** (option B; `certbot --expand`) and fix
+the renewal config so both persist. Reopens: if iOS can't reach `duckdns`, the `dev_data`
+readings came via Android (`api.twentytwohealth.com`) and/or iOS before ~Aug 22 — to be
+confirmed. Full record: **`INCIDENT_2026-09-03_prod-cert-san.md`**.

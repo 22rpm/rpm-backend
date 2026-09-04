@@ -1,36 +1,44 @@
-# RESOLVED (FALSE ALARM) — prod cert SAN mismatch did NOT cause an outage
+# CONFIRMED — prod cert lacks the `rmtrpm.duckdns.org` SAN; iOS TLS fails (REOPENED)
 
-**Status:** CLOSED — no incident. **Do NOT reissue the cert.**
-**Opened:** 2026-09-03, pre-flighting the iOS 1.0.50 build. **Closed:** same day, by log evidence.
-**Severity:** none (originally raised HIGH on a code+cert prediction that was wrong).
+**Status:** OPEN, CONFIRMED — the cert IS the cause. Reissue with both SANs (option B).
+**Opened:** 2026-09-03. **Falsely closed** same day. **Reopened + confirmed** on log re-analysis.
+**Severity:** HIGH — iOS TLS to `rmtrpm.duckdns.org` dies at cert verification.
 
-## Resolution — the code-only conclusion was overturned by the nginx logs
-The prediction below (strict ATS + a cert lacking the `rmtrpm.duckdns.org` SAN ⇒ every
-iOS call fails) **did not hold in practice.** The prod nginx logs show the **iOS client
-(CFNetwork) connecting successfully throughout, including today** — there was no outage
-at any point. The SAN observation (via `curl`/`openssl`) is real, but the live client
-tolerates it; whatever the exact reason, the authoritative evidence is the server logs,
-and they show continuous successful iOS traffic. **No cert change is needed; do not
-reissue.**
+## Confirmation (this is the current, correct conclusion)
+`curl -sv https://rmtrpm.duckdns.org/rpm-be` → `SSL: no alternative certificate subject
+name matches target host name 'rmtrpm.duckdns.org'` (cert `CN=api.twentytwohealth.com`,
+no `rmtrpm` SAN). **The connection dies at cert verification, so nothing reaches nginx**
+— which is exactly why the iOS phone appears in neither the access nor the error log. The
+original code+cert prediction was right.
 
-- **The low ingest volume is expected, not a symptom.** There is exactly **one real
-  patient** on prod. Device **`7C46598B`** is that patient; everything else in `dev_data`
-  is test devices.
-- **Billing is correct.** June (17 transmission days) and July (24) are legitimate 99454.
-  **August (9 days) is correctly NOT billable** — below the 16-day threshold, as designed.
-  The August "drop" is one patient having fewer reading-days that month, not a failure.
-- **Lesson:** a code + cert reading predicted a client failure the real client never
-  exhibited. Verify against actual client/server evidence (logs) before declaring an
-  incident — the code-only theory was confidently wrong in the failing direction.
+## Correcting the false "resolved" (what went wrong in the reversal)
+The interim "FALSE ALARM / resolved" conclusion was **wrong**, and it's instructive how:
+- It rested on "nginx logs show the iOS client (CFNetwork) connecting throughout." But
+  `rpm_access.log` **mixes both vhosts** (`rmtrpm.duckdns.org` and `api.twentytwohealth.com`)
+  and has **no `$host` field**, so a `CFNetwork` entry cannot be attributed to a host. The
+  `CFNetwork` hits that "disproved" the outage were reaching `api.twentytwohealth.com`, not
+  `duckdns`.
+- A TLS handshake that fails cert verification never completes, so it **never produces an
+  access-log line at all**. The phone's *absence* from the duckdns traffic is the
+  confirmation of the outage, not evidence against it. Reading "no failures in the log" as
+  "no failures" was the error.
+- **Lesson:** don't attribute traffic from a host-mixed access log with no `$host`; and a
+  handshake-stage failure is invisible to the access log by construction — check for it at
+  the client (curl/openssl) and in `error.log`, not by its absence from `access.log`.
 
-*The original investigation is preserved below as the record of what was checked and why
-the theory looked right on paper. It is CLOSED — read it as history, not an open action.*
+## Open consequence this reopens — where DID the dev_data readings come from?
+If iOS cannot reach `duckdns`, the readings in `dev_data` (incl. device `7C46598B`) were
+delivered by some other path. Candidates: the **Android app** (posts to
+`api.twentytwohealth.com`, valid cert — unaffected), and/or **iOS before ~Aug 22** (when
+the cert may still have covered `duckdns`). To be determined by (a) `dev_data` row
+timestamps vs Aug 22, (b) splitting the nginx `POST /…/devices/data` entries by
+User-Agent (`CFNetwork`=iOS vs `okhttp`/`Dalvik`=Android), and (c) which app the real
+patient uses. This also revises the earlier "billing is fine / one patient" note: whether
+that patient is affected depends on their platform.
 
 ---
 
-**[SUPERSEDED — original theory, kept for the record]** Severity was raised HIGH on a
-suspected multi-week outage of iOS reading ingestion. That conclusion was wrong (see
-Resolution above).
+**[Original theory below — now CONFIRMED CORRECT, not superseded.]**
 
 ## Finding
 The iOS app (1.0.49 live, and 1.0.50 in prep) connects to
