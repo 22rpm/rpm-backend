@@ -440,3 +440,49 @@ grows.** Options (pick at build time, not now):
 Recommended direction: (1) or (2) — attribute billing to *registered patient devices*,
 not to raw `dev_data` rows. **Design note only — do not build until the roster is about to
 grow.**
+
+## 16. 99454 day-count buckets on `created_at` (server receipt), not measurement time — UNDERCOUNTS (conservative). Pending Cleo.
+**Bug.** The transmission-day count for 99454/99445 buckets on `dev_data.created_at`
+(`services/rpmNote.service.js:140`), which is stamped by the DB at insert
+(`services/devData.service.js:7`; migration `20250819125116…:6` `timestamps(true,true)`) —
+i.e. **when the server received the row, not when the reading was taken.** The iOS payload
+carries a phone-capture time (`data.timestamp`, `BloodPressure.js:494`) and `data.date`/
+`data.time`, but the count ignores them; the device's own `measuring_timestamp` (parsed at
+`ios/VTMDeviceManager/ViatomDeviceManager.m:584`) is never even sent. A batch delivered late
+(durable-outbox flush, reconnect) lands on ONE `created_at` instant — the Aug 23 `00:04:05`
+identical-timestamp cluster is that fingerprint.
+
+**Direction of error: it UNDERCOUNTS.** Collapsing several days onto one receipt instant can
+only REDUCE the distinct-day total, never inflate it. So any effect on past claims is
+**underbilling — conservative, not overstated.** There is **no overbilling / compliance
+exposure** here; the worst case is a month that should have qualified didn't, or a month
+billed fewer days than it earned.
+
+**Magnitude (recount before deciding anything).** For the one real patient, June and July both
+cleared the 16-day threshold on `created_at` (17 and 24). Recount using the embedded phone
+timestamp (`data->>'$.timestamp'`) instead of `created_at` (SQL in the session / DEVICE_HISTORY_DESIGN
+finding A). Since a truer count can only be **equal or higher**, if June/July stay ≥16 nothing
+about those claims changes and the fix is **forward-only** for them. (August = 9 is separately
+confounded by the cert outage — see INCIDENT_2026-09-03; not a clean data point.)
+RECOUNT RESULT: _pending — June ___ , July ___ (days by embedded ts)._
+
+**Fix (claims-affecting — Cleo decides, do NOT change silently).** Carry the measurement time
+end to end: send the device `measuring_timestamp` in the payload (for live, use the value at
+m:584 instead of the phone clock; for history backfill it's the record's own timestamp), and
+bucket the count on that, keeping `created_at` as the receipt/audit trail. Whether past months
+are recomputed is Cleo's call. **No billing code changed for this entry.** The device-history
+feature (DEVICE_HISTORY_DESIGN) must post backfilled readings against the measurement time, not
+`created_at`, or it repeats this bug.
+
+### Draft flag for Cleo (billing)
+> We found a dating bug in the remote-monitoring day-count. Readings are currently counted on
+> the day our **server received** them, not the day the patient **took** them. When a phone
+> syncs a batch of readings at once (e.g. after being offline), they all land on one day, so
+> the monthly transmission-day count can come out **lower** than it truly was. Important: this
+> only ever **undercounts** — it can't overstate a month — so any past effect is us
+> **underbilling**, never overbilling. No compliance concern.
+> We rechecked June and July for [patient]: both cleared the 16-day threshold on the old method
+> (17 and 24), and the corrected count is [ ___ / ___ ] — [so those claims are unchanged / so …].
+> We're fixing it going forward so the count uses the reading's real measurement time.
+> **One question:** do you want past months recomputed on the corrected time, or is
+> forward-only fine given the error was in the conservative direction?
