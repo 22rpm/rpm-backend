@@ -115,3 +115,49 @@ org. This reinforces the paging message in #1 (realtime AND SMS both narrow to
 the assigned physician); it is NOT clinicians suddenly getting pushes they never
 had. The socket gate is now correct (clinicians join, care_manager/admin do not),
 but `all_clinicians` has no emitters, so activating it changes nothing on its own.
+
+## 3. Org-wide alerts list duplicated every alert by its recipient count — read-side fan-out, FIXED
+
+The Alerts page for org-wide roles (super-admin / admin / care_manager) showed each
+alert once PER RECIPIENT. `GET /alerts/my-alerts` org-wide branch
+(`routes/alert.route.js`, ~2455) drove `FROM alert_assignments JOIN alerts` with no
+`DISTINCT`/`GROUP BY alerts.id`, so an alert paged to N clinicians returned N identical
+rows. The badge and the list counted DIFFERENT things: badge = `COUNT(DISTINCT a.id)`
+(correct), list = one row per assignment (inflated).
+
+Measured on prod (2026-09-09, reader = user 1, an org-wide role):
+- `badge_distinct_unread` = 65, `distinct_alerts_total` = 65, `list_rows_returned` = 321.
+- 321 / 65 = 4.94 ≈ recipients per alert. e.g. alert_id 90 = ONE alert, 5 assignments
+  (recipients 7,12,16,24,31), rendering as 5 identical "110/53" rows for patient Maria Unwalla.
+
+Fix: drive the query `FROM alerts`, LEFT JOIN assignments, `GROUP BY alerts.id`, and
+aggregate recipients — `recipient_count`, `recipient_ids`, `recipient_names`,
+`recipients_read_count`. One row per alert; the org-wide viewer still sees who it paged.
+The reader's own read state stays per-reader via `alert_reads`. The clinician-scoped
+branch (~2521, `WHERE alert_assignments.doctor_id = ?`) was CORRECT and untouched — a
+clinician has one assignment per alert, so it never fanned out.
+
+FRONTEND CONTRACT: the org-wide list response dropped the ambiguous per-assignment fields
+(`assigned_read_status`, `assigned_read_at`, `assignment_id`, single `doctor_id`) and added
+the aggregated recipient fields. The org-wide alerts UI must read `recipient_count` /
+`recipient_names` for "who it went to" (count, or names on expand) instead of a single
+doctor. "Mark read" for org-wide already writes `alert_reads` (per-reader), so it is
+unaffected.
+
+## 4. PROCESS NOTE — we nearly deleted clinical data to fix a problem that didn't exist
+
+The duplicate alerts LOOKED like duplicate reading writes. A full design was drafted for a
+DB-level idempotency migration on `dev_data` — including a phase that **DELETEs duplicate
+rows** (clinical BP readings) to make room for a unique index. Before building it, we ran
+the data check: `dev_data` had exactly ONE duplicate reading in the entire table (user 15,
+117/82, Aug 23 — a single retry), and the logged-in reader's own assignments were ZERO. The
+real cause was read-side fan-out (#3), not duplicate writes. The migration would have
+deleted real clinical rows to fix a problem that wasn't there.
+
+Pattern to keep: **check the data before building the fix.** A symptom that reads as
+"duplicates on screen" has at least three distinct causes — duplicate writes, per-recipient
+fan-out, or a badge/list counting mismatch — and they need opposite fixes. One `COUNT`/
+`GROUP BY ... HAVING COUNT(*)>1` query distinguished them in seconds and saved a destructive,
+irreversible migration. Idempotency on the write path is still worth doing as defense-in-
+depth (that one real dupe proves it can happen, and the iOS history-sync leans on a server
+dedup that does not exist) — but on its own merits, not as a fix for this bug.

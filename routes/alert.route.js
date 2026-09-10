@@ -2452,6 +2452,14 @@ router.get("/my-alerts", authRequired, resolveOrgScope, async (req, res) => {
     // created, so being able to SEE an alert never makes anyone a paging target
     // (ALERT_FOLLOWUPS #1; role-model step 5).
     if (isOrgWide(req.user)) {
+      // ONE ROW PER ALERT. This previously drove FROM alert_assignments, so an
+      // alert paged to N recipients returned N identical rows — an org-wide viewer
+      // saw every alert duplicated by its recipient count (e.g. 65 alerts rendered
+      // as 321 rows). Driving FROM alerts and aggregating the assignments collapses
+      // that back to one row per alert while still surfacing WHO it paged
+      // (recipient_count / recipient_ids / recipient_names). The reader's own read
+      // state stays per-reader via alert_reads; the assigned clinicians' collective
+      // read progress is summarized as recipients_read_count. See ALERT_FOLLOWUPS.
       const [orgAlerts] = await connection.query(
         `SELECT alerts.id,
                 alerts.user_id as patient_id,
@@ -2459,27 +2467,33 @@ router.get("/my-alerts", authRequired, resolveOrgScope, async (req, res) => {
                 alerts.type,
                 alerts.created_at as alert_created_at,
                 alerts.updated_at as alert_updated_at,
-                -- read_status/read_at on alert_assignments are the ASSIGNED
-                -- clinician's state, not this reader's. Exposed under
-                -- assigned_* so nothing silently reads someone else's inbox;
-                -- this reader's own state comes from alert_reads.
-                alert_assignments.read_status AS assigned_read_status,
-                alert_assignments.read_at     AS assigned_read_at,
+                -- This reader's OWN read state (per-reader, unambiguous):
                 (ar.id IS NOT NULL)           AS read_status,
                 ar.read_at                    AS read_at,
-                alert_assignments.created_at as assigned_at,
-                alert_assignments.id as assignment_id,
-                alert_assignments.doctor_id,
+                -- Recipients aggregated (who this alert paged):
+                COUNT(DISTINCT alert_assignments.doctor_id)               AS recipient_count,
+                GROUP_CONCAT(DISTINCT alert_assignments.doctor_id
+                             ORDER BY alert_assignments.doctor_id)        AS recipient_ids,
+                GROUP_CONCAT(DISTINCT recipients.name
+                             ORDER BY recipients.name SEPARATOR ', ')     AS recipient_names,
+                -- Collective read progress of the assigned clinicians (context only):
+                SUM(alert_assignments.read_status = 1)                    AS recipients_read_count,
+                MIN(alert_assignments.created_at)                         AS assigned_at,
                 patients.name as patient_name,
                 patients.email as patient_email,
                 patients.phoneNumber as patient_phone,
                 patients.organization_id as patient_organization_id
-         FROM alert_assignments
-         JOIN alerts ON alert_assignments.alert_id = alerts.id
+         FROM alerts
          JOIN users as patients ON alerts.user_id = patients.id
+         LEFT JOIN alert_assignments ON alert_assignments.alert_id = alerts.id
+         LEFT JOIN users as recipients ON recipients.id = alert_assignments.doctor_id
          LEFT JOIN alert_reads ar
                 ON ar.alert_id = alerts.id AND ar.user_id = ?
          WHERE patients.organization_id = ?
+         GROUP BY alerts.id, alerts.user_id, alerts.desc, alerts.type,
+                  alerts.created_at, alerts.updated_at, ar.id, ar.read_at,
+                  patients.name, patients.email, patients.phoneNumber,
+                  patients.organization_id
          ORDER BY alerts.created_at DESC`,
         [req.user.id, req.orgScope]
       );
