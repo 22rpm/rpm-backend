@@ -139,13 +139,25 @@ name+DOB+… ) before any Encounter fetch. Scope this only if §1 is GO.
 - **Done in this pass:** removed `GET /debug-twilio` (server.js) — it returned the full
   Twilio Account SID in plaintext to any unauthenticated caller. See §"Changes landed".
 
-## 8. Sequencing (only if §1 is GO)
-1. Keypair + `.env` vars + JWKS route (backend) + exact-match nginx location.
-2. Register the app with Greenway (JWKS URL, scopes); obtain `client_id`.
-3. Token client + assertion signer.
+## 8. Sequencing (§1 is GO)
+
+### First slice — the JWKS endpoint (prerequisite for Greenway registration)
+Three tasks. 🟩 = code-only (inert until deployed); 🟥 = touches prod.
+
+| # | Task | Prod? | Status |
+|---|---|---|---|
+| 1 | **JWKS route** `GET /.well-known/jwks.json` in `server.js` — derives the public JWK from the private key via native `crypto.createPublicKey(...).export({format:"jwk"})` (no new dep), returns `{keys:[{kty:"EC",crv:"P-384",x,y,use:"sig",alg:"ES384",kid}]}`; **503 if the key env vars are unset**. Public/unauthenticated by design (public key only — verified the export has no `d`). | 🟩 (until deploy) | **DONE** — committed; inert until Task 2 sets the env vars |
+| 2 | **Keypair + `.env` + restart** on the box: `openssl ecparam -name secp384r1 -genkey -noout -out /home/ubuntu/22-rpm/greenway-signing.key && chmod 600`; add `GREENWAY_SIGNING_KEY_PATH` + `GREENWAY_SIGNING_KID` to `.env`; restart `rpm-backend`. Route then serves on `:4000` **internally** — not yet public. | 🟥 `.env` + restart | pending (yours) |
+| 3 | **Exact-match nginx location** on the **api vhost only**: `location = /.well-known/jwks.json { proxy_pass http://127.0.0.1:4000/.well-known/jwks.json; }`. Never a `/.well-known/` prefix (shadows acme-challenge → breaks the ~33-day duckdns renewal). `nginx -t && systemctl reload nginx`. Exposes it publicly. | 🟥 nginx | pending (yours) |
+
+**Verify:** after 2 (on box) `curl -s http://127.0.0.1:4000/.well-known/jwks.json` → one-key JWKS; after 3 (external) same over `https://api.twentytwohealth.com/.well-known/jwks.json`, **and** `sudo certbot renew --dry-run` still passes for both certs (proves acme-challenge wasn't shadowed).
+
+### Remaining slices (after the JWKS URL is live + registered)
+2. Register the app with Greenway (JWKS URL, scopes `system/Encounter.read` + `system/Patient.read`); obtain `client_id`.
+3. Token client + ES384 assertion signer (`jsonwebtoken@9`, already a dep).
 4. Patient-id mapping (§6).
-5. Encounter fetch → "last seen" field on overview.
-Steps 1–3 are inert until registration; nothing touches patients until step 4.
+5. Encounter fetch → classify primary-care (§1) → "last seen" field on overview.
+Steps through registration are inert; nothing touches patients until the mapping step.
 
 ---
 

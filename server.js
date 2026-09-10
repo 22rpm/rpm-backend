@@ -240,6 +240,36 @@ app.use("/api/billing", billingRoutes);
 // to an unauthenticated caller. (SECURITY_FOLLOWUPS #15)
 app.get("/health", (req, res) => res.json({ ok: true }));
 
+// --- Greenway (Practice Fusion) SMART Backend Services: public JWKS (Task 1) ---
+// Serves ONLY the PUBLIC ES384/P-384 signing key so Greenway can verify our client
+// assertions. This is the JWKS URL registered with Greenway. Public + unauthenticated BY
+// DESIGN — a JWKS is public key material; no private key, no PHI, ever, on /.well-known/*.
+// Reached via an EXACT-MATCH nginx `location = /.well-known/jwks.json` on the api vhost only
+// (never a /.well-known/ prefix — that would shadow certbot's acme-challenge and break the
+// ~33-day duckdns renewal). Inert until GREENWAY_SIGNING_* are set on the box (returns 503).
+// See PRACTICE_FUSION_FHIR_DESIGN.md §3–§4.
+const { createPublicKey } = require("crypto");
+function buildGreenwayJwks() {
+  const pem = process.env.GREENWAY_SIGNING_KEY_PATH
+    ? fs.readFileSync(process.env.GREENWAY_SIGNING_KEY_PATH, "utf8")
+    : process.env.GREENWAY_SIGNING_PRIVATE_KEY;
+  if (!pem || !process.env.GREENWAY_SIGNING_KID) return null;
+  const jwk = createPublicKey(pem).export({ format: "jwk" }); // { kty:"EC", crv:"P-384", x, y }
+  return {
+    keys: [{ ...jwk, use: "sig", alg: "ES384", kid: process.env.GREENWAY_SIGNING_KID }],
+  };
+}
+app.get("/.well-known/jwks.json", (req, res) => {
+  try {
+    const jwks = buildGreenwayJwks();
+    if (!jwks) return res.status(503).json({ ok: false, message: "Signing key not configured" });
+    return res.json(jwks);
+  } catch (err) {
+    console.error("JWKS build failed:", err.message);
+    return res.status(503).json({ ok: false, message: "Signing key unavailable" });
+  }
+});
+
 // Removed unauthenticated /socket-debug — it disclosed NODE_ENV, socket path/topology and
 // the live connected-client count. (SECURITY_FOLLOWUPS #15)
 
