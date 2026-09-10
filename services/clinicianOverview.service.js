@@ -161,11 +161,17 @@ async function getClinicianOverviewService({ userId, orgWide = false, orgScope =
     "the later period.";
 
   // Panel: assigned patients (clinician) or all active org patients (org-wide roles).
+  // ENROLLMENT GATE: require a non-discharged patient_profiles row. A real patient is
+  // created through the enrollment flow, which writes patient_profiles; role='patient'
+  // users WITHOUT a profile (e.g. device serials as names — enrollment/pairing artifacts,
+  // not people) are excluded here. This is the enrolled-vs-artifact signal, not a name
+  // regex. Non-transmitting ENROLLED patients still appear (that's the adherence gap).
   let patients;
   if (orgWide) {
     [patients] = await db.query(
       `SELECT u.id, u.name FROM users u
          JOIN role r ON r.user_id = u.id AND r.role_type = 'patient'
+         JOIN patient_profiles pp ON pp.user_id = u.id AND pp.program_status <> 'discharged'
         WHERE u.organization_id = ? AND u.is_active = 1`,
       [orgScope]
     );
@@ -174,6 +180,7 @@ async function getClinicianOverviewService({ userId, orgWide = false, orgScope =
       `SELECT u.id, u.name FROM users u
          JOIN patient_doctor_assignments pda ON pda.patient_id = u.id AND pda.doctor_id = ?
          JOIN role r ON r.user_id = u.id AND r.role_type = 'patient'
+         JOIN patient_profiles pp ON pp.user_id = u.id AND pp.program_status <> 'discharged'
         WHERE u.is_active = 1`,
       [userId]
     );
@@ -247,11 +254,21 @@ async function getClinicianOverviewService({ userId, orgWide = false, orgScope =
     };
   });
 
-  // Surface the actionable rows first: changed, then out-of-range, then no-data, then rest.
-  const rank = { changed: 0, stable_out_of_range: 1, no_data: 2, limited_data: 3, in_range: 4 };
+  // Actionable first; the silent (no_data) patients sink to the end so the page can lift
+  // them into a compact "not transmitting" section instead of a wall of empty cards.
+  const rank = { changed: 0, stable_out_of_range: 1, limited_data: 2, in_range: 3, no_data: 4 };
   out.sort((a, b) => (rank[a.status] ?? 9) - (rank[b.status] ?? 9) || a.name.localeCompare(b.name));
 
-  return { ok: true, period: periodMeta, bucketing_note, patient_count: out.length, patients: out };
+  // Summary for the page header (and the future email): who is transmitting, and the
+  // status mix. not_transmitting is the adherence headline — 18 of 19 here.
+  const summary = { total: out.length, transmitting: 0, not_transmitting: 0, by_status: {} };
+  for (const p of out) {
+    summary.by_status[p.status] = (summary.by_status[p.status] || 0) + 1;
+    if (p.reading_count > 0) summary.transmitting += 1;
+    else summary.not_transmitting += 1;
+  }
+
+  return { ok: true, period: periodMeta, bucketing_note, summary, patient_count: out.length, patients: out };
 }
 
 module.exports = { getClinicianOverviewService };
