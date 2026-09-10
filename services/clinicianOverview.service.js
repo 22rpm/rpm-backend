@@ -161,27 +161,32 @@ async function getClinicianOverviewService({ userId, orgWide = false, orgScope =
     "the later period.";
 
   // Panel: assigned patients (clinician) or all active org patients (org-wide roles).
-  // ENROLLMENT GATE: require a non-discharged patient_profiles row. A real patient is
-  // created through the enrollment flow, which writes patient_profiles; role='patient'
-  // users WITHOUT a profile (e.g. device serials as names — enrollment/pairing artifacts,
-  // not people) are excluded here. This is the enrolled-vs-artifact signal, not a name
-  // regex. Non-transmitting ENROLLED patients still appear (that's the adherence gap).
+  // ENROLLMENT is surfaced, NOT silently filtered. A real patient has a patient_profiles
+  // row (written by the enrollment flow); role='patient' users without one (device serials
+  // as names — artifacts — but ALSO a real patient whose profile hasn't been filled in yet)
+  // are marked `enrolled: false` and shown in their own "not enrolled" section, so a missing
+  // profile reads as a TO-DO, not a disappearance. Discharged patients are excluded (off the
+  // panel). enrolled = has an active/pending profile.
   let patients;
   if (orgWide) {
     [patients] = await db.query(
-      `SELECT u.id, u.name FROM users u
+      `SELECT u.id, u.name, (pp.program_status IS NOT NULL) AS enrolled
+         FROM users u
          JOIN role r ON r.user_id = u.id AND r.role_type = 'patient'
-         JOIN patient_profiles pp ON pp.user_id = u.id AND pp.program_status <> 'discharged'
-        WHERE u.organization_id = ? AND u.is_active = 1`,
+         LEFT JOIN patient_profiles pp ON pp.user_id = u.id
+        WHERE u.organization_id = ? AND u.is_active = 1
+          AND (pp.program_status IS NULL OR pp.program_status IN ('active', 'pending'))`,
       [orgScope]
     );
   } else {
     [patients] = await db.query(
-      `SELECT u.id, u.name FROM users u
+      `SELECT u.id, u.name, (pp.program_status IS NOT NULL) AS enrolled
+         FROM users u
          JOIN patient_doctor_assignments pda ON pda.patient_id = u.id AND pda.doctor_id = ?
          JOIN role r ON r.user_id = u.id AND r.role_type = 'patient'
-         JOIN patient_profiles pp ON pp.user_id = u.id AND pp.program_status <> 'discharged'
-        WHERE u.is_active = 1`,
+         LEFT JOIN patient_profiles pp ON pp.user_id = u.id
+        WHERE u.is_active = 1
+          AND (pp.program_status IS NULL OR pp.program_status IN ('active', 'pending'))`,
       [userId]
     );
   }
@@ -220,6 +225,19 @@ async function getClinicianOverviewService({ userId, orgWide = false, orgScope =
   }
 
   const out = patients.map((p) => {
+    // Not enrolled: no active/pending profile yet. Surface as a to-do, not a stat card.
+    if (!p.enrolled) {
+      return {
+        patient_id: p.id,
+        name: p.name,
+        enrolled: false,
+        reading_count: 0,
+        data_quality: "none",
+        status: "not_enrolled",
+        flags: [],
+      };
+    }
+
     const b = byPatient.get(p.id);
     const sysPeriod = b.period.map((r) => r.sys);
     const diaPeriod = b.period.map((r) => r.dia);
@@ -244,6 +262,7 @@ async function getClinicianOverviewService({ userId, orgWide = false, orgScope =
     return {
       patient_id: p.id,
       name: p.name,
+      enrolled: true,
       reading_count,
       data_quality,
       status,
@@ -254,18 +273,28 @@ async function getClinicianOverviewService({ userId, orgWide = false, orgScope =
     };
   });
 
-  // Actionable first; the silent (no_data) patients sink to the end so the page can lift
-  // them into a compact "not transmitting" section instead of a wall of empty cards.
-  const rank = { changed: 0, stable_out_of_range: 1, limited_data: 2, in_range: 3, no_data: 4 };
+  // Actionable first; silent (no_data) then not_enrolled sink to the end so the page can
+  // lift each into its own compact section instead of a wall of empty cards.
+  const rank = {
+    changed: 0, stable_out_of_range: 1, limited_data: 2, in_range: 3, no_data: 4, not_enrolled: 5,
+  };
   out.sort((a, b) => (rank[a.status] ?? 9) - (rank[b.status] ?? 9) || a.name.localeCompare(b.name));
 
-  // Summary for the page header (and the future email): who is transmitting, and the
-  // status mix. not_transmitting is the adherence headline — 18 of 19 here.
-  const summary = { total: out.length, transmitting: 0, not_transmitting: 0, by_status: {} };
+  // Summary for the page header (and the future email). transmitting/not_transmitting are
+  // among ENROLLED patients; not_enrolled is the profile-to-do count (shown, never hidden).
+  const summary = {
+    total: out.length, enrolled: 0, not_enrolled: 0,
+    transmitting: 0, not_transmitting: 0, by_status: {},
+  };
   for (const p of out) {
     summary.by_status[p.status] = (summary.by_status[p.status] || 0) + 1;
-    if (p.reading_count > 0) summary.transmitting += 1;
-    else summary.not_transmitting += 1;
+    if (p.enrolled === false) {
+      summary.not_enrolled += 1;
+    } else {
+      summary.enrolled += 1;
+      if (p.reading_count > 0) summary.transmitting += 1;
+      else summary.not_transmitting += 1;
+    }
   }
 
   return { ok: true, period: periodMeta, bucketing_note, summary, patient_count: out.length, patients: out };
