@@ -1,8 +1,24 @@
-# CONFIRMED — prod cert lacks the `rmtrpm.duckdns.org` SAN; iOS TLS fails (REOPENED)
+# RESOLVED — prod cert lacked the `rmtrpm.duckdns.org` SAN; iOS TLS failed
 
-**Status:** OPEN, CONFIRMED — the cert IS the cause. Reissue with both SANs (option B).
-**Opened:** 2026-09-03. **Falsely closed** same day. **Reopened + confirmed** on log re-analysis.
-**Severity:** HIGH — iOS TLS to `rmtrpm.duckdns.org` dies at cert verification.
+**Status:** RESOLVED 2026-09-09. Fixed by adding a dedicated `rmtrpm.duckdns.org` nginx
+server block with its own Let's Encrypt cert (rather than option B's single `--expand`
+lineage). As of 2026-09-10 `certbot certificates` shows BOTH certs valid:
+`api.twentytwohealth.com` (~70 days remaining) and `rmtrpm.duckdns.org` (~33 days). iOS TLS
+to `rmtrpm.duckdns.org` now completes.
+**Opened:** 2026-09-03. **Falsely closed** same day. **Reopened + confirmed** on log
+re-analysis. **Resolved:** 2026-09-09.
+**Severity:** HIGH (while open) — iOS TLS to `rmtrpm.duckdns.org` died at cert verification.
+
+> **Renewal watch:** the duckdns cert now renews on its own ~33-day clock. Because certbot
+> uses the **nginx authenticator** (HTTP-01 over `/.well-known/acme-challenge/`), any nginx
+> change that shadows that path on the duckdns vhost — e.g. a broad `location /.well-known/`
+> prefix block — would break renewal and re-outage iOS in ~33 days. See PRACTICE_FUSION_FHIR_DESIGN.md
+> for the related JWKS-endpoint decision (exact-match location only).
+
+**[Historical — the analysis below was written while the incident was OPEN. Kept for the
+method (host-mixed access log, handshake-stage invisibility) and the blast-radius record.
+The remediation section is the path that was NOT taken; the actual fix was a separate
+server block per above.]**
 
 ## Confirmation (this is the current, correct conclusion)
 `curl -sv https://rmtrpm.duckdns.org/rpm-be` → `SSL: no alternative certificate subject
