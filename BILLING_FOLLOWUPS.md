@@ -498,3 +498,28 @@ persists it, and `rpmNote.service.js:140` (and the BP-stats window ~163) bucket 
 `COALESCE(measured_at, created_at)` — existing/old-client rows fall back to `created_at`, so the
 count cannot change for historical data. Backend lands + is verified first, then the iOS live
 path sends the device `measuring_timestamp`, then the history backfill.
+
+## 17. Billing does not enforce an `enrolled_at` floor — a month before enrollment can read as billable — LATENT
+
+`getBillingSummary` (`services/billingSummary.service.js`) scopes patients by role (not by a
+profile), then derives billability from the RPM note's thresholds — **days with readings ≥ 16
+and documented minutes** — via `deriveState(note, signed)`. None of that checks that the billed
+month falls **within the patient's enrollment period**. `enrolled_at` (in `patient_profiles`) is
+used only as the 99453 setup **date-of-service fallback** (`setup_date || enrolled_at || null` in
+`rpmNote.service.js`), never as a floor on the billable months.
+
+Consequence: once a patient transmits, a month **before their real `enrolled_at`** (or with no
+profile at all, so no enrollment date exists) can come back `billable` purely on readings +
+minutes. Nothing gates the period against enrollment.
+
+**Latent today** — only one patient (Maria) transmits, and she is enrolled, so no month is
+mis-attributed right now. But it is exactly the shape that bites at ~20 transmitting patients
+when the profiles have been backfilled at different times and nobody remembers the assumption:
+a reading-rich month that predates a late-entered `enrolled_at` would bill.
+
+Fix shape (when profiles are the norm, not the exception): in `deriveState` (or the note's
+determination), require the billed month to be **on/after the enrollment period** — and when
+`enrolled_at` is absent, treat the period as **indeterminate** and flag it in `reasons[]` rather
+than allowing `billable`. Pairs with the "not enrolled" surfacing in the clinician overview and
+the missing-profile flags already in the note's `missing[]`. Don't build until profile backfill
+is complete enough that the floor won't spuriously block legitimately-enrolled patients.
