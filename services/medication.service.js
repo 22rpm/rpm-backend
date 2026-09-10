@@ -342,6 +342,36 @@ function assertDoseHasUnit(dose) {
   }
 }
 
+// Clinician dose entry is a NUMBER + a UNIT from a fixed list. RxNorm already carries the
+// strength in the drug name (e.g. "... 1000 MG"), so the dose usually means a COUNT — hence
+// count units lead the list. We store the combined string ("1 tablet") for display but
+// validate the parts, so a unit-less number can never be stored. Order must match the client.
+const DOSE_UNITS = ["tablet", "capsule", "mL", "mg", "mcg", "unit", "puff", "drop", "spray"];
+
+// Compose the stored dose string from the validated {dose_amount, dose_unit} parts. The
+// server recomputes the string rather than trusting the client's combined value. Falls back
+// to a legacy free-text `dose` (still unit-checked below) when the parts aren't supplied, so
+// the patient self-report path and older callers keep working.
+function resolveDose(input) {
+  const rawAmount = input.dose_amount;
+  const rawUnit = input.dose_unit;
+  const hasParts =
+    (rawAmount !== undefined && rawAmount !== null && String(rawAmount).trim() !== "") ||
+    (rawUnit !== undefined && rawUnit !== null && String(rawUnit).trim() !== "");
+  if (!hasParts) return clean(input.dose, 120); // legacy free-text path
+
+  const amount = String(rawAmount ?? "").trim();
+  const unit = String(rawUnit ?? "").trim();
+  if (!amount || !unit) throw httpError(400, "Dose needs both a number and a unit.");
+  if (!/^\d+(\.\d+)?$/.test(amount) || Number(amount) <= 0) {
+    throw httpError(400, "Dose amount must be a positive number.");
+  }
+  if (!DOSE_UNITS.includes(unit)) {
+    throw httpError(400, `Unrecognized dose unit "${unit}".`);
+  }
+  return `${amount} ${unit}`;
+}
+
 // Snapshot of the mutable clinical fields, for the audit before/after record.
 function medSnapshot(r) {
   return {
@@ -368,7 +398,8 @@ async function createMedicationForPatient(actor, orgScope, patientId, input, req
 
   const drug_name = clean(input.drug_name, 255);
   if (!drug_name) throw httpError(400, "drug_name is required");
-  assertDoseHasUnit(input.dose); // safety: no unit-less numeric dose (10 mg vs 10 mcg)
+  const dose = resolveDose(input); // number + unit from the fixed list, composed server-side
+  assertDoseHasUnit(dose); // belt-and-suspenders: no unit-less numeric dose (10 mg vs 10 mcg)
 
   const [[pu]] = await db.query(`SELECT organization_id FROM users WHERE id = ?`, [pid]);
   if (!pu || pu.organization_id == null) throw httpError(409, "No organization on file for this patient");
@@ -387,7 +418,7 @@ async function createMedicationForPatient(actor, orgScope, patientId, input, req
       actor.id,
       drug_name,
       clean(input.rxcui, 32),
-      clean(input.dose, 120),
+      dose,
       clean(input.route, 120),
       clean(input.frequency, 255),
       clean(input.admin_instructions, 500),
@@ -427,7 +458,8 @@ async function editMedicationForPatient(actor, orgScope, patientId, id, input, r
   }
   const drug_name = clean(input.drug_name, 255);
   if (!drug_name) throw httpError(400, "drug_name is required");
-  assertDoseHasUnit(input.dose);
+  const dose = resolveDose(input); // number + unit, composed server-side
+  assertDoseHasUnit(dose);
 
   const before = medSnapshot(row);
   const now = new Date();
@@ -438,7 +470,7 @@ async function editMedicationForPatient(actor, orgScope, patientId, id, input, r
        refills_remaining = ?, confirmed_by = ?, confirmed_at = ?, updated_at = ?
      WHERE id = ?`,
     [
-      drug_name, clean(input.rxcui, 32), clean(input.dose, 120), clean(input.route, 120),
+      drug_name, clean(input.rxcui, 32), dose, clean(input.route, 120),
       clean(input.frequency, 255), clean(input.admin_instructions, 500),
       clean(input.pharmacy_name, 255), clean(input.pharmacy_phone, 40),
       num(input.dispense_quantity), cleanDate(input.last_filled_date), num(input.refills_remaining),
