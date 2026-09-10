@@ -15,6 +15,7 @@ const {
   updateMyMedication,
   deleteMyMedication,
   getPatientMedications,
+  createPatientMedication,
   confirmMedication,
   rejectMedication,
 } = require("../controllers/medication.controller");
@@ -48,6 +49,10 @@ router.delete("/:id", authRequired, deleteMyMedication);
 // READ: org-wide roles + assigned clinician can see a patient's list (visibility via
 // canAccessPatient in the service).
 router.get("/patient/:patientId", authRequired, resolveOrgScope, getPatientMedications);
+// CREATE for a patient (clinician entering from the chart) — CLINICIAN-ONLY, same gate as
+// confirm; the entry is authoritative (created 'confirmed', source='clinician'). Distinct
+// from the patient self-entry POST "/" above. canAccessPatient is re-checked in the service.
+router.post("/patient/:patientId", authRequired, resolveOrgScope, requireRole(...CLINICIAN_ONLY), createPatientMedication);
 // CONFIRM / REJECT: CLINICIAN-ONLY — the same gate as signing the note. A care_manager
 // can read the list but confirming what a patient is taking is a clinical judgment.
 // canAccessPatient (assignment) is re-checked in the service.

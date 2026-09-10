@@ -65,6 +65,7 @@ const ACTIONS = {
   // Medications (patient-reported; clinician confirms/rejects)
   MEDICATION_CONFIRM: "medication.confirm",
   MEDICATION_REJECT: "medication.reject",
+  MEDICATION_CREATE_BY_CLINICIAN: "medication.create_by_clinician",
 };
 
 /**

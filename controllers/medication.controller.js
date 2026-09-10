@@ -64,6 +64,22 @@ async function getPatientMedications(req, res) {
   }
 }
 
+async function createPatientMedication(req, res) {
+  try {
+    const medication = await medService.createMedicationForPatient(
+      req.user,
+      req.orgScope,
+      req.params.patientId,
+      req.body || {},
+      req
+    );
+    return res.status(201).json({ ok: true, medication });
+  } catch (err) {
+    if (err.httpStatus) return res.status(err.httpStatus).json({ ok: false, message: err.message });
+    return res.status(500).json({ ok: false, message: "Server error" });
+  }
+}
+
 async function confirmMedication(req, res) {
   try {
     const medication = await medService.confirmMedication(req.user, req.orgScope, req.params.id, req);
@@ -96,6 +112,7 @@ module.exports = {
   updateMyMedication,
   deleteMyMedication,
   getPatientMedications,
+  createPatientMedication,
   confirmMedication,
   rejectMedication,
 };

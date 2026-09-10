@@ -333,6 +333,64 @@ async function getStaffRow(id) {
   return rows[0] || null;
 }
 
+// Clinician enters a med FOR a patient (from the chart) — distinct from patient self-report.
+// Route is gated to requireRole("clinician"); access (org + assignment) is re-checked here.
+// Provenance: source='clinician', reported_by=the clinician. Confirmation: created
+// status='confirmed' (confirmed_by/at = the entering clinician) — a chart entry IS the
+// authoritative review, so it does not sit in the unconfirmed queue. Org is taken from the
+// PATIENT (data-integrity), not the clinician. v1 is create-only (edit/delete are follow-ups;
+// editing a patient-reported med is the existing confirm/reject flow).
+async function createMedicationForPatient(actor, orgScope, patientId, input, req) {
+  const pid = Number(patientId);
+  if (!Number.isInteger(pid) || pid <= 0) throw httpError(400, "invalid patient id");
+  const allowed = await canAccessPatient(actor, orgScope, pid);
+  if (!allowed) throw httpError(404, "Patient not found");
+
+  const drug_name = clean(input.drug_name, 255);
+  if (!drug_name) throw httpError(400, "drug_name is required");
+
+  const [[pu]] = await db.query(`SELECT organization_id FROM users WHERE id = ?`, [pid]);
+  if (!pu || pu.organization_id == null) throw httpError(409, "No organization on file for this patient");
+
+  const now = new Date();
+  const [result] = await db.query(
+    `INSERT INTO patient_medications
+       (patient_id, organization_id, reported_by, drug_name, rxcui, dose, route,
+        frequency, admin_instructions, pharmacy_name, pharmacy_phone,
+        dispense_quantity, last_filled_date, refills_remaining, source, status,
+        confirmed_by, confirmed_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'clinician', 'confirmed', ?, ?)`,
+    [
+      pid,
+      pu.organization_id,
+      actor.id,
+      drug_name,
+      clean(input.rxcui, 32),
+      clean(input.dose, 120),
+      clean(input.route, 120),
+      clean(input.frequency, 255),
+      clean(input.admin_instructions, 500),
+      clean(input.pharmacy_name, 255),
+      clean(input.pharmacy_phone, 40),
+      num(input.dispense_quantity),
+      cleanDate(input.last_filled_date),
+      num(input.refills_remaining),
+      actor.id,
+      now,
+    ]
+  );
+
+  await audit.record({
+    req,
+    action: audit.ACTIONS.MEDICATION_CREATE_BY_CLINICIAN,
+    entityType: "patient_medication",
+    entityId: result.insertId,
+    metadata: { patient_id: pid, drug_name, source: "clinician" },
+  });
+
+  return toClinicianView(await getStaffRow(result.insertId));
+}
+
 // Clinician confirms an entry. Route already gated to requireRole("clinician"); here we
 // re-check patient access (org + assignment) via the row's patient.
 async function confirmMedication(actor, orgScope, id, req) {
@@ -392,6 +450,7 @@ module.exports = {
   updateMyMedication,
   deleteMyMedication,
   listPatientMedications,
+  createMedicationForPatient,
   confirmMedication,
   rejectMedication,
 };
