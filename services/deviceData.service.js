@@ -745,8 +745,10 @@ const createDeviceDataService = async (
   // urgency are now separate: a low reading can never render as "high".
   //
   // THRESHOLDS ARE UNCHANGED from the previous version (same band boundaries) —
-  // this is a labeling fix, not a clinical re-threshold. The band VALUES have
-  // never had physician review (see ALERT_FOLLOWUPS) and are a separate decision.
+  // this is a labeling fix, not a clinical re-threshold. The bands are AHA-based
+  // and approved. The open gap is per-PATIENT baseline, not the values: a fixed
+  // population cutoff fires every reading for a chronically-low patient (see
+  // ALERT_FOLLOWUPS #6 — per-patient thresholds via doctor_alert_settings).
   const determineBpSeverity = (vitals) => {
     if (!vitals) return null;
     const sVal = Number.parseInt(vitals.systolic, 10);
@@ -1022,9 +1024,10 @@ const createDeviceDataService = async (
         urgency: processedData.bpStatus === "Emergency" ? "critical" : "warning",
       };
       clinicianRows.forEach((clin) => {
-        // NOTE: determineBpSeverity ignores per-clinician thresholds today —
-        // doctor_alert_settings (das.*) is still queried but not applied. Wiring
-        // it is deferred until the thresholds have an owner (ALERT_FOLLOWUPS).
+        // NOTE: determineBpSeverity applies only the population (AHA) thresholds —
+        // doctor_alert_settings (das.*) is still queried but not applied, so a
+        // patient with a chronically-low baseline alerts on every reading. Wiring
+        // per-patient/per-clinician thresholds is the next priority (ALERT_FOLLOWUPS #6).
         const derived = determineBpSeverity(vitals);
         if (derived) {
           cliniciansToAlert.push(clin);

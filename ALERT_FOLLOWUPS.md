@@ -162,7 +162,7 @@ irreversible migration. Idempotency on the write path is still worth doing as de
 depth (that one real dupe proves it can happen, and the iOS history-sync leans on a server
 dedup that does not exist) — but on its own merits, not as a fix for this bug.
 
-## 5. Severity mislabel FIXED (labeling only); thresholds still have NO clinical owner
+## 5. Severity mislabel FIXED (labeling only)
 
 **The bug:** `determineTypeForClinician` returned `"high"` for ANY extreme band —
 including extreme *low* — so 110/53 (diastolic < 60) was labeled `type: "high"` and the
@@ -179,20 +179,26 @@ independent of what the numbers should be.
   (`urgency`) and the clinician SMS.
 
 The band boundaries are byte-for-byte the SAME as before — this changed labels, not
-thresholds. Frontend needs no change to stop the mislabel (`type` stays high/low). Renamed
-`determineTypeForClinician` → `determineBpSeverity`; `type` values gained `divergent`.
+thresholds. The thresholds are AHA-based and approved. Frontend needs no change to stop the
+mislabel (`type` stays high/low). Renamed `determineTypeForClinician` → `determineBpSeverity`;
+`type` values gained `divergent`.
 
-**⚠️ Thresholds have never had clinical review — and that predates this work.** BOTH
-threshold sets currently running in prod were written without a physician:
-- the alert GATE `calculateBPStatus` (`>=140/>=90` High, `<90/<60` Low), and
-- the severity BANDS in `determineBpSeverity` (extreme `>140` / `<90` / `>99` / `<60`,
-  moderate `130-140` / `90-99` / `60-69`).
+## 6. Fixed population cutoff can't tell "always low" from "just dropped" — per-patient thresholds needed
 
-They disagree with each other (e.g. the gate has no crisis level; the bands call `<60`
-diastolic "extreme/critical", which is why 110/53 is urgency=critical). Whether `<60` is
-critical, where the hypertension bands sit, and whether to add a `>=180/>=120` crisis tier
-are **physician-level clinical decisions**. There is no medical director on the project.
-Kinza is lead nurse and the closest we have, but this is above nurse scope. **Until someone
-owns the numbers: thresholds stay as-is, and wiring per-clinician `doctor_alert_settings`
-(still queried, still ignored) is deferred.** This note is the standing flag that the
-production thresholds are unvalidated.
+The 65-alert pile-up that surfaced all of this was ONE patient. Her diastolic baseline runs
+53–59, so she trips the `<60` AHA floor on nearly every reading — a correct alert by the
+population rule, fired dozens of times for a state that is normal *for her*. The threshold
+is right; the model is incomplete. A fixed population cutoff cannot distinguish a patient who
+is chronically at 55 (baseline — not news) from one who just dropped from 80 to 55 (news).
+
+**This is what `doctor_alert_settings` is for, and it is still not wired** — `das.*` is
+SELECTed in the alert query and never applied (`determineBpSeverity` ignores it). The fix is
+per-patient (ideally) or per-clinician thresholds / baseline-relative alerting, so a
+known-low baseline stops generating an alert per reading. Note the intended table is
+per-CLINICIAN (`das.doctor_id`); a true per-PATIENT baseline (this patient's normal is 55)
+likely needs a patient-level threshold or a baseline-delta rule, which `doctor_alert_settings`
+alone does not provide — scope that before building.
+
+**Severity of the gap scales badly:** with one chronically-low patient it's an annoyance;
+at twenty such patients it buries every real, acute alert and the page becomes unusable. This
+is the next alert-quality priority after the labeling fix.
