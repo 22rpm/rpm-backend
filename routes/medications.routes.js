@@ -16,6 +16,8 @@ const {
   deleteMyMedication,
   getPatientMedications,
   createPatientMedication,
+  editPatientMedication,
+  deletePatientMedication,
   confirmMedication,
   rejectMedication,
 } = require("../controllers/medication.controller");
@@ -53,6 +55,10 @@ router.get("/patient/:patientId", authRequired, resolveOrgScope, getPatientMedic
 // confirm; the entry is authoritative (created 'confirmed', source='clinician'). Distinct
 // from the patient self-entry POST "/" above. canAccessPatient is re-checked in the service.
 router.post("/patient/:patientId", authRequired, resolveOrgScope, requireRole(...CLINICIAN_ONLY), createPatientMedication);
+// EDIT / DELETE a clinician-entered med (fixing one's own entry) — CLINICIAN-ONLY, and the
+// service refuses non-'clinician' rows (patient-reported entries use confirm/reject).
+router.patch("/patient/:patientId/:id", authRequired, resolveOrgScope, requireRole(...CLINICIAN_ONLY), editPatientMedication);
+router.delete("/patient/:patientId/:id", authRequired, resolveOrgScope, requireRole(...CLINICIAN_ONLY), deletePatientMedication);
 // CONFIRM / REJECT: CLINICIAN-ONLY — the same gate as signing the note. A care_manager
 // can read the list but confirming what a patient is taking is a clinical judgment.
 // canAccessPatient (assignment) is re-checked in the service.

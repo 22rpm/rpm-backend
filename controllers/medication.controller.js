@@ -80,6 +80,30 @@ async function createPatientMedication(req, res) {
   }
 }
 
+async function editPatientMedication(req, res) {
+  try {
+    const medication = await medService.editMedicationForPatient(
+      req.user, req.orgScope, req.params.patientId, req.params.id, req.body || {}, req
+    );
+    return res.status(200).json({ ok: true, medication });
+  } catch (err) {
+    if (err.httpStatus) return res.status(err.httpStatus).json({ ok: false, message: err.message });
+    return res.status(500).json({ ok: false, message: "Server error" });
+  }
+}
+
+async function deletePatientMedication(req, res) {
+  try {
+    const result = await medService.deleteMedicationForPatient(
+      req.user, req.orgScope, req.params.patientId, req.params.id, req
+    );
+    return res.status(200).json({ ok: true, ...result });
+  } catch (err) {
+    if (err.httpStatus) return res.status(err.httpStatus).json({ ok: false, message: err.message });
+    return res.status(500).json({ ok: false, message: "Server error" });
+  }
+}
+
 async function confirmMedication(req, res) {
   try {
     const medication = await medService.confirmMedication(req.user, req.orgScope, req.params.id, req);
@@ -113,6 +137,8 @@ module.exports = {
   deleteMyMedication,
   getPatientMedications,
   createPatientMedication,
+  editPatientMedication,
+  deletePatientMedication,
   confirmMedication,
   rejectMedication,
 };

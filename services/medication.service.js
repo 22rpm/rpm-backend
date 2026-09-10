@@ -333,6 +333,26 @@ async function getStaffRow(id) {
   return rows[0] || null;
 }
 
+// Dose safety (server-side, not just the client): a bare number is ambiguous — 10 mg vs
+// 10 mcg is 1000x. Require an explicit unit; a count word ("1 tablet") passes. Never infer.
+function assertDoseHasUnit(dose) {
+  const d = (dose || "").trim();
+  if (d && /^[\d.]+$/.test(d)) {
+    throw httpError(400, 'Dose needs a unit — e.g. "10 mg", "10 mcg", or "1 tablet".');
+  }
+}
+
+// Snapshot of the mutable clinical fields, for the audit before/after record.
+function medSnapshot(r) {
+  return {
+    drug_name: r.drug_name, rxcui: r.rxcui, dose: r.dose, route: r.route,
+    frequency: r.frequency, admin_instructions: r.admin_instructions,
+    pharmacy_name: r.pharmacy_name, pharmacy_phone: r.pharmacy_phone,
+    dispense_quantity: r.dispense_quantity, last_filled_date: r.last_filled_date,
+    refills_remaining: r.refills_remaining, source: r.source, status: r.status,
+  };
+}
+
 // Clinician enters a med FOR a patient (from the chart) — distinct from patient self-report.
 // Route is gated to requireRole("clinician"); access (org + assignment) is re-checked here.
 // Provenance: source='clinician', reported_by=the clinician. Confirmation: created
@@ -348,6 +368,7 @@ async function createMedicationForPatient(actor, orgScope, patientId, input, req
 
   const drug_name = clean(input.drug_name, 255);
   if (!drug_name) throw httpError(400, "drug_name is required");
+  assertDoseHasUnit(input.dose); // safety: no unit-less numeric dose (10 mg vs 10 mcg)
 
   const [[pu]] = await db.query(`SELECT organization_id FROM users WHERE id = ?`, [pid]);
   if (!pu || pu.organization_id == null) throw httpError(409, "No organization on file for this patient");
@@ -389,6 +410,73 @@ async function createMedicationForPatient(actor, orgScope, patientId, input, req
   });
 
   return toClinicianView(await getStaffRow(result.insertId));
+}
+
+// Edit a CLINICIAN-entered med (fixing the entering clinician's own entry). Only source=
+// 'clinician' rows — a patient-reported med is corrected via confirm/reject, not overwritten,
+// so we never silently rewrite what the patient said. Re-attests (confirmed_by/at = editor).
+// The audit record carries before/after so a dose correction is fully traceable.
+async function editMedicationForPatient(actor, orgScope, patientId, id, input, req) {
+  const pid = Number(patientId);
+  const row = await getStaffRow(id);
+  if (!row || Number(row.patient_id) !== pid) throw httpError(404, "Medication not found");
+  const allowed = await canAccessPatient(actor, orgScope, pid);
+  if (!allowed) throw httpError(404, "Medication not found");
+  if (row.source !== "clinician") {
+    throw httpError(409, "Only clinician-entered medications can be edited here — use confirm/reject for a patient-reported entry.");
+  }
+  const drug_name = clean(input.drug_name, 255);
+  if (!drug_name) throw httpError(400, "drug_name is required");
+  assertDoseHasUnit(input.dose);
+
+  const before = medSnapshot(row);
+  const now = new Date();
+  await db.query(
+    `UPDATE patient_medications SET
+       drug_name = ?, rxcui = ?, dose = ?, route = ?, frequency = ?, admin_instructions = ?,
+       pharmacy_name = ?, pharmacy_phone = ?, dispense_quantity = ?, last_filled_date = ?,
+       refills_remaining = ?, confirmed_by = ?, confirmed_at = ?, updated_at = ?
+     WHERE id = ?`,
+    [
+      drug_name, clean(input.rxcui, 32), clean(input.dose, 120), clean(input.route, 120),
+      clean(input.frequency, 255), clean(input.admin_instructions, 500),
+      clean(input.pharmacy_name, 255), clean(input.pharmacy_phone, 40),
+      num(input.dispense_quantity), cleanDate(input.last_filled_date), num(input.refills_remaining),
+      actor.id, now, now, id,
+    ]
+  );
+  const after = medSnapshot(await getStaffRow(id));
+  await audit.record({
+    req,
+    action: audit.ACTIONS.MEDICATION_EDIT_BY_CLINICIAN,
+    entityType: "patient_medication",
+    entityId: id,
+    metadata: { patient_id: pid, before, after },
+  });
+  return toClinicianView(await getStaffRow(id));
+}
+
+// Delete a CLINICIAN-entered med (removing the entering clinician's own erroneous entry).
+// Only source='clinician'. Hard delete, but the full row is captured in the audit record so
+// what was on the chart, and when it was removed by whom, is never lost.
+async function deleteMedicationForPatient(actor, orgScope, patientId, id, req) {
+  const pid = Number(patientId);
+  const row = await getStaffRow(id);
+  if (!row || Number(row.patient_id) !== pid) throw httpError(404, "Medication not found");
+  const allowed = await canAccessPatient(actor, orgScope, pid);
+  if (!allowed) throw httpError(404, "Medication not found");
+  if (row.source !== "clinician") {
+    throw httpError(409, "Only clinician-entered medications can be deleted here — reject a patient-reported entry instead.");
+  }
+  await db.query(`DELETE FROM patient_medications WHERE id = ?`, [id]);
+  await audit.record({
+    req,
+    action: audit.ACTIONS.MEDICATION_DELETE_BY_CLINICIAN,
+    entityType: "patient_medication",
+    entityId: id,
+    metadata: { patient_id: pid, deleted: medSnapshot(row) },
+  });
+  return { ok: true, deleted_id: id };
 }
 
 // Clinician confirms an entry. Route already gated to requireRole("clinician"); here we
@@ -451,6 +539,8 @@ module.exports = {
   deleteMyMedication,
   listPatientMedications,
   createMedicationForPatient,
+  editMedicationForPatient,
+  deleteMedicationForPatient,
   confirmMedication,
   rejectMedication,
 };

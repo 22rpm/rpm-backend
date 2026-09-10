@@ -66,6 +66,8 @@ const ACTIONS = {
   MEDICATION_CONFIRM: "medication.confirm",
   MEDICATION_REJECT: "medication.reject",
   MEDICATION_CREATE_BY_CLINICIAN: "medication.create_by_clinician",
+  MEDICATION_EDIT_BY_CLINICIAN: "medication.edit_by_clinician",
+  MEDICATION_DELETE_BY_CLINICIAN: "medication.delete_by_clinician",
 };
 
 /**
