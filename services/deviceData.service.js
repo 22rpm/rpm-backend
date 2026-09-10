@@ -733,8 +733,21 @@ const createDeviceDataService = async (
     deviceData,
   });
 
-  // helper reused from your test-alert logic
-  const determineTypeForClinician = (vitals) => {
+  // BP severity classifier. Returns null (no abnormality in these bands) or
+  //   { direction, urgency }
+  // where DIRECTION is which way the reading is off ("high" = hypertension,
+  // "low" = hypotension, "divergent" = high one / low the other) and URGENCY is
+  // how far ("critical" = an extreme band, "warning" = a moderate band).
+  //
+  // These are TWO ORTHOGONAL axes on purpose. The old version collapsed them and
+  // returned "high" for ANY extreme band — INCLUDING extreme LOW — so 110/53 was
+  // labeled "high" and a clinician read it as high blood pressure. Direction and
+  // urgency are now separate: a low reading can never render as "high".
+  //
+  // THRESHOLDS ARE UNCHANGED from the previous version (same band boundaries) —
+  // this is a labeling fix, not a clinical re-threshold. The band VALUES have
+  // never had physician review (see ALERT_FOLLOWUPS) and are a separate decision.
+  const determineBpSeverity = (vitals) => {
     if (!vitals) return null;
     const sVal = Number.parseInt(vitals.systolic, 10);
     const dVal = Number.parseInt(vitals.diastolic, 10);
@@ -750,22 +763,28 @@ const createDeviceDataService = async (
     const dExtremeLow = !Number.isNaN(dVal) && dVal < 60;
     const dModerateLow = !Number.isNaN(dVal) && dVal >= 60 && dVal <= 69;
 
-    const anyHighBand =
-      sExtremeHigh || sModerateHigh || dExtremeHigh || dModerateHigh;
-    const anyLowBand =
-      sExtremeLow || sModerateLow || dExtremeLow || dModerateLow;
+    const anyHighBand = sExtremeHigh || sModerateHigh || dExtremeHigh || dModerateHigh;
+    const anyLowBand = sExtremeLow || sModerateLow || dExtremeLow || dModerateLow;
+    const anyExtreme = sExtremeHigh || dExtremeHigh || sExtremeLow || dExtremeLow;
 
-    if ((sExtremeHigh || sModerateHigh) && (dExtremeLow || dModerateLow))
-      return "abnormal";
-    if ((dExtremeHigh || dModerateHigh) && (sExtremeLow || sModerateLow))
-      return "abnormal";
+    const urgency = anyExtreme ? "critical" : "warning";
 
-    if (sExtremeHigh || dExtremeHigh || sExtremeLow || dExtremeLow)
-      return "high";
-    if (anyHighBand || anyLowBand) return "low";
-
+    // Divergent: one reading high while the other is low.
+    if (anyHighBand && anyLowBand) return { direction: "divergent", urgency };
+    if (anyHighBand) return { direction: "high", urgency };
+    if (anyLowBand) return { direction: "low", urgency };
     return null;
   };
+
+  // Human-readable direction for the alert text.
+  const directionLabel = (direction) =>
+    direction === "high"
+      ? "High BP"
+      : direction === "low"
+      ? "Low BP"
+      : direction === "divergent"
+      ? "Divergent BP"
+      : "BP";
 
   // minimal BP status calculator (keeps your previous behavior)
   // Classify a BP reading. Boundaries are standard clinical ranges (AHA/ACC):
@@ -995,9 +1014,18 @@ const createDeviceDataService = async (
         systolic: processedData.systolic,
         diastolic: processedData.diastolic,
       };
+      // Fallback direction/urgency if the bands find nothing but the gate
+      // (calculateBPStatus) already flagged this reading — derive direction from
+      // the gate's status so we never lose the abnormal signal.
+      const fallbackSeverity = {
+        direction: processedData.bpStatus === "Low" ? "low" : "high",
+        urgency: processedData.bpStatus === "Emergency" ? "critical" : "warning",
+      };
       clinicianRows.forEach((clin) => {
-        // determineTypeForClinician uses measured bands
-        const derived = determineTypeForClinician(vitals);
+        // NOTE: determineBpSeverity ignores per-clinician thresholds today —
+        // doctor_alert_settings (das.*) is still queried but not applied. Wiring
+        // it is deferred until the thresholds have an owner (ALERT_FOLLOWUPS).
+        const derived = determineBpSeverity(vitals);
         if (derived) {
           cliniciansToAlert.push(clin);
           clinicianTypeMap[clin.id] = derived;
@@ -1010,7 +1038,7 @@ const createDeviceDataService = async (
             clin.diastolic_low;
           if (!hasSettings) {
             cliniciansToAlert.push(clin);
-            clinicianTypeMap[clin.id] = "low"; // conservative default
+            clinicianTypeMap[clin.id] = fallbackSeverity;
           }
         }
       });
@@ -1031,27 +1059,31 @@ const createDeviceDataService = async (
         return serviceResponse;
       }
 
-      // choose overall alert type by priority
-      const priority = { abnormal: 3, high: 2, low: 1 };
-      let overallType = null;
+      // Overall severity: DIRECTION (what) and URGENCY (how bad) are separate.
+      // Take the most-urgent across recipients; direction is the reading's (all
+      // recipients evaluate the same vitals today). urgencyRank: critical > warning.
+      const urgencyRank = { critical: 2, warning: 1 };
+      let overall = null;
       for (const clin of cliniciansToAlert) {
-        const t = clinicianTypeMap[clin.id] || "low";
-        if (!overallType) overallType = t;
-        else if (priority[t] > priority[overallType]) overallType = t;
+        const s = clinicianTypeMap[clin.id] || fallbackSeverity;
+        if (!overall || urgencyRank[s.urgency] > urgencyRank[overall.urgency]) {
+          overall = s;
+        }
       }
-      if (!overallType) overallType = "low";
+      if (!overall) overall = fallbackSeverity;
+
+      // `type` carries DIRECTION (high/low/divergent) — the axis the dashboard
+      // badge + filter already use, and the fix for the "high for a low reading"
+      // mislabel. URGENCY (critical/warning) rides in the human-readable desc.
+      const alertType = overall.direction;
+      const alertDesc = `${directionLabel(overall.direction)} (${processedData.systolic}/${processedData.diastolic}) — ${overall.urgency}`;
 
       // Insert alert + assignments in transaction
       await connection.beginTransaction();
       try {
         const [alertResult] = await connection.query(
           "INSERT INTO alerts (user_id, `desc`, type, created_at) VALUES (?, ?, ?, ?)",
-          [
-            userId,
-            `BP alert (severity: ${overallType}) - ${processedData.systolic}/${processedData.diastolic}`,
-            overallType,
-            new Date(),
-          ]
+          [userId, alertDesc, alertType, new Date()]
         );
         const alertId = alertResult.insertId;
 
@@ -1110,7 +1142,9 @@ const createDeviceDataService = async (
               primary_assigned_doctor_name:
                 primaryDoctor?.name || "Unknown Doctor",
               primary_assigned_doctor_email: primaryDoctor?.email || "N/A",
-              derived_type: clinicianTypeMap[recipient_id] || overallType,
+              // direction (high/low/divergent) for back-compat; urgency alongside
+              derived_type: (clinicianTypeMap[recipient_id] || overall).direction,
+              urgency: (clinicianTypeMap[recipient_id] || overall).urgency,
             },
             patient: patientDetails,
             assigned_doctor: primaryDoctor
@@ -1188,7 +1222,7 @@ const createDeviceDataService = async (
 
             if (formattedPhone) {
               // Create personalized SMS message
-              const smsMessage = `🚨 ALERT: Your patient ${patientName} has a ${overallType.toUpperCase()} BP reading: ${
+              const smsMessage = `🚨 ALERT: Your patient ${patientName} has a ${overall.direction.toUpperCase()} BP reading (${overall.urgency}): ${
                 processedData.systolic
               }/${
                 processedData.diastolic

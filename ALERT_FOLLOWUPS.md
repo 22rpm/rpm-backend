@@ -161,3 +161,38 @@ fan-out, or a badge/list counting mismatch — and they need opposite fixes. One
 irreversible migration. Idempotency on the write path is still worth doing as defense-in-
 depth (that one real dupe proves it can happen, and the iOS history-sync leans on a server
 dedup that does not exist) — but on its own merits, not as a fix for this bug.
+
+## 5. Severity mislabel FIXED (labeling only); thresholds still have NO clinical owner
+
+**The bug:** `determineTypeForClinician` returned `"high"` for ANY extreme band —
+including extreme *low* — so 110/53 (diastolic < 60) was labeled `type: "high"` and the
+dashboard badge (`capitalize(alert.type)`) rendered it as **"High"**. A clinician read
+"severity: high — 110/53" as high blood pressure. That's a clinical-safety mislabel
+independent of what the numbers should be.
+
+**The fix (labeling only, thresholds UNCHANGED):** split into two orthogonal axes —
+- **direction** (`high` = hypertension, `low` = hypotension, `divergent`) → stored in
+  `alerts.type` (the axis the dashboard badge + filter already use), so a low reading now
+  renders as **"Low"**, never "High".
+- **urgency** (`critical` = an extreme band, `warning` = a moderate band) → carried in the
+  human-readable `desc`, e.g. `"Low BP (110/53) — critical"`. Also on the socket payload
+  (`urgency`) and the clinician SMS.
+
+The band boundaries are byte-for-byte the SAME as before — this changed labels, not
+thresholds. Frontend needs no change to stop the mislabel (`type` stays high/low). Renamed
+`determineTypeForClinician` → `determineBpSeverity`; `type` values gained `divergent`.
+
+**⚠️ Thresholds have never had clinical review — and that predates this work.** BOTH
+threshold sets currently running in prod were written without a physician:
+- the alert GATE `calculateBPStatus` (`>=140/>=90` High, `<90/<60` Low), and
+- the severity BANDS in `determineBpSeverity` (extreme `>140` / `<90` / `>99` / `<60`,
+  moderate `130-140` / `90-99` / `60-69`).
+
+They disagree with each other (e.g. the gate has no crisis level; the bands call `<60`
+diastolic "extreme/critical", which is why 110/53 is urgency=critical). Whether `<60` is
+critical, where the hypertension bands sit, and whether to add a `>=180/>=120` crisis tier
+are **physician-level clinical decisions**. There is no medical director on the project.
+Kinza is lead nurse and the closest we have, but this is above nurse scope. **Until someone
+owns the numbers: thresholds stay as-is, and wiring per-clinician `doctor_alert_settings`
+(still queried, still ignored) is deferred.** This note is the standing flag that the
+production thresholds are unvalidated.
