@@ -128,6 +128,19 @@ The RPM monthly-note generator, end to end, plus its dependencies:
   outcome not recorded" (missing evidence), never "FAILED".
 
 ## Known landmines
+- **Phone-OTP login is LIVE on prod (feature/measured-at), NOT unmerged (2026-09-09).**
+  `phoneNumber` is a LOGIN IDENTIFIER, not just contact data: `auth.controller.js` resolves
+  the account via `findUserByPhone` (`user.service.js`) and Twilio-SMS-OTPs it. That lookup
+  matches on the NORMALIZED LAST-10-DIGIT SUFFIX (`… LIKE '%<tail>'`) and returns the
+  HIGHEST-id row on a collision with only a `console.warn` — there is NO unique index on
+  `phoneNumber`. The write-side guard (enrollment/edit) blocks only EXACT-string duplicates,
+  so format variants (`+1…`, country code, punctuation) and a number that is a SUFFIX of
+  another slip past the guard and collide at login → one patient can resolve to another's
+  account. Enter backfilled numbers as BARE 10 DIGITS (`5551234567`) so the exact guard and
+  the suffix lookup operate on identical values. FIX (normalize-on-write + exact-normalized
+  lookup + unique index over the normalized value) is drafted, NOT built — run a last-10-digit
+  `GROUP BY … HAVING COUNT(*)>1` collision check before any unique index. Supersedes any note
+  that this path is unmerged (e.g. "1fa9760").
 - **Second BP classifier still buggy.** The ingest classifier is fixed/deployed, but
   determineTypeForClinician (deviceData.service.js) still uses the old bands and
   labels 140/95 severity "low". doctor_alert_settings is INERT — the alert-routing
