@@ -447,18 +447,27 @@ apps and the dashboard; the dashboard's `RoutesApi.js` wrappers for two of them 
   `sendTestNotificationAPI`) from `rpm-dashboard-v1.0/src/apis/RoutesApi.js`.
 - Prior, separate: `GET /debug-twilio` (Twilio SID leak) removed 2026-09-10 in `679d124`.
 
-**Disclosure question (open, box-side):** the August log check found only the reviewer's own
-curl probes (24.199.45.18) within nginx's 14-day retention — no third-party access *in that
-window*. But that window is long gone, and these routes lived for months. Re-run the check
-against current logs for hits to any of these paths from IPs that aren't ours; a hit on the
-PHI routes (`/test/patients/blood-pressure`, `/test-alert`, `/test/bp-alert`) would be a
-disclosure event, not just cleanup. RESULTS: _pending box-side query._
+**Disclosure question — checked 2026-09-10, INCONCLUSIVE (not cleared).** The nginx access
+logs (all vhosts, current + rotated within retention) were grepped for every deleted path.
+The only hits were the reviewer's own two verification curls against `/debug-twilio`
+(200 at 18:36, 404 at 18:56; `curl/8.7.1` from 76.79.68.74). **No PHI path**
+(`/test/patients/blood-pressure`, `/test-alert`, `/test/bp-alert`) was touched by anyone in
+the logs. The August check similarly saw only the reviewer's own probes (24.199.45.18).
+**This is NOT "confirmed no disclosure."** nginx retention is ~14 days; these routes were live
+for **months**. The check therefore covers only a ~14-day window near the end of that exposure
+— **absence of evidence within retention is not evidence of absence** over the full period.
+The earlier logs no longer exist, so the months before the retention window are
+**unassessable**. Conclusion: no evidence of access in the observable window; the full-exposure
+disclosure question cannot be answered from logs and remains formally open.
+
+**Deployed:** `c680ac8` (tip of feature/measured-at) — all leak routes gone from prod,
+`npm run check:roles` passed. `/debug-twilio` cleared in the same restart.
 
 **Left in place, deliberately (not in this cleanup's scope, tracked separately):**
 `POST /api/dev-data/devices` and `/:devId/store` are unauthenticated writes (also flagged in
 the Aug review) but read `req.user` and likely error rather than leak — gate them next.
-And `NOTIF_SKIP_TWILIO_SIG=true` disables the inbound-Twilio signature check — confirm it is
-NOT set in the prod `.env`.
+`NOTIF_SKIP_TWILIO_SIG` — **confirmed NOT set in prod `.env` (2026-09-10); inbound-Twilio
+signature enforced.**
 
 **Prevention:** a review's "not fixed" list must become tracked items with an owner, not prose
 in a dated file. This is the security-review analogue of #5/#13 (a redaction/reconciliation
