@@ -105,14 +105,37 @@ public and unauthenticated — a JWKS is meant to be world-readable.
   file **outside the deploy tree** — `/home/ubuntu/.secrets/` (dir `0700`), referenced by an
   env var path — not under `/home/ubuntu/22-rpm/` where both repos live. **Never commit key
   material.**
-- New env vars (names to reserve): `GREENWAY_CLIENT_ID`, `GREENWAY_TOKEN_URL`
-  (`{BaseURL}/token`), `GREENWAY_FHIR_BASE`, `GREENWAY_PRIVATE_KEY` (or `_KEY_PATH`),
-  `GREENWAY_KID`. The **JWKS URL** registered with Greenway is
-  `https://api.twentytwohealth.com/.well-known/jwks.json`.
+- Env vars — **set (signing):** `GREENWAY_SIGNING_KEY_PATH` (or inline `GREENWAY_SIGNING_PRIVATE_KEY`),
+  `GREENWAY_SIGNING_KID` (currently `fa36d4e3e12a4f42`). **To reserve (token slice, §9):**
+  `GREENWAY_CLIENT_ID`, `GREENWAY_TOKEN_URL`, `GREENWAY_FHIR_BASE`. The **JWKS URL** registered
+  with Greenway is `https://api.twentytwohealth.com/.well-known/jwks.json`.
 - The JWKS route emits only `{ keys: [ { kty:"EC", crv:"P-384", x, y, use:"sig",
-  alg:"ES384", kid } ] }` — the public coordinates, matching `GREENWAY_KID`.
+  alg:"ES384", kid } ] }` — the public coordinates, matching `GREENWAY_SIGNING_KID`.
 - Key rotation: publish the new key in JWKS **alongside** the old (two `keys` entries) before
-  switching the signing `kid`, so in-flight validation never sees a missing key.
+  switching the signing `kid`, so in-flight validation never sees a missing key. (Requires
+  extending the route to read a set of keys — a follow-up, not built.)
+
+### Key backup & loss (recovery cost is bounded — the URL, not the key, is what's registered)
+- **Backup (do now):** the private key exists only on the box, and prod has no snapshots, so
+  back it up — encrypted, never in git. Export an encrypted PKCS#8 copy and store the
+  encrypted file + passphrase in the team password manager (separate entries), or in AWS
+  Secrets Manager / SSM SecureString:
+  `openssl pkcs8 -topk8 -v2 aes-256-cbc -in /home/ubuntu/.secrets/greenway-signing.key -out greenway-signing.enc.pem` (prompts for a passphrase). Restore with
+  `openssl pkcs8 -in greenway-signing.enc.pem -out greenway-signing.key`.
+- **Durable path (follow-up):** store the key in AWS Secrets Manager and have the box read it
+  at boot via its instance role — removes the "only on the box" single point of failure.
+- **If the key is lost with no backup — cost is a bounded outage, not lockout.** We registered
+  a JWKS *URL*, not a static key (no `jku`, no pinned fingerprint), so recovery is: generate a
+  new P-384 key → drop it in `/home/ubuntu/.secrets/` → restart. The JWKS URL then serves the
+  new public key + new `kid`, and Greenway re-fetches from the registered URL. **The app
+  registration and `client_id` are unaffected** — they are not tied to the key.
+  - Downtime = the gap until you regenerate **plus** Greenway's JWKS cache TTL before it picks
+    up the new key (and possibly a manual "refresh JWKS keys" click in their portal — confirm
+    whether their portal caches or re-fetches on demand).
+  - Full re-registration (new `client_id`) would only be needed in the worst case where
+    Greenway pinned the key rather than the URL — not expected given the JWKS-URL model, but
+    confirm during registration. So: the key is **important but replaceable**; back it up to
+    avoid the outage, not because losing it is catastrophic.
 
 ## 5. Token + fetch flow (outbound; unaffected by the inbound cert work)
 1. Build assertion: header `{alg:"ES384", kid:GREENWAY_KID, typ:"JWT"}`; claims
@@ -142,23 +165,65 @@ name+DOB+… ) before any Encounter fetch. Scope this only if §1 is GO.
 
 ## 8. Sequencing (§1 is GO)
 
-### First slice — the JWKS endpoint (prerequisite for Greenway registration)
-Three tasks. 🟩 = code-only (inert until deployed); 🟥 = touches prod.
+### First slice — the JWKS endpoint — ✅ COMPLETE (2026-09-10)
+Live and verified at **`https://api.twentytwohealth.com/.well-known/jwks.json`** —
+`kid fa36d4e3e12a4f42`, ES384/P-384, no `d` field. `certbot renew --dry-run` passes for both
+certs (acme-challenge not shadowed). 🟩 = code-only; 🟥 = touched prod.
 
 | # | Task | Prod? | Status |
 |---|---|---|---|
-| 1 | **JWKS route** `GET /.well-known/jwks.json` in `server.js` — derives the public JWK from the private key via native `crypto.createPublicKey(...).export({format:"jwk"})` (no new dep), returns `{keys:[{kty:"EC",crv:"P-384",x,y,use:"sig",alg:"ES384",kid}]}`; **503 if the key env vars are unset**. Public/unauthenticated by design (public key only — verified the export has no `d`). | 🟩 (until deploy) | **DONE** — committed; inert until Task 2 sets the env vars |
-| 2 | **Keypair + `.env` + restart** on the box. Key lives **outside the deploy tree** in `/home/ubuntu/.secrets/` (dir `0700`, key `0600`) — `/home/ubuntu/22-rpm/` holds both repos, so a stray `git clean -x`/dir op there must not be able to reach the key. `openssl ecparam -name secp384r1 -genkey -noout -out /home/ubuntu/.secrets/greenway-signing.key`; add `GREENWAY_SIGNING_KEY_PATH` + `GREENWAY_SIGNING_KID` to `.env`; restart `rpm-backend`. Route then serves on `:4000` **internally** — not yet public. | 🟥 `.env` + restart | pending (yours) |
-| 3 | **Exact-match nginx location** on the **api vhost only**: `location = /.well-known/jwks.json { proxy_pass http://127.0.0.1:4000/.well-known/jwks.json; }`. Never a `/.well-known/` prefix (shadows acme-challenge → breaks the ~33-day duckdns renewal). `nginx -t && systemctl reload nginx`. Exposes it publicly. | 🟥 nginx | pending (yours) |
+| 1 | **JWKS route** `GET /.well-known/jwks.json` in `server.js` — derives the public JWK from the private key via native `crypto.createPublicKey(...).export({format:"jwk"})` (no new dep), returns `{keys:[{kty:"EC",crv:"P-384",x,y,use:"sig",alg:"ES384",kid}]}`; **503 if the key env vars are unset**. Public/unauthenticated by design (public key only — export has no `d`). | 🟩 | **DONE** — deployed (`c680ac8`) |
+| 2 | **Keypair + `.env` + restart** on the box. Key **outside the deploy tree** in `/home/ubuntu/.secrets/greenway-signing.key` (dir `0700`, key `0600`); env `GREENWAY_SIGNING_KEY_PATH` + `GREENWAY_SIGNING_KID`; `rpm-backend` restarted. | 🟥 `.env` + restart | **DONE** — `kid fa36d4e3e12a4f42`, served on :4000 |
+| 3 | **Exact-match nginx location** on the **api vhost only**: `location = /.well-known/jwks.json { proxy_pass http://127.0.0.1:4000/.well-known/jwks.json; }`. Never a `/.well-known/` prefix (shadows acme-challenge → breaks the ~33-day duckdns renewal). | 🟥 nginx | **DONE** — public + verified; renewal dry-run passes both certs |
 
-**Verify:** after 2 (on box) `curl -s http://127.0.0.1:4000/.well-known/jwks.json` → one-key JWKS; after 3 (external) same over `https://api.twentytwohealth.com/.well-known/jwks.json`, **and** `sudo certbot renew --dry-run` still passes for both certs (proves acme-challenge wasn't shadowed).
+**Verified:** internal `curl :4000/.well-known/jwks.json` → one-key JWKS; external over HTTPS → same; `certbot renew --dry-run` → both certs OK (acme-challenge intact).
 
 ### Remaining slices (after the JWKS URL is live + registered)
-2. Register the app with Greenway (JWKS URL, scopes `system/Encounter.read` + `system/Patient.read`); obtain `client_id`.
-3. Token client + ES384 assertion signer (`jsonwebtoken@9`, already a dep).
-4. Patient-id mapping (§6).
-5. Encounter fetch → classify primary-care (§1) → "last seen" field on overview.
-Steps through registration are inert; nothing touches patients until the mapping step.
+1. ✅ JWKS URL live (above). **← IN PROGRESS: registering with Greenway.**
+2. Token client + ES384 assertion signer — **scoped in §9; DO NOT BUILD until Greenway approves
+   registration and we have `client_id` + FHIR base URL.**
+3. Patient-id mapping (§6).
+4. Encounter fetch → classify primary-care (§1) → "last seen" field on overview.
+Nothing touches patients until the mapping step.
+
+## 9. Next slice — token client + ES384 assertion signer (SCOPE ONLY, blocked)
+**Blocked on Greenway registration.** Do not build until we have, from the approved app:
+`client_id`, the **FHIR base URL**, and confirmation of the granted scopes
+(`system/Encounter.read`, `system/Patient.read`). These become env
+`GREENWAY_CLIENT_ID` / `GREENWAY_FHIR_BASE`.
+
+**Endpoint discovery (don't hardcode `{BaseURL}/token`).** Fetch
+`GET {GREENWAY_FHIR_BASE}/.well-known/smart-configuration` once and read `token_endpoint` from
+it (SMART Backend Services publishes it there). Cache it; fall back to `GREENWAY_TOKEN_URL` only
+if discovery is unavailable. This avoids baking in a token path that could differ per Greenway
+environment (sandbox vs prod).
+
+**Module:** a new `services/greenway.service.js` exporting `getAccessToken()` — internal only,
+**no route**. Pieces:
+1. **Assertion builder** (`jsonwebtoken@9`, already a dep; `jwt.sign(claims, privateKeyPem,
+   { algorithm: "ES384", keyid: GREENWAY_SIGNING_KID })`):
+   - header `{ alg:"ES384", kid:GREENWAY_SIGNING_KID, typ:"JWT" }`
+   - claims `iss = sub = GREENWAY_CLIENT_ID`, `aud = token_endpoint`, `jti = crypto.randomUUID()`,
+     `iat = now`, `exp = now + 4m` (keep **≤ 5 min** — many SMART servers reject longer).
+   - Private key read from the same `GREENWAY_SIGNING_KEY_PATH` the JWKS route uses — the
+     public half is already published, so signatures verify against the live JWKS.
+2. **Token exchange:** `POST token_endpoint` (form-encoded) `grant_type=client_credentials`,
+   `client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer`,
+   `client_assertion=<jwt>`, `scope="system/Encounter.read system/Patient.read"`. Parse
+   `access_token` + `expires_in`.
+3. **Caching + single-flight:** hold the bearer in memory (never disk/DB) with expiry =
+   `now + expires_in − 60s` safety margin; a single in-flight promise so concurrent callers
+   don't stampede the token endpoint. Refresh on expiry or on a 401 from a FHIR call.
+4. **Errors:** surface `invalid_client` / `invalid_scope` distinctly (they mean registration
+   or scope-grant problems, not transient failures). Retry only transient 5xx/network, with
+   backoff.
+
+**Security:** never log the assertion, the `access_token`, or the private key. Token is
+memory-only. The assertion is short-lived and single-use (`jti`).
+
+**Testable before creds:** the assertion builder can be unit-tested offline — sign, then verify
+the JWT against the **public** JWK from our own live endpoint and assert the header/claims.
+The token exchange itself can't be tested until Greenway issues creds + base URL.
 
 ---
 
