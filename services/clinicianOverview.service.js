@@ -153,6 +153,21 @@ function sysBand(v) {
   if (v < 140) return "stage-1 (high)";
   return "stage-2 (high)";
 }
+// Movement quality for the UI's delta color: is the change TOWARD the healthy range
+// (improving) or AWAY from it (worsening)? For BP, high-side down = better, low-side up =
+// better; movement within the healthy middle isn't flagged good/bad. So a favorable drop
+// from an elevated baseline reads green, not an alarming red. Returns improving | worsening
+// | neutral.
+function vitalMovement(v, kind) {
+  if (!v || !v.n || !v.baseline) return "neutral";
+  if (v.vs_baseline === "consistent" || v.vs_baseline === "insufficient") return "neutral";
+  const highSide = kind === "sys" ? v.median >= 120 : v.median >= 80;
+  const lowSide = kind === "sys" ? v.median < 90 : v.median < 60;
+  if (highSide) return v.vs_baseline === "lower" ? "improving" : "worsening";
+  if (lowSide) return v.vs_baseline === "higher" ? "improving" : "worsening";
+  return "neutral";
+}
+
 function diaRangeWord(v) {
   if (v < 60) return "a low";
   if (v < 80) return "a normal";
@@ -344,6 +359,9 @@ async function getClinicianOverviewService({ userId, orgWide = false, orgScope =
       baselineBand: BASELINE_BAND_DIA,
       inRangeFn: diaInRange,
     });
+
+    systolic.movement = vitalMovement(systolic, "sys");
+    diastolic.movement = vitalMovement(diastolic, "dia");
 
     const reading_count = b.period.length;
     // Distinct calendar days transmitted (adherence) — more meaningful than raw reading
