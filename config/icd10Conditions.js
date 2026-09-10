@@ -129,6 +129,19 @@ function validateConditions(raw) {
     } else if (c && typeof c === "object") {
       if (typeof c.name !== "string" || !c.name.trim())
         return "each condition needs a non-empty name";
+      // A PROVIDED ICD-10 code must be recognized — surface an error, never let
+      // normalizeConditions quietly drop it to null. This list feeds a billing
+      // document, so a code the system can't validate must fail loudly, not store
+      // as if it were uncoded free text. Absent/blank code is the explicit
+      // free-text path and stays allowed (icd10_code = null). When the full
+      // ICD-10-CM set replaces this shortlist, only VALID_ICD10_CODES changes.
+      if (
+        c.icd10_code != null &&
+        String(c.icd10_code).trim() !== "" &&
+        !VALID_ICD10_CODES.has(c.icd10_code)
+      ) {
+        return `Unrecognized ICD-10 code "${c.icd10_code}" for "${c.name.trim()}" — pick a listed code or leave it uncoded (do not store an unvalidated code).`;
+      }
     } else {
       return "conditions must be strings or {name, icd10_code} objects";
     }
