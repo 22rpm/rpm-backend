@@ -140,14 +140,18 @@ function vitalFlags(sys, dia) {
   return flags;
 }
 
-// AHA descriptive BP staging — the human-readable range word for the summary sentence.
-// Same clinical basis as the (AHA-approved) alert thresholds, finer-grained for prose.
-function sysRangeWord(v) {
-  if (v < 90) return "a low";
-  if (v < 120) return "a normal";
-  if (v < 130) return "an elevated";
-  if (v < 140) return "a stage-1 (high)";
-  return "a stage-2 (high)";
+// AHA descriptive BP staging (same clinical basis as the AHA-approved alert thresholds).
+// sysBand returns the out-of-normal band NAME, or null when the reading is normal — so the
+// sentence only adds a band qualifier when one is warranted, and never labels a normal
+// reading "elevated". The band trails the movement ("...trending up, still in the elevated
+// band") rather than leading as a warning ("now in an elevated range"), which fought a
+// favorable trend.
+function sysBand(v) {
+  if (v < 90) return "low";
+  if (v < 120) return null; // normal — no band qualifier
+  if (v < 130) return "elevated";
+  if (v < 140) return "stage-1 (high)";
+  return "stage-2 (high)";
 }
 function diaRangeWord(v) {
   if (v < 60) return "a low";
@@ -194,7 +198,16 @@ function summaryText(p, periodDays) {
     let lead = `Systolic ${s.median}`;
     if (dir) lead += `, ${dir}`;
     if (trend) lead += ` but ${trend}`;
-    lead += `; now in ${sysRangeWord(s.median)} range.`;
+    // Band trails the movement, and only when out of normal. "still in" when declining,
+    // "now in" when rising, "in" when steady — so a favorable trend isn't overridden by a
+    // warning-sounding range label.
+    const band = sysBand(s.median);
+    if (band) {
+      const verb = s.vs_baseline === "lower" ? "still in" : s.vs_baseline === "higher" ? "now in" : "in";
+      lead += `, ${verb} the ${band} band.`;
+    } else {
+      lead += ".";
+    }
     bits.push(lead);
   }
   if (d && d.n) {
@@ -215,12 +228,19 @@ async function getClinicianOverviewService({ userId, orgWide = false, orgScope =
   const baselineStart = new Date(start);
   baselineStart.setDate(baselineStart.getDate() - BASELINE_WINDOW_DAYS);
 
+  // Calendar date labels from the boundary Date objects' OWN components (not toISOString()).
+  // toISOString() renders the boundary in UTC, and a Pacific client then shifts midnight to
+  // the prior day (Aug 1 00:00 UTC -> "Jul 31" locally) — the off-by-one. start_date/end_date
+  // are plain YYYY-MM-DD the client formats WITHOUT a timezone conversion.
+  const ymd = (d) =>
+    d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  const endInclusive = new Date(end.getTime() - 1); // last instant of the completed period
   const periodMeta = {
     type,
     start: start.toISOString(),
-    // `end` (exclusive) is the start of the current period; show the inclusive last
-    // instant of the completed period so August reads as ...08-31, not ...09-01.
-    end: new Date(end.getTime() - 1).toISOString(),
+    end: endInclusive.toISOString(),
+    start_date: ymd(start), // e.g. "2026-08-01" — for display, no TZ shift
+    end_date: ymd(endInclusive), // e.g. "2026-08-31"
     baseline_window_days: BASELINE_WINDOW_DAYS,
     period_days: Math.round((end.getTime() - start.getTime()) / 86400000),
     bucketed_on: "created_at",
