@@ -1,5 +1,4 @@
 const express = require("express");
-const db = require("../config/db"); // your MySQL pool
 
 const router = express.Router();
 const {
@@ -48,47 +47,8 @@ router.get(
 
 router.get("/devices/data/latest", authRequired, getLatestDeviceDataController); // Add this
 
-// TEST ROUTE - No authentication required
-router.post("/test/devices/data", async (req, res) => {
-  try {
-    const { userId, devId, devType, data } = req.body;
-
-    // Validation
-    if (!userId || !devType || !data) {
-      return res.status(400).json({
-        success: false,
-        message: "Missing required fields: userId, devType, data",
-      });
-    }
-
-    // SERVICE LOGIC (directly in route for testing)
-    // Insert into dev_data table
-    const [result] = await db.query(
-      "INSERT INTO dev_data (user_id, dev_id, dev_type, data) VALUES (?, ?, ?, ?)",
-      [userId, devId, devType, JSON.stringify(data)]
-    );
-
-    // Success response
-    res.status(201).json({
-      success: true,
-      message: "Test device data stored successfully",
-      data: {
-        insertId: result.insertId,
-        userId,
-        devId,
-        devType,
-        data,
-      },
-    });
-  } catch (err) {
-    console.error("❌ Error storing test device data:", err);
-    res.status(500).json({
-      success: false,
-      message: err.message || "Internal Server Error",
-    });
-  }
-});
-
-// TEST ROUTES - No authentication required
+// Removed unauthenticated /test/devices/data route — it let anyone INSERT arbitrary vitals for
+// any userId (fed clinical alerting). The apps ingest via authRequired /devices/data above.
+// (SECURITY_FOLLOWUPS #15)
 
 module.exports = router;

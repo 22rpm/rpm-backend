@@ -397,7 +397,16 @@ prod. Concrete guardrails, cheapest first:
 4. **A leak sweep greps for the data, not the transport** (see 13b) — `otp`, `hash`,
    `password`, `req.user`, whole-object/row dumps, not just `cookie`/`token`/`header`.
 
-## 14. Prod cert lacks the rmtrpm.duckdns.org SAN — CONFIRMED, iOS TLS fails (reissue with both SANs)
+## 14. Prod cert lacked the rmtrpm.duckdns.org SAN — RESOLVED 2026-09-09
+**RESOLVED (2026-09-09):** fixed by adding a dedicated `rmtrpm.duckdns.org` nginx server
+block with its own Let's Encrypt cert (not the option-B `--expand` below). As of 2026-09-10
+`certbot certificates` shows both valid: `api.twentytwohealth.com` (~70d) and
+`rmtrpm.duckdns.org` (~33d). iOS TLS now completes. **Renewal watch:** certbot uses the nginx
+HTTP-01 authenticator, so nothing may shadow `/.well-known/acme-challenge/` on either vhost
+(see #15 and PRACTICE_FUSION_FHIR_DESIGN.md — JWKS is an exact-match location for this reason).
+The original CONFIRMED analysis is kept below for the method.
+
+
 The cert at `rmtrpm.duckdns.org` (50.18.96.20) covers only `api.twentytwohealth.com`; the
 iOS app hardcodes `rmtrpm` under strict ATS, so `curl -sv` returns `SSL: no alternative
 certificate subject name matches` — the handshake dies at cert verification and never
@@ -409,3 +418,49 @@ a refutation). **Reissue the cert with BOTH SANs** (option B; `certbot --expand`
 the renewal config so both persist. Reopens: if iOS can't reach `duckdns`, the `dev_data`
 readings came via Android (`api.twentytwohealth.com`) and/or iOS before ~Aug 22 — to be
 confirmed. Full record: **`INCIDENT_2026-09-03_prod-cert-san.md`**.
+
+## 15. A security review flagged unauthenticated test/debug routes in August; nothing was removed — they were still live in September
+**The finding is not "these routes exist." It is that a review found them, wrote them down,
+and the output was never acted on.** `BRANCH_REVIEW_2026-08-17.md` (2026-08-17) listed, under
+"Other findings (not fixed)": *"Leftover test/debug writers: POST /api/alerts/test-alert,
+/api/alerts/test/bp-alert, /api/dev-data/test/devices/data"* — and even ran a same-day nginx
+log check on the vulnerable paths. Three weeks later (2026-09-09/10) every one of them was
+still mounted and unauthenticated in production, and the sweep that triggered this entry was
+prompted by an *unrelated* route (`/debug-twilio`, which leaked the Twilio Account SID in
+plaintext and was not even on the August list). A review that produces a written finding with
+no tracked remediation path is indistinguishable from no review.
+
+**Removed 2026-09-10** (all unauthenticated, no live callers — verified against the iOS/Android
+apps and the dashboard; the dashboard's `RoutesApi.js` wrappers for two of them were dead):
+- `GET /api/patient/test/patients/blood-pressure[?userId=N]` and `/latest` — IDOR: any
+  patient's BP readings by userId. (`routes/patient.routes.js`)
+- `POST /api/alerts/test-alert` — returned patient + clinician + admin names/emails/phones for
+  any `patient_id` **and sent real Twilio SMS + inserted a real alert row**. (`routes/alert.route.js`)
+- `POST /api/alerts/test/bp-alert` — forged BP alerts for any patient, pushed PHI over sockets.
+- `GET /api/alerts/debug-connected-users` and `GET /api/alerts/connection-status` — live
+  logged-in user_id → socket_id map (session enumeration).
+- `POST /api/dev-data/test/devices/data` — injected arbitrary vitals for any userId (fed the
+  clinical alert path). (`routes/deviceData.routes.js`)
+- `GET /socket-debug` — disclosed `NODE_ENV` + socket topology; `GET /health` trimmed to
+  `{ok:true}` (was echoing `NODE_ENV`). (`server.js`)
+- Removed the three dead dashboard wrappers (`getDebugConnectedUsersAPI`, `createTestAlertAPI`,
+  `sendTestNotificationAPI`) from `rpm-dashboard-v1.0/src/apis/RoutesApi.js`.
+- Prior, separate: `GET /debug-twilio` (Twilio SID leak) removed 2026-09-10 in `679d124`.
+
+**Disclosure question (open, box-side):** the August log check found only the reviewer's own
+curl probes (24.199.45.18) within nginx's 14-day retention — no third-party access *in that
+window*. But that window is long gone, and these routes lived for months. Re-run the check
+against current logs for hits to any of these paths from IPs that aren't ours; a hit on the
+PHI routes (`/test/patients/blood-pressure`, `/test-alert`, `/test/bp-alert`) would be a
+disclosure event, not just cleanup. RESULTS: _pending box-side query._
+
+**Left in place, deliberately (not in this cleanup's scope, tracked separately):**
+`POST /api/dev-data/devices` and `/:devId/store` are unauthenticated writes (also flagged in
+the Aug review) but read `req.user` and likely error rather than leak — gate them next.
+And `NOTIF_SKIP_TWILIO_SIG=true` disables the inbound-Twilio signature check — confirm it is
+NOT set in the prod `.env`.
+
+**Prevention:** a review's "not fixed" list must become tracked items with an owner, not prose
+in a dated file. This is the security-review analogue of #5/#13 (a redaction/reconciliation
+pass whose output was stranded by a branch-cut gap) and #8 (a control configured but never
+applied): the work happened; the follow-through did not.

@@ -236,35 +236,12 @@ app.use("/api/medications", medicationsRoutes);
 app.use("/api/scheduled-calls", scheduledCallsRoutes);
 app.use("/api/notifications", notificationsRoutes);
 app.use("/api/billing", billingRoutes);
-// Health check endpoint
-app.get("/health", (req, res) =>
-  res.json({
-    ok: true,
-    service: "rpm-api",
-    timestamp: new Date().toISOString(),
-    socket: "enabled",
-    environment: process.env.NODE_ENV,
-  })
-);
+// Health check endpoint — bare liveness only. Do NOT echo NODE_ENV or infra detail
+// to an unauthenticated caller. (SECURITY_FOLLOWUPS #15)
+app.get("/health", (req, res) => res.json({ ok: true }));
 
-// Socket debug endpoints
-app.get("/socket-debug", (req, res) => {
-  const io = getIO();
-  const connectedSockets = io.engine.clientsCount;
-
-  res.json({
-    ok: true,
-    message: "Socket.IO server debug info",
-    connected_clients: connectedSockets,
-    path:
-      process.env.NODE_ENV === "production"
-        ? "/rpm-be/socket.io"
-        : "/socket.io",
-    transports: ["websocket", "polling"],
-    timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV,
-  });
-});
+// Removed unauthenticated /socket-debug — it disclosed NODE_ENV, socket path/topology and
+// the live connected-client count. (SECURITY_FOLLOWUPS #15)
 
 // Add to your server.js
 app.get("/rpm-be/test-socket", (req, res) => {
@@ -317,8 +294,6 @@ server.listen(port, "0.0.0.0", () => {
     }`
   );
   console.log(`🏥 Health check: http://localhost:${port}/health`);
-  console.log(`🔧 Socket debug: http://localhost:${port}/socket-debug`);
-  console.log(`🔧 Nginx test: http://localhost:${port}/nginx-test`);
   // Automated patient-notification scheduler (opt-in via patient comm prefs;
   // send window is clinic-local). Disable with NOTIFICATIONS_SCHEDULER=off.
   notificationScheduler.start();
