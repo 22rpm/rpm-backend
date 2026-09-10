@@ -101,9 +101,10 @@ Backend serves the JWKS JSON built from the **public** key only (see §4). The r
 public and unauthenticated — a JWKS is meant to be world-readable.
 
 ## 4. Key management (ES384 / P-384)
-- Generate a P-384 keypair **on the box**, out of the repo. Private key in `.env`
-  (PEM, or a path to a `0600` file referenced by an env var), same channel as every other
-  secret here. **Never commit key material.**
+- Generate a P-384 keypair **on the box**, out of the repo. Private key stored as a `0600`
+  file **outside the deploy tree** — `/home/ubuntu/.secrets/` (dir `0700`), referenced by an
+  env var path — not under `/home/ubuntu/22-rpm/` where both repos live. **Never commit key
+  material.**
 - New env vars (names to reserve): `GREENWAY_CLIENT_ID`, `GREENWAY_TOKEN_URL`
   (`{BaseURL}/token`), `GREENWAY_FHIR_BASE`, `GREENWAY_PRIVATE_KEY` (or `_KEY_PATH`),
   `GREENWAY_KID`. The **JWKS URL** registered with Greenway is
@@ -147,7 +148,7 @@ Three tasks. 🟩 = code-only (inert until deployed); 🟥 = touches prod.
 | # | Task | Prod? | Status |
 |---|---|---|---|
 | 1 | **JWKS route** `GET /.well-known/jwks.json` in `server.js` — derives the public JWK from the private key via native `crypto.createPublicKey(...).export({format:"jwk"})` (no new dep), returns `{keys:[{kty:"EC",crv:"P-384",x,y,use:"sig",alg:"ES384",kid}]}`; **503 if the key env vars are unset**. Public/unauthenticated by design (public key only — verified the export has no `d`). | 🟩 (until deploy) | **DONE** — committed; inert until Task 2 sets the env vars |
-| 2 | **Keypair + `.env` + restart** on the box: `openssl ecparam -name secp384r1 -genkey -noout -out /home/ubuntu/22-rpm/greenway-signing.key && chmod 600`; add `GREENWAY_SIGNING_KEY_PATH` + `GREENWAY_SIGNING_KID` to `.env`; restart `rpm-backend`. Route then serves on `:4000` **internally** — not yet public. | 🟥 `.env` + restart | pending (yours) |
+| 2 | **Keypair + `.env` + restart** on the box. Key lives **outside the deploy tree** in `/home/ubuntu/.secrets/` (dir `0700`, key `0600`) — `/home/ubuntu/22-rpm/` holds both repos, so a stray `git clean -x`/dir op there must not be able to reach the key. `openssl ecparam -name secp384r1 -genkey -noout -out /home/ubuntu/.secrets/greenway-signing.key`; add `GREENWAY_SIGNING_KEY_PATH` + `GREENWAY_SIGNING_KID` to `.env`; restart `rpm-backend`. Route then serves on `:4000` **internally** — not yet public. | 🟥 `.env` + restart | pending (yours) |
 | 3 | **Exact-match nginx location** on the **api vhost only**: `location = /.well-known/jwks.json { proxy_pass http://127.0.0.1:4000/.well-known/jwks.json; }`. Never a `/.well-known/` prefix (shadows acme-challenge → breaks the ~33-day duckdns renewal). `nginx -t && systemctl reload nginx`. Exposes it publicly. | 🟥 nginx | pending (yours) |
 
 **Verify:** after 2 (on box) `curl -s http://127.0.0.1:4000/.well-known/jwks.json` → one-key JWKS; after 3 (external) same over `https://api.twentytwohealth.com/.well-known/jwks.json`, **and** `sudo certbot renew --dry-run` still passes for both certs (proves acme-challenge wasn't shadowed).
