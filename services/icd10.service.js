@@ -72,4 +72,44 @@ async function searchConditions(query) {
   return { results: rows.map(row), query_kind: "name" };
 }
 
-module.exports = { searchConditions, toDotted, looksLikeCode, MIN_QUERY_LEN };
+// Strip a dotted/loose code to the table's dot-less storage form: "L60.3" -> "L603".
+function toDotless(code) {
+  return String(code || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
+// Validate the ICD-10 codes on a conditions array against the FULL set — BILLABLE ONLY.
+// This is the "flip": storage is gated by the real code set, not the curated shortlist.
+// Returns an error STRING (naming the offending code) or null. Codes are matched dot-less;
+// a code that isn't in the table, or is a non-billable header, is rejected at ENTRY — a
+// header on a claim is a rejection, so we don't let one be stored. Conditions with no code
+// (free text) pass untouched. Requires icd10cm_codes to be seeded (deploy prerequisite).
+async function validateConditionCodes(conditions) {
+  if (!Array.isArray(conditions)) return null;
+  // Collect provided codes with their display form for a clear error message.
+  const provided = [];
+  for (const c of conditions) {
+    if (c && typeof c === "object" && c.icd10_code != null && String(c.icd10_code).trim() !== "") {
+      provided.push({ display: String(c.icd10_code).trim(), key: toDotless(c.icd10_code), name: c.name });
+    }
+  }
+  if (provided.length === 0) return null;
+
+  const keys = [...new Set(provided.map((p) => p.key))];
+  const [rows] = await db.query(
+    `SELECT code, billable FROM icd10cm_codes WHERE code IN (?)`,
+    [keys]
+  );
+  const found = new Map(rows.map((r) => [r.code, !!r.billable]));
+
+  for (const p of provided) {
+    if (!found.has(p.key)) {
+      return `Unrecognized ICD-10 code "${p.display}"${p.name ? ` for "${p.name}"` : ""} — not a valid ICD-10-CM code.`;
+    }
+    if (!found.get(p.key)) {
+      return `"${p.display}" is a non-billable ICD-10 category — pick a specific (billable) code under it.`;
+    }
+  }
+  return null;
+}
+
+module.exports = { searchConditions, toDotted, toDotless, looksLikeCode, validateConditionCodes, MIN_QUERY_LEN };

@@ -99,27 +99,29 @@ const BACKFILL_NAME_TO_CODE = {
 };
 
 // Conditions arrive as either plain strings (legacy/free text) or
-// { name, icd10_code } objects (the curated picker). Normalize to objects; an
-// icd10_code not in the curated set drops to null rather than being stored, so
-// the coded data stays clean and the picker stays authoritative. Shared by the
-// enroll and edit controllers so both accept the same shapes identically.
+// { name, icd10_code } objects (the picker). Normalize to objects, keeping the
+// provided code verbatim (trimmed) — a blank/absent code becomes null (the explicit
+// free-text path). Code VALIDITY is enforced separately and loudly by
+// icd10.service.validateConditionCodes against the full ICD-10-CM set (billable only);
+// we no longer silently drop an unknown code to null here. Shared by the enroll and
+// edit controllers so both accept the same shapes identically.
 function normalizeConditions(raw) {
   if (!Array.isArray(raw)) return [];
   return raw
     .map((c) => {
       if (typeof c === "string") return { name: c.trim(), icd10_code: null };
-      if (c && typeof c === "object" && typeof c.name === "string")
-        return {
-          name: c.name.trim(),
-          icd10_code:
-            c.icd10_code && VALID_ICD10_CODES.has(c.icd10_code) ? c.icd10_code : null,
-        };
+      if (c && typeof c === "object" && typeof c.name === "string") {
+        const code = c.icd10_code != null ? String(c.icd10_code).trim() : "";
+        return { name: c.name.trim(), icd10_code: code || null };
+      }
       return null;
     })
     .filter((c) => c && c.name);
 }
 
-// Returns an error string, or null if valid. Accepts strings or {name,...}.
+// Shape validation only — name present, right types. ICD-10 code validity (exists +
+// billable) is an async DB check in icd10.service.validateConditionCodes, run alongside
+// this in the controllers. Returns an error string, or null if the shape is valid.
 function validateConditions(raw) {
   if (raw == null) return null;
   if (!Array.isArray(raw)) return "conditions must be an array";
@@ -129,19 +131,6 @@ function validateConditions(raw) {
     } else if (c && typeof c === "object") {
       if (typeof c.name !== "string" || !c.name.trim())
         return "each condition needs a non-empty name";
-      // A PROVIDED ICD-10 code must be recognized — surface an error, never let
-      // normalizeConditions quietly drop it to null. This list feeds a billing
-      // document, so a code the system can't validate must fail loudly, not store
-      // as if it were uncoded free text. Absent/blank code is the explicit
-      // free-text path and stays allowed (icd10_code = null). When the full
-      // ICD-10-CM set replaces this shortlist, only VALID_ICD10_CODES changes.
-      if (
-        c.icd10_code != null &&
-        String(c.icd10_code).trim() !== "" &&
-        !VALID_ICD10_CODES.has(c.icd10_code)
-      ) {
-        return `Unrecognized ICD-10 code "${c.icd10_code}" for "${c.name.trim()}" — pick a listed code or leave it uncoded (do not store an unvalidated code).`;
-      }
     } else {
       return "conditions must be strings or {name, icd10_code} objects";
     }

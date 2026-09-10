@@ -11,6 +11,7 @@ const {
   normalizeConditions,
   validateConditions,
 } = require("../config/icd10Conditions");
+const { validateConditionCodes } = require("../services/icd10.service");
 
 function validateAllergies(raw) {
   if (raw == null) return null;
@@ -122,6 +123,9 @@ function validate(body) {
 async function enrollPatient(req, res) {
   try {
     const errors = validate(req.body);
+    // ICD-10 code validity (exists + billable) — async, against the full set.
+    const codeErr = await validateConditionCodes(req.body.conditions);
+    if (codeErr) errors.push(codeErr);
     if (errors.length) {
       return res
         .status(400)

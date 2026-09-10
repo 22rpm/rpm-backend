@@ -12,6 +12,7 @@ const {
   normalizeConditions,
   validateConditions,
 } = require("../config/icd10Conditions");
+const { validateConditionCodes } = require("../services/icd10.service");
 
 const PROGRAM_STATUSES = ["active", "pending", "discharged"];
 const isValidDate = (s) => !Number.isNaN(new Date(s).getTime());
@@ -81,6 +82,9 @@ async function updatePatient(req, res) {
   try {
     const b = req.body || {};
     const errors = validate(b);
+    // ICD-10 code validity (exists + billable) — async, against the full set.
+    const codeErr = await validateConditionCodes(b.conditions);
+    if (codeErr) errors.push(codeErr);
     if (errors.length)
       return res
         .status(400)
