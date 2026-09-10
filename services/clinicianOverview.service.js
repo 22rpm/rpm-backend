@@ -34,20 +34,25 @@ const median = (a) => {
   return s.length % 2 ? s[m] : Math.round((s[m - 1] + s[m]) / 2);
 };
 
-// Period = current calendar week (Mon 00:00 -> now) or month (1st -> now). Boundaries are
-// returned so the page/email agree. TZ is server/UTC for v1 (created_at is stored UTC);
-// clinic-local alignment is a refinement (noted in the design).
+// The LAST COMPLETE calendar week (Mon–Sun) or month — never a partial current period. A
+// clinician reads this after the Monday email; a 20%-elapsed week gives meaningless stats
+// that change on every reload. Complete periods are stable and comparable. `end` is the
+// EXCLUSIVE upper bound (the start of the current period). TZ is server/UTC for v1
+// (created_at is stored UTC); clinic-local alignment is a refinement (noted in the design).
 function periodBounds(periodType, now = new Date()) {
-  const end = now;
   let start;
+  let end;
   if (periodType === "week") {
     const d = new Date(now);
     const mondayOffset = (d.getDay() + 6) % 7; // 0 = Monday
     d.setHours(0, 0, 0, 0);
     d.setDate(d.getDate() - mondayOffset);
-    start = d;
+    end = d; // this week's Monday = exclusive end of the last complete week
+    start = new Date(end);
+    start.setDate(start.getDate() - 7); // last week's Monday
   } else {
-    start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+    end = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0); // 1st of this month
+    start = new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0, 0); // 1st of last month
   }
   return { start, end };
 }
@@ -57,15 +62,16 @@ function summarizeVital(periodVals, baselineVals, { steadyBand, baselineBand, in
   if (!n) return { n: 0 };
 
   const avg = mean(periodVals);
+  const med = median(periodVals);
   const summary = {
     n,
     avg,
     high: Math.max(...periodVals),
     low: Math.min(...periodVals),
-    median: median(periodVals),
-    // Period-level in-range judgment is on the AVERAGE (a single stray reading shouldn't
-    // flip the headline). in_range=false is what makes a vital "out of range".
-    in_range: inRangeFn(avg),
+    median: med,
+    // Period-level in-range judgment is on the MEDIAN — on small n a single outlier
+    // shouldn't flip the headline. in_range=false is what makes a vital "out of range".
+    in_range: inRangeFn(med),
     baseline: null,
     period_trend: "insufficient", // up | steady | down | insufficient
     vs_baseline: "insufficient", // higher | lower | consistent | insufficient
@@ -129,8 +135,8 @@ function patientStatus(sys, dia) {
 
 function vitalFlags(sys, dia) {
   const flags = [];
-  if (sys.n && sys.in_range === false) flags.push(sys.avg >= 140 ? "systolic_above_range" : "systolic_below_range");
-  if (dia.n && dia.in_range === false) flags.push(dia.avg >= 90 ? "diastolic_above_range" : "diastolic_below_range");
+  if (sys.n && sys.in_range === false) flags.push(sys.median >= 140 ? "systolic_above_range" : "systolic_below_range");
+  if (dia.n && dia.in_range === false) flags.push(dia.median >= 90 ? "diastolic_above_range" : "diastolic_below_range");
   return flags;
 }
 
@@ -143,7 +149,9 @@ async function getClinicianOverviewService({ userId, orgWide = false, orgScope =
   const periodMeta = {
     type,
     start: start.toISOString(),
-    end: end.toISOString(),
+    // `end` (exclusive) is the start of the current period; show the inclusive last
+    // instant of the completed period so August reads as ...08-31, not ...09-01.
+    end: new Date(end.getTime() - 1).toISOString(),
     baseline_window_days: BASELINE_WINDOW_DAYS,
     bucketed_on: "created_at",
   };
@@ -176,14 +184,16 @@ async function getClinicianOverviewService({ userId, orgWide = false, orgScope =
   }
 
   const ids = patients.map((p) => p.id);
+  // [baselineStart, end): the completed period plus its 90d baseline. The `< end` cap
+  // excludes the current partial period so stats never shift on reload mid-period.
   const [rows] = await db.query(
     `SELECT user_id, data, created_at FROM dev_data
-      WHERE user_id IN (?) AND dev_type = 'bp' AND created_at >= ?
+      WHERE user_id IN (?) AND dev_type = 'bp' AND created_at >= ? AND created_at < ?
       ORDER BY user_id, created_at ASC`,
-    [ids, baselineStart]
+    [ids, baselineStart, end]
   );
 
-  // Group readings per patient, split into baseline (< period start) and period (>=).
+  // Group readings per patient, split into baseline (< period start) and period ([start, end)).
   const byPatient = new Map(ids.map((id) => [id, { period: [], baseline: [], series: [] }]));
   for (const row of rows) {
     let d;
