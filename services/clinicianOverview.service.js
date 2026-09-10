@@ -140,6 +140,75 @@ function vitalFlags(sys, dia) {
   return flags;
 }
 
+// AHA descriptive BP staging — the human-readable range word for the summary sentence.
+// Same clinical basis as the (AHA-approved) alert thresholds, finer-grained for prose.
+function sysRangeWord(v) {
+  if (v < 90) return "a low";
+  if (v < 120) return "a normal";
+  if (v < 130) return "an elevated";
+  if (v < 140) return "a stage-1 (high)";
+  return "a stage-2 (high)";
+}
+function diaRangeWord(v) {
+  if (v < 60) return "a low";
+  if (v < 80) return "a normal";
+  if (v < 90) return "a stage-1 (high)";
+  return "a stage-2 (high)";
+}
+
+// DESCRIPTIVE summary sentence — deterministic template over data we actually have. NO AI,
+// no model, no PHI leaves the box, no clinical inference beyond restating the numbers. Leads
+// with systolic (primary driver); states direction vs the patient's own baseline, the
+// within-period trend, and the current range; adds diastolic and the transmission days.
+//
+// DELIBERATELY OMITTED (data not in the system — see the inventory):
+//   TODO(EHR): "Last seen by primary care <date>" — no visits/encounters table exists; a
+//              visit date is an EHR fact we never receive. Do NOT fabricate "unknown".
+//   TODO(regulatory + scheduling): "Consider scheduling a telehealth/PT appointment" — that
+//              is a CARE RECOMMENDATION (clinical decision support), driven by device data,
+//              and there is no clinical-appointment object (scheduled_calls = our outreach
+//              calls). Holds for a regulatory determination + a real appointment system.
+function summaryText(p, periodDays) {
+  if (p.status === "no_data") return "No readings transmitted this period.";
+  if (p.status === "limited_data")
+    return `Only ${p.reading_count} reading${p.reading_count === 1 ? "" : "s"} this period — not enough to assess a trend.`;
+
+  const s = p.systolic;
+  const d = p.diastolic;
+  const dayClause = `Transmitted ${p.days_with_readings} of ${periodDays} days (${p.reading_count} reading${p.reading_count === 1 ? "" : "s"}).`;
+
+  // Lead direction/trend/range from systolic.
+  const bits = [];
+  if (s && s.n) {
+    let dir = "";
+    if (s.baseline) {
+      const delta = Math.abs(Math.round((s.baseline.avg || 0) - s.median));
+      if (s.vs_baseline === "lower") dir = `down ${delta} from a ${s.baseline.avg} baseline`;
+      else if (s.vs_baseline === "higher") dir = `up ${delta} from a ${s.baseline.avg} baseline`;
+      else if (s.vs_baseline === "consistent") dir = `steady against a ${s.baseline.avg} baseline`;
+    }
+    const trend =
+      s.period_trend === "up" ? "trending up within the month"
+      : s.period_trend === "down" ? "trending down within the month"
+      : s.period_trend === "steady" ? "holding steady within the month" : "";
+    let lead = `Systolic ${s.median}`;
+    if (dir) lead += `, ${dir}`;
+    if (trend) lead += ` but ${trend}`;
+    lead += `; now in ${sysRangeWord(s.median)} range.`;
+    bits.push(lead);
+  }
+  if (d && d.n) {
+    let dd = `Diastolic ${d.median}`;
+    if (d.baseline && d.vs_baseline === "lower") dd += `, down ${Math.abs(Math.round(d.baseline.avg - d.median))} from ${d.baseline.avg}`;
+    else if (d.baseline && d.vs_baseline === "higher") dd += `, up ${Math.abs(Math.round(d.median - d.baseline.avg))} from ${d.baseline.avg}`;
+    else if (d.baseline && d.vs_baseline === "consistent" && d.in_range === false) dd += `, below range but consistent with a ${d.baseline.avg} baseline`;
+    dd += ` (${diaRangeWord(d.median)} range).`;
+    bits.push(dd);
+  }
+  bits.push(dayClause);
+  return bits.join(" ");
+}
+
 async function getClinicianOverviewService({ userId, orgWide = false, orgScope = null, periodType = "month" }) {
   const type = periodType === "week" ? "week" : "month";
   const { start, end } = periodBounds(type);
@@ -153,6 +222,7 @@ async function getClinicianOverviewService({ userId, orgWide = false, orgScope =
     // instant of the completed period so August reads as ...08-31, not ...09-01.
     end: new Date(end.getTime() - 1).toISOString(),
     baseline_window_days: BASELINE_WINDOW_DAYS,
+    period_days: Math.round((end.getTime() - start.getTime()) / 86400000),
     bucketed_on: "created_at",
   };
   const bucketing_note =
@@ -256,14 +326,20 @@ async function getClinicianOverviewService({ userId, orgWide = false, orgScope =
     });
 
     const reading_count = b.period.length;
+    // Distinct calendar days transmitted (adherence) — more meaningful than raw reading
+    // count, and the unit the summary sentence uses ("10 of 31 days").
+    const days_with_readings = new Set(
+      b.period.map((r) => new Date(r.t).toISOString().slice(0, 10))
+    ).size;
     const data_quality = reading_count === 0 ? "none" : reading_count < MIN_STATS ? "limited" : "ok";
     const status = patientStatus(systolic, diastolic);
 
-    return {
+    const record = {
       patient_id: p.id,
       name: p.name,
       enrolled: true,
       reading_count,
+      days_with_readings,
       data_quality,
       status,
       flags: vitalFlags(systolic, diastolic),
@@ -271,6 +347,8 @@ async function getClinicianOverviewService({ userId, orgWide = false, orgScope =
       diastolic,
       trend_series: b.series, // period readings for the sparkline
     };
+    record.summary_text = summaryText(record, periodMeta.period_days);
+    return record;
   });
 
   // Actionable first; silent (no_data) then not_enrolled sink to the end so the page can
