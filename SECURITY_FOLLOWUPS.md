@@ -497,3 +497,25 @@ the dashboard routes `/admin` and `/superAdmin` render unconditionally — `Prot
 exists but is unused. Backend endpoints are role-gated, so this is UI-only exposure, but
 unguarded admin routes alongside an ungated register endpoint was a worse pair than either
 alone. Route guards are being added with that UI. See CLINICIAN_MANAGEMENT_DESIGN.md.
+
+### 16a. Exposure window (from git) + exploitation check
+`git log` on `routes/auth.routes.js` dates the exposure precisely:
+- **2025-08-19 → 2025-09-26 (~5.5 weeks):** `router.post('/register', register)` — **fully
+  unauthenticated**. Anyone on the internet could create an account of any role. (Introduced
+  f93a714; authRequired added 2025-09-26 de32733.)
+- **2025-09-26 → 2026-09-11 (~11.5 months):** `authRequired, register` — authenticated but
+  **role-ungated**: any logged-in session (a patient's) could create any role.
+- **2026-09-11 (3706e1d):** role-gated. Total time creation was reachable by a non-admin:
+  **~13 months.**
+
+**Forensic limitation — account creation is NOT audited.** `POST /register` writes no audit
+record on success, and the `PATIENT_CREATE` / `DOCTOR_CREATE` / `ADMIN_CREATE` actions defined
+in `audit.service.js` are **never called anywhere** (verified by grep). There is no `created_by`
+column on `users`. So the audit log cannot attribute any account's creation to an actor, and
+absence of a creation event in the audit log proves nothing. The check therefore relies on
+eyeballing the full user list (22 rows) by role + created_at + org for any privileged or
+unrecognized account — with particular scrutiny of the 2025-08-19→09-26 internet-open window.
+
+**Exploitation check: RESULTS PENDING** (super-admin running the DB review). To be updated with
+the outcome and the same caveat as #15 — no evidence within a check that cannot be complete is
+not proof of no exploitation.
