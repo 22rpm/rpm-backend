@@ -167,6 +167,7 @@ const scheduledCallsRoutes = require("./routes/scheduledCall.routes");
 const notificationsRoutes = require("./routes/notifications.routes");
 const billingRoutes = require("./routes/billing.routes");
 const notificationScheduler = require("./services/notificationScheduler");
+const clinicianDigestScheduler = require("./services/clinicianDigestScheduler");
 const { assertRoleGates } = require("./scripts/checkRoleGates");
 // Fail-fast if any route gate reintroduces a scattered role string (SECURITY_FOLLOWUPS
 // process guard). Throws in dev/test; logs loudly in production (never crashes a
@@ -329,4 +330,7 @@ server.listen(port, "0.0.0.0", () => {
   // Automated patient-notification scheduler (opt-in via patient comm prefs;
   // send window is clinic-local). Disable with NOTIFICATIONS_SCHEDULER=off.
   notificationScheduler.start();
+  // Clinician overview digest (weekly/monthly no-PHI nudge). OFF by default — enable with
+  // CLINICIAN_DIGEST=on, only after scripts/verifyMail.js confirms prod SMTP.
+  clinicianDigestScheduler.start();
 });

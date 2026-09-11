@@ -218,4 +218,31 @@ function getOtpEmailTemplate(otp) {
 </html>`.replace("{{OTP_CODE}}", otp);
 }
 
-module.exports = { getOtpEmailTemplate };
+// Clinician overview digest — the NUDGE. NO PHI: no names, values, counts, or charts —
+// email is not a secure channel, so the body only says the overview is ready and links to
+// login. All data lives behind the dashboard login. (CLINICIAN_OVERVIEW_DESIGN.md Part 1.)
+function getDigestEmailTemplate({ periodLabel, loginUrl }) {
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Your ${periodLabel} patient overview</title></head>
+<body style="margin:0;padding:0;font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background:#f5f5f5;line-height:1.6;">
+  <div style="max-width:600px;margin:0 auto;background:#fff;box-shadow:0 4px 6px rgba(0,0,0,0.1);">
+    <div style="background:linear-gradient(135deg,#014e6b 0%,#4092b3 100%);padding:28px 20px;text-align:center;color:#fff;">
+      <h1 style="margin:0;font-size:20px;">TwentyTwo RPM</h1>
+    </div>
+    <div style="padding:28px 24px;color:#1f2937;">
+      <p style="margin:0 0 14px;">Your <strong>${periodLabel}</strong> patient overview is ready.</p>
+      <p style="margin:0 0 22px;">Log in to review your panel — readings, trends, and adherence gaps.</p>
+      <p style="text-align:center;margin:0 0 22px;">
+        <a href="${loginUrl}" style="background:#014e6b;color:#fff;text-decoration:none;padding:12px 22px;border-radius:8px;display:inline-block;">Open my overview</a>
+      </p>
+      <p style="margin:0;font-size:12px;color:#6b7280;">
+        This message contains no patient information. All data is shown only after you sign in.
+      </p>
+    </div>
+  </div>
+</body></html>`;
+}
+
+module.exports = { getOtpEmailTemplate, getDigestEmailTemplate };

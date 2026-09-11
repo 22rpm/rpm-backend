@@ -8,6 +8,7 @@ const {
   updateDoctorAssignments,
   getClinicians,
   getUserPatients,
+  digestStatus,
 } = require("../controllers/admin.controller");
 const { authRequired, requireRole } = require("../middleware/auth");
 const { ADMIN_ROLES, ADMIN_OR_CLINICIAN } = require("../config/roles");
@@ -21,6 +22,8 @@ router.get("/getAllusers", authRequired, resolveOrgScope, getAllUsers);
 // orgs (omitted). NO resolveOrgScope here — the all-orgs case has no single scope, so the
 // handler derives it from the caller's role. requireRole gates to admin/super-admin.
 router.get("/clinicians", authRequired, requireRole(...ADMIN_ROLES), getClinicians);
+// Digest health (last weekly/monthly run + counts + overdue) — CLINICIAN_OVERVIEW_DESIGN P1.
+router.get("/digest-status", authRequired, requireRole(...ADMIN_ROLES), digestStatus);
 // A clinician's assigned patients. Org-scoped like the other /users/:userId routes:
 // scopePatientParam confirms the target is in req.orgScope (404 otherwise).
 router.get(

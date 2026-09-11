@@ -16,6 +16,7 @@
 const db = require("../config/db");
 const tzq = require("../config/billingTz");
 const notif = require("./notification.service");
+const digest = require("./clinicianDigestScheduler");
 const { SEND_WINDOW } = require("../config/notifications");
 
 const TICK_MS = 15 * 60 * 1000; // every 15 minutes
@@ -118,6 +119,21 @@ async function tick() {
       } catch (err) {
         console.error(`notification scheduler: org ${org.id} tick failed:`, err.message);
       }
+    }
+
+    // DEADMAN (CLINICIAN_OVERVIEW_DESIGN Part 1): this frequently-running, known-alive job
+    // watches the infrequent digest job. If a weekly/monthly digest is overdue, log a loud
+    // ERROR so a dead digest scheduler is NOTICED, not silently missed. No-op when the digest
+    // is disabled or has never run. (Ops-email/banner escalation is a follow-up — kept to a
+    // log here so a mail failure can't recurse through the same transport.)
+    try {
+      for (const o of await digest.checkOverdue()) {
+        console.error(
+          `⏰ DEADMAN: clinician ${o.period_type} digest OVERDUE — last success ${o.last_success} (${o.age_days}d ago)`
+        );
+      }
+    } catch (err) {
+      console.error("notification scheduler: digest deadman check failed:", err.message);
     }
   } catch (err) {
     console.error("notification scheduler tick failed:", err.message);

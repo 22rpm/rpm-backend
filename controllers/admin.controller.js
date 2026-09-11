@@ -11,6 +11,7 @@ import {
   findCliniciansWithCounts,
   findAssignedPatients,
 } from "../services/admin.service.js"; // note the .js extension
+import { getStatus as getDigestStatusSvc } from "../services/clinicianDigestScheduler.js";
 import bcrypt from "bcrypt";
 
 // Role lives in the separate `role` table (users has no role column), keyed by
@@ -447,6 +448,19 @@ export async function getUserPatients(req, res) {
     return res.status(200).json({ ok: true, patients });
   } catch (err) {
     console.error("getUserPatients error:", err);
+    return res.status(500).json({ ok: false, message: "Server error" });
+  }
+}
+
+// GET /api/admin/digest-status — last weekly/monthly digest run + counts + overdue flags, so
+// a human or monitor can confirm the job is alive without shell access (the silent-stoppage
+// answer). Admin/super-admin. (CLINICIAN_OVERVIEW_DESIGN Part 1.)
+export async function digestStatus(req, res) {
+  try {
+    const status = await getDigestStatusSvc();
+    return res.status(200).json({ ok: true, status });
+  } catch (err) {
+    console.error("digestStatus error:", err);
     return res.status(500).json({ ok: false, message: "Server error" });
   }
 }

@@ -1,6 +1,6 @@
 // services/mail.service.js
 const nodemailer = require("nodemailer");
-const { getOtpEmailTemplate } = require("../helper/mailTemplate");
+const { getOtpEmailTemplate, getDigestEmailTemplate } = require("../helper/mailTemplate");
 
 const transporter = nodemailer.createTransport({
   service: "gmail",
@@ -24,7 +24,26 @@ async function sendOtpEmail(to, otp) {
   });
 }
 
-module.exports = { sendOtpEmail };
+// Verify SMTP connectivity + auth WITHOUT sending — resolves on success, throws otherwise.
+// Used by scripts/verifyMail.js (a definitive prod check) and by the digest scheduler at
+// startup so a broken transport is surfaced loudly, not discovered as a silent no-send.
+async function verifyTransport() {
+  return transporter.verify();
+}
+
+// Clinician overview digest nudge — NO PHI (see getDigestEmailTemplate). Throws on failure so
+// the caller can count it as an error, never swallow it.
+async function sendDigestEmail(to, { periodLabel, loginUrl }) {
+  await transporter.sendMail({
+    from: `"TwentyTwo RPM" <${process.env.GMAIL_USER}>`,
+    to,
+    subject: `Your ${periodLabel} patient overview is ready`,
+    text: `Your ${periodLabel} patient overview is ready. Log in to review it: ${loginUrl}`,
+    html: getDigestEmailTemplate({ periodLabel, loginUrl }),
+  });
+}
+
+module.exports = { sendOtpEmail, sendDigestEmail, verifyTransport };
 
 // services/mail.service.js
 // const nodemailer = require("nodemailer");
