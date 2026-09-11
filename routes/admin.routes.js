@@ -9,6 +9,7 @@ const {
   getClinicians,
   getUserPatients,
   digestStatus,
+  setDigestPref,
 } = require("../controllers/admin.controller");
 const { authRequired, requireRole } = require("../middleware/auth");
 const { ADMIN_ROLES, ADMIN_OR_CLINICIAN } = require("../config/roles");
@@ -33,6 +34,15 @@ router.get(
   resolveOrgScope,
   scopePatientParam("userId"),
   getUserPatients
+);
+// Set a clinician's overview-digest opt-out (default ON). Org-scoped like the routes above.
+router.patch(
+  "/users/:userId/digest",
+  authRequired,
+  requireRole(...ADMIN_ROLES),
+  resolveOrgScope,
+  scopePatientParam("userId"),
+  setDigestPref
 );
 
 // User mutation routes. These are admin operations: require an admin/super-admin

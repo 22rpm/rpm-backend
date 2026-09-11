@@ -192,11 +192,14 @@ async function findCliniciansWithCounts(orgId) {
   const query = `
     SELECT u.id, u.username, u.name, u.email, u.phoneNumber, u.is_active,
            u.organization_id AS org_id, o.name AS org_name,
+           COALESCE(s.enabled, 1) AS digest_enabled,
            (SELECT COUNT(*) FROM patient_doctor_assignments pda
               WHERE pda.doctor_id = u.id) AS assigned_patient_count
     FROM users u
     JOIN role r ON r.user_id = u.id AND r.role_type = 'clinician'
     LEFT JOIN organizations o ON o.id = u.organization_id
+    LEFT JOIN clinician_notification_settings s
+      ON s.clinician_id = u.id AND s.type = 'overview_digest'
     WHERE 1=1 ${where}
     ORDER BY o.name IS NULL, o.name, u.name
   `;
@@ -211,7 +214,21 @@ async function findCliniciansWithCounts(orgId) {
     org_id: u.org_id,
     org_name: u.org_name,
     assigned_patient_count: Number(u.assigned_patient_count) || 0,
+    // Digest opt-out state (default ON when no row). The UI decides eligibility separately —
+    // an on toggle on a clinician with no valid email still means "would receive nothing".
+    digest_enabled: !!u.digest_enabled,
   }));
+}
+
+// Upsert a clinician's overview-digest opt-out (type 'overview_digest'). Default is ON, so a
+// row is only needed to record a change; ON DUPLICATE KEY keeps one row per (clinician,type).
+async function setClinicianDigest(clinicianId, enabled) {
+  await pool.execute(
+    `INSERT INTO clinician_notification_settings (clinician_id, type, enabled, created_at, updated_at)
+     VALUES (?, 'overview_digest', ?, NOW(), NOW())
+     ON DUPLICATE KEY UPDATE enabled = VALUES(enabled), updated_at = NOW()`,
+    [clinicianId, enabled ? 1 : 0]
+  );
 }
 
 // Patients assigned to a clinician (via patient_doctor_assignments). orgId scopes the
@@ -237,6 +254,7 @@ module.exports = {
   testDatabaseConnection,
   findCliniciansWithCounts,
   findAssignedPatients,
+  setClinicianDigest,
 
   // Existing functions
   findAllUsersWithRoles,

@@ -10,6 +10,7 @@ import {
   findAllUsers,
   findCliniciansWithCounts,
   findAssignedPatients,
+  setClinicianDigest,
 } from "../services/admin.service.js"; // note the .js extension
 import { getStatus as getDigestStatusSvc } from "../services/clinicianDigestScheduler.js";
 import bcrypt from "bcrypt";
@@ -461,6 +462,24 @@ export async function digestStatus(req, res) {
     return res.status(200).json({ ok: true, status });
   } catch (err) {
     console.error("digestStatus error:", err);
+    return res.status(500).json({ ok: false, message: "Server error" });
+  }
+}
+
+// PATCH /api/admin/users/:userId/digest  { enabled: boolean }
+// Set a clinician's overview-digest opt-out. Route runs resolveOrgScope + scopePatientParam,
+// so the target is confirmed in the caller's org before we write. (CLINICIAN_OVERVIEW_DESIGN P1
+// build 5.) Default is ON; this records an explicit choice.
+export async function setDigestPref(req, res) {
+  try {
+    const { enabled } = req.body || {};
+    if (typeof enabled !== "boolean") {
+      return res.status(400).json({ ok: false, message: "enabled (boolean) is required" });
+    }
+    await setClinicianDigest(req.params.userId, enabled);
+    return res.status(200).json({ ok: true, enabled });
+  } catch (err) {
+    console.error("setDigestPref error:", err);
     return res.status(500).json({ ok: false, message: "Server error" });
   }
 }
