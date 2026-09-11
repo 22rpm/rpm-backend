@@ -473,3 +473,27 @@ signature enforced.**
 in a dated file. This is the security-review analogue of #5/#13 (a redaction/reconciliation
 pass whose output was stranded by a branch-cut gap) and #8 (a control configured but never
 applied): the work happened; the follow-through did not.
+
+## 16. Privilege escalation: POST /api/auth/register was gated by authRequired ALONE — FIXED
+**Severity: HIGH. Fixed 2026-09-11.** `POST /api/auth/register` verified a session but did
+**no role check** (`middleware/auth.js` authRequired sets `req.user` and calls `next()` with no
+role gate), and `registerSchema` accepted any `role` in `ALL_ROLES` (admin, super-admin, …).
+The handler set `organization_id` from the caller's own token
+(`req.user?.organization_id || req.body.organization_id`). So **any authenticated session —
+a patient's included — could POST `/register` with `role:"admin"` and mint a privileged
+account in their own org, then log in to the full admin panel.** Straight privilege
+escalation from patient → admin. The only caller anywhere is the org-admin `AddUserModal`
+(the iOS/Android apps never hit it), so gating did not break any client.
+
+**Fix (shipped ahead of the clinician-management UI, deliberately on its own):**
+- Route: `router.post("/register", authRequired, requireRole(...ADMIN_ROLES), register)` —
+  restricts creation to admin/super-admin (`routes/auth.routes.js`).
+- Handler role-ceiling: a non-super-admin caller cannot create `admin`/`super-admin`
+  (`controllers/auth.controller.js`) — closes the secondary admin → super-admin escalation the
+  route gate alone would leave open. A super-admin may create any role.
+
+**Related, folded into the clinician-management build (defense-in-depth, not the acute fix):**
+the dashboard routes `/admin` and `/superAdmin` render unconditionally — `ProtectedRoute.jsx`
+exists but is unused. Backend endpoints are role-gated, so this is UI-only exposure, but
+unguarded admin routes alongside an ungated register endpoint was a worse pair than either
+alone. Route guards are being added with that UI. See CLINICIAN_MANAGEMENT_DESIGN.md.

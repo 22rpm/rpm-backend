@@ -734,6 +734,17 @@ async function register(req, res) {
       });
     }
 
+    // SECURITY: role ceiling — the created role may not exceed the creator's privilege.
+    // The route already restricts callers to admin/super-admin; this stops an org-admin from
+    // minting an admin or super-admin. A super-admin may create any role. (SECURITY_FOLLOWUPS #16)
+    const creatorRole = req.user && req.user.role_type;
+    if (creatorRole !== "super-admin" && (value.role === "admin" || value.role === "super-admin")) {
+      return res.status(403).json({
+        ok: false,
+        message: "You cannot create an admin or super-admin account.",
+      });
+    }
+
     // Check email/username uniqueness
     const existingEmail = await findUserByEmail(value.email);
     if (existingEmail) {
