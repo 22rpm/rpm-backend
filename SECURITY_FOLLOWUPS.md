@@ -516,6 +516,26 @@ absence of a creation event in the audit log proves nothing. The check therefore
 eyeballing the full user list (22 rows) by role + created_at + org for any privileged or
 unrecognized account — with particular scrutiny of the 2025-08-19→09-26 internet-open window.
 
-**Exploitation check: RESULTS PENDING** (super-admin running the DB review). To be updated with
-the outcome and the same caveat as #15 — no evidence within a check that cannot be complete is
-not proof of no exploitation.
+**Exploitation check: NO ANOMALY FOUND (2026-09-11) — not proof of none.** The super-admin
+reviewed the full roster: all **9 privileged accounts** (non-patient) are people/accounts they
+created; nothing unrecognized. Decisively for the worst window, **the earliest privileged
+account dates to 2025-11-26 — after the internet-open window closed (2025-09-26)** — so nothing
+privileged was created during the period anyone on the internet could have. **Caveat (as #15):**
+account creation writes no audit record and `users` has no `created_by`, so the roster is the
+*only* evidence — a clean eyeball of 22 rows, not a log. No anomaly found is not proof of no
+exploitation, and this check is only feasible while the roster is small (see #17).
+
+## 17. Account creation writes no audit record — add one (while the roster is still small)
+Surfaced by #16's exploitation check: there is **no way to attribute who created an account**.
+`POST /api/auth/register` writes no audit entry on success, the actions `PATIENT_CREATE` /
+`DOCTOR_CREATE` / `ADMIN_CREATE` in `audit.service.js` are **defined but never called anywhere**,
+and `users` has no `created_by` column. So the only way to review account provenance today is to
+eyeball the full user list — which worked at 22 users but does not scale, and gives no actor,
+no timestamp beyond `created_at`, and no record of *attempted* privileged creations.
+
+**Do:** on successful creation, write an audit record with the actor (`req.user.id` + role), the
+created user id, and the requested role — in `register` (now admin-gated) and in the
+`addAdminToOrganization` path, using the already-defined actions. Optionally add
+`users.created_by`. Cheap now; the value is that the *next* time a creation-path question comes
+up (a new escalation, a disputed account), the answer is a query, not a 22-row eyeball that only
+works while the roster is small. Ties to #16 (the gap that made that check the only evidence).
