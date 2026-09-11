@@ -183,11 +183,60 @@ async function testDatabaseConnection() {
   }
 }
 
+// Clinicians (role_type='clinician') with their org name and assigned-patient count.
+// orgId null -> across ALL orgs (super-admin, no org filter); a value -> that org only.
+// Reference/staff data; no PHI in the row beyond staff contact info.
+async function findCliniciansWithCounts(orgId) {
+  const where = orgId != null ? "AND u.organization_id = ?" : "";
+  const params = orgId != null ? [orgId] : [];
+  const query = `
+    SELECT u.id, u.username, u.name, u.email, u.phoneNumber, u.is_active,
+           u.organization_id AS org_id, o.name AS org_name,
+           (SELECT COUNT(*) FROM patient_doctor_assignments pda
+              WHERE pda.doctor_id = u.id) AS assigned_patient_count
+    FROM users u
+    JOIN role r ON r.user_id = u.id AND r.role_type = 'clinician'
+    LEFT JOIN organizations o ON o.id = u.organization_id
+    WHERE 1=1 ${where}
+    ORDER BY o.name IS NULL, o.name, u.name
+  `;
+  const [rows] = await pool.execute(query, params);
+  return rows.map((u) => ({
+    id: u.id,
+    username: u.username,
+    name: u.name,
+    email: u.email,
+    phoneNumber: u.phoneNumber,
+    is_active: u.is_active,
+    org_id: u.org_id,
+    org_name: u.org_name,
+    assigned_patient_count: Number(u.assigned_patient_count) || 0,
+  }));
+}
+
+// Patients assigned to a clinician (via patient_doctor_assignments). orgId scopes the
+// patients to that org defensively (the target clinician is already org-checked upstream).
+async function findAssignedPatients(doctorId, orgId) {
+  const where = orgId != null ? "AND u.organization_id = ?" : "";
+  const params = orgId != null ? [doctorId, orgId] : [doctorId];
+  const query = `
+    SELECT u.id, u.name, u.username, u.email, pda.created_at AS assigned_at
+    FROM patient_doctor_assignments pda
+    JOIN users u ON u.id = pda.patient_id
+    WHERE pda.doctor_id = ? ${where}
+    ORDER BY u.name
+  `;
+  const [rows] = await pool.execute(query, params);
+  return rows;
+}
+
 module.exports = {
   // New functions
   getUserWithRoleAndOrg,
   findAllUsers,
   testDatabaseConnection,
+  findCliniciansWithCounts,
+  findAssignedPatients,
 
   // Existing functions
   findAllUsersWithRoles,

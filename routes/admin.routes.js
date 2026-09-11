@@ -6,6 +6,8 @@ const {
   deleteUser,
   getAssignedDoctors,
   updateDoctorAssignments,
+  getClinicians,
+  getUserPatients,
 } = require("../controllers/admin.controller");
 const { authRequired, requireRole } = require("../middleware/auth");
 const { ADMIN_ROLES, ADMIN_OR_CLINICIAN } = require("../config/roles");
@@ -13,6 +15,22 @@ const { resolveOrgScope, scopePatientParam } = require("../middleware/orgScope")
 
 const router = express.Router();
 router.get("/getAllusers", authRequired, resolveOrgScope, getAllUsers);
+
+// Super-admin clinician management (CLINICIAN_MANAGEMENT_DESIGN.md).
+// Clinician list: admin sees own org; super-admin sees one org (?organizationId=) or ALL
+// orgs (omitted). NO resolveOrgScope here — the all-orgs case has no single scope, so the
+// handler derives it from the caller's role. requireRole gates to admin/super-admin.
+router.get("/clinicians", authRequired, requireRole(...ADMIN_ROLES), getClinicians);
+// A clinician's assigned patients. Org-scoped like the other /users/:userId routes:
+// scopePatientParam confirms the target is in req.orgScope (404 otherwise).
+router.get(
+  "/users/:userId/patients",
+  authRequired,
+  requireRole(...ADMIN_ROLES),
+  resolveOrgScope,
+  scopePatientParam("userId"),
+  getUserPatients
+);
 
 // User mutation routes. These are admin operations: require an admin/super-admin
 // role (requireRole), resolve the caller's org (resolveOrgScope), and confirm

@@ -8,6 +8,8 @@ import {
   findOrgUsersWithRoles,
   getUserWithRoleAndOrg,
   findAllUsers,
+  findCliniciansWithCounts,
+  findAssignedPatients,
 } from "../services/admin.service.js"; // note the .js extension
 import bcrypt from "bcrypt";
 
@@ -399,5 +401,52 @@ export async function updateDoctorAssignments(req, res) {
       message: "Server error",
       error: err.message,
     });
+  }
+}
+
+// GET /api/admin/clinicians?organizationId=<optional>
+// Lists clinicians for the super-admin clinician-management UI. An admin sees their own
+// org; a super-admin sees one org (when ?organizationId= is given) or ALL orgs (when it is
+// omitted — their organization_id is NULL, so there is no implicit scope). Because the
+// "all orgs" case has no single org, this route does NOT use resolveOrgScope; it derives
+// scope from the caller's role here. requireRole(...ADMIN_ROLES) gates the route.
+export async function getClinicians(req, res) {
+  try {
+    const currentUser = await getUserWithRoleAndOrg(req.user.id);
+    if (!currentUser) return res.status(403).json({ ok: false, message: "User not found" });
+    const role_type = currentUser.role_type;
+
+    let orgId = null;
+    if (role_type === "admin") {
+      orgId = currentUser.org_id; // admins are pinned to their own org
+      if (orgId == null)
+        return res.status(400).json({ ok: false, message: "No organization on your account" });
+    } else if (role_type === "super-admin") {
+      const q = req.query.organizationId;
+      orgId = q != null && q !== "" ? Number(q) : null; // null = all orgs
+      if (q != null && q !== "" && !Number.isInteger(orgId))
+        return res.status(400).json({ ok: false, message: "organizationId must be an integer" });
+    } else {
+      return res.status(403).json({ ok: false, message: "Admin privileges required" });
+    }
+
+    const clinicians = await findCliniciansWithCounts(orgId);
+    return res.status(200).json({ ok: true, clinicians, scope: orgId == null ? "all" : orgId });
+  } catch (err) {
+    console.error("getClinicians error:", err);
+    return res.status(500).json({ ok: false, message: "Server error" });
+  }
+}
+
+// GET /api/admin/users/:userId/patients — patients assigned to a clinician (care team view).
+// Route runs resolveOrgScope + scopePatientParam("userId"), so req.orgScope is the caller's
+// org and the target clinician is confirmed to be in it (404 otherwise) before we get here.
+export async function getUserPatients(req, res) {
+  try {
+    const patients = await findAssignedPatients(req.params.userId, req.orgScope);
+    return res.status(200).json({ ok: true, patients });
+  } catch (err) {
+    console.error("getUserPatients error:", err);
+    return res.status(500).json({ ok: false, message: "Server error" });
   }
 }
