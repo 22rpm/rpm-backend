@@ -11,6 +11,17 @@ on it, because these codes eventually land on a claim.
 Plain-language names are used throughout. Cleo, the billing codes are in brackets if
 you want them; Kinza, you can ignore the brackets.
 
+> **FYI — 2026-09-10 (non-gating; we're proceeding).** Since this was written, the
+> conditions picker moved from the curated pick-list below to a **search over the full
+> ICD-10-CM code set** (billable codes only), so a nurse can record any valid diagnosis —
+> the shortlist no longer limits what can be stored (a real problem list from the chart
+> didn't fit it). The curated list is preserved, not dropped: it now serves as "common"
+> quick-picks **and** as inline clinical **guidance hints** shown at the moment of picking
+> — the PVD fork (I73.9 ↔ diabetic angiopathy E11.51/.52), manifestation / not-first-listed
+> warnings, and amputation laterality/level. This note is an FYI, not a blocker; if you flag
+> something we'll adjust. Full detail: `CONDITIONS_PICKER_DESIGN.md`. Your review below is
+> still valuable — especially the guidance wording (Kinza) and the billing-code choices (Cleo).
+
 ---
 
 ## What changed
