@@ -488,14 +488,21 @@ async function getAllOrganizations(req, res) {
 
     return res.status(200).json({
       ok: true,
-      organizations: organizations.map((org) => ({
-        id: org.id,
-        name: org.name,
-        org_code: org.org_code,
-        created_at: org.created_at,
-        updated_at: org.updated_at,
-        admin_count: parseInt(org.admin_count) || 0,
-      })),
+      organizations: organizations.map((org) => {
+        const admin_count = parseInt(org.admin_count) || 0;
+        const active_admin_count = parseInt(org.active_admin_count) || 0;
+        return {
+          id: org.id,
+          name: org.name,
+          org_code: org.org_code,
+          created_at: org.created_at,
+          updated_at: org.updated_at,
+          admin_count,
+          active_admin_count,
+          // Derived so Total = Active + Inactive always holds (no NULL is_active gap).
+          inactive_admin_count: admin_count - active_admin_count,
+        };
+      }),
     });
   } catch (err) {
     console.error("Get all organizations error:", err);

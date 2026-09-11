@@ -237,28 +237,6 @@ async function findUserById(id) {
   }
   return await knex("users").where({ id: parsedId }).first();
 }
-async function getAllOrganizationsWithAdminCount() {
-  try {
-    const organizations = await knex("organizations as o")
-      .leftJoin("users as u", "o.id", "u.organization_id")
-      .where("o.is_deleted", 0)
-      .select(
-        "o.id",
-        "o.name",
-        "o.org_code",
-        "o.created_at",
-        "o.updated_at",
-        knex.raw("COUNT(u.id) as admin_count")
-      )
-      .groupBy("o.id", "o.name", "o.org_code", "o.created_at", "o.updated_at")
-      .orderBy("o.created_at", "desc");
-
-    return organizations;
-  } catch (error) {
-    console.error("Error fetching organizations with admin count:", error);
-    throw error;
-  }
-}
 async function getOrganizationsAdmins(organizationId) {
   try {
     // Check if the organization exists and is not deleted
@@ -298,8 +276,14 @@ async function getOrganizationsAdmins(organizationId) {
 }
 async function getAllOrganizationsWithAdminCount() {
   try {
+    // admin_count counts ADMIN users only — previously COUNT(u.id) with no role join, which
+    // counted EVERY user in the org (patients included) and mislabeled it as admins. Join the
+    // role table and count role_type='admin'; also compute active_admin_count from the SAME
+    // source so Total = Active + Inactive reconciles (inactive is derived in the controller).
+    // UNIQUE(role.user_id) means one role row per user, so COUNT(DISTINCT u.id) is exact.
     const organizations = await knex("organizations as o")
       .leftJoin("users as u", "o.id", "u.organization_id")
+      .leftJoin("role as r", "r.user_id", "u.id")
       .where("o.is_deleted", 0)
       .select(
         "o.id",
@@ -307,7 +291,12 @@ async function getAllOrganizationsWithAdminCount() {
         "o.org_code",
         "o.created_at",
         "o.updated_at",
-        knex.raw("COUNT(u.id) as admin_count")
+        knex.raw(
+          "COUNT(DISTINCT CASE WHEN r.role_type = 'admin' THEN u.id END) as admin_count"
+        ),
+        knex.raw(
+          "COUNT(DISTINCT CASE WHEN r.role_type = 'admin' AND u.is_active = 1 THEN u.id END) as active_admin_count"
+        )
       )
       .groupBy("o.id", "o.name", "o.org_code", "o.created_at", "o.updated_at")
       .orderBy("o.created_at", "desc");
