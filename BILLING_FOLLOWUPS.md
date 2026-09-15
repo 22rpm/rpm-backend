@@ -523,3 +523,42 @@ determination), require the billed month to be **on/after the enrollment period*
 than allowing `billable`. Pairs with the "not enrolled" surfacing in the clinician overview and
 the missing-profile flags already in the note's `missing[]`. Don't build until profile backfill
 is complete enough that the floor won't spuriously block legitimately-enrolled patients.
+
+## 18. RPM device-supply day-count includes NON-QUALIFYING device days (counts all dev_data)
+**Confirmed against CMS before characterizing (CY2021 PFS final rule CMS-1734-F, pp. 205, 213-214).**
+
+**What is already CORRECT (do not "fix" this):** 99454/99445 is billed **once per patient per
+30-day period, NOT per device** — CMS: "even when multiple medical devices are provided to a
+patient, the services associated with all the medical devices can be billed only once per patient
+per 30-day period" (p. 205). The note already emits a SINGLE device-supply code from a single
+per-patient `daysWithReadings` (`rpmNote.service.js:146,266`), and the 2026 tier split (99445=2–15,
+99454=16–30, one band wins → mutually exclusive) is implemented in `config/rpmBillingRules.js:33-39`.
+So do NOT change it to a per-device count — that would introduce a bug.
+
+**The actual defect:** the day-count is device-AGNOSTIC over raw telemetry —
+`SELECT DISTINCT day FROM dev_data WHERE user_id=? AND <month>` (`rpmNote.service.js:139`) — so it
+counts days from ANY transmitting device, including ones that are not ordered / not recorded / not a
+supported type. CMS requires qualifying data to come from an ordered, reasonable-and-necessary
+FDA-definition medical device with auto-uploaded (not self-reported) data (pp. 205-206). Concrete
+case: patient 10 (Gracie) transmits **spo2** (an `is_active=false` type, not a recorded device)
+alongside bp; those spo2 days currently inflate her BP device-supply threshold.
+
+**The fix — and a sequencing dependency (important):**
+- **Fully correct:** count only days from the patient's **recorded/ordered devices**
+  (`patient_devices`, matched `dev_type`↔`device_type`). BUT `patient_devices` is empty for all 16
+  patients today (see DEVICE_RECORDING_DESIGN.md), so this fix would drop every count to 0 until the
+  backfill — it **cannot strictly precede the backfill** without breaking billing.
+- **Safe interim (no dependency, can go first):** restrict the count to `dev_type`s that map to an
+  **`is_active` device_type** (currently only `bp`), keeping the single per-patient count. This drops
+  the Gracie spo2 inflation without zeroing anyone. Then backfill devices, then tighten to
+  recorded-device-only.
+
+**Two points that need Cleo/Kinza (CMS leaves them less than explicit):**
+1. **16-day aggregation across devices** — CMS says once-per-patient "when at least 16 days of data
+   have been collected" but never states whether distinct days from *different* devices combine to
+   16. Prevailing industry reading is patient-level aggregation; it is NOT an explicit CMS rule.
+2. **Device-to-condition relevance** — that an unrelated device's readings shouldn't count is derived
+   from the ordered + reasonable-and-necessary language, not a single explicit matching rule.
+
+Do not commit the code change until these two are confirmed. Primary sources: CMS-1734-F
+(https://www.cms.gov/files/document/12120-pfs-final-rule.pdf); 2026 tiers CMS-1832-F.

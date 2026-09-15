@@ -75,11 +75,16 @@ Behavior verified in code:
   a direct/SQL insert works; the UI won't.
 - **Billing seam** → see §"Day-count" + BILLING_FOLLOWUPS.
 
-## Day-count (the fix that goes first)
-The transmission-day count that sets the device-supply band is **device-agnostic**:
-`SELECT DISTINCT day FROM dev_data WHERE user_id=? AND <month>` — no `dev_type` filter
-(`rpmNote.service:139`). Whether that is CORRECT depends on the CPT 99454 multiple-device rule
-(per-device vs once-per-patient-aggregated), which is being confirmed against CMS/AMA before the fix
-is written. The corrected behavior + the CPT citation are recorded in **BILLING_FOLLOWUPS** (the
-day-count entry); this section will point to it once settled. Do not implement the day-count change
-until that entry lands.
+## Day-count (CPT rule now confirmed — see BILLING_FOLLOWUPS #18)
+CMS-1734-F settles the axis this started on: **99454/99445 is once per patient per 30 days, NOT per
+device** — so the note's single per-patient count is CORRECT on that axis and must NOT become
+per-device. The real defect is narrower: the count is device-agnostic over raw `dev_data`
+(`rpmNote.service:139`), so it counts days from devices that aren't ordered/recorded/supported (e.g.
+Gracie's spo2), which CMS's ordered + reasonable-and-necessary requirement says shouldn't count.
+
+**Sequencing dependency this surfaces:** the fully-correct fix (count only the patient's RECORDED
+devices) would zero every count until the backfill, so it can't strictly precede it. The order is:
+(1) **interim** day-count fix = restrict to `is_active` device types (drops spo2, needs no
+`patient_devices`), → (2) backfill, → (3) tighten to recorded-device-only. Two CMS-ambiguous points
+(16-day cross-device aggregation; device-to-condition relevance) need Cleo/Kinza before the code
+lands. Full detail + citations: **BILLING_FOLLOWUPS #18**.
