@@ -88,3 +88,24 @@ devices) would zero every count until the backfill, so it can't strictly precede
 `patient_devices`), → (2) backfill, → (3) tighten to recorded-device-only. Two CMS-ambiguous points
 (16-day cross-device aggregation; device-to-condition relevance) need Cleo/Kinza before the code
 lands. Full detail + citations: **BILLING_FOLLOWUPS #18**.
+
+## `dev_data` stores the same measurement under divergent JSON keys (ingest inconsistency)
+Surfaced 2026-09-15: the RPM note showed Heart Rate blank for a BP2A patient while BP displayed
+fine. Root cause was NOT the note — it was that a BP reading's pulse lands under **different keys
+depending on the ingest path**:
+- `$.pulse` — raw from the BP2A (viatom) device (32 of 117 bp rows locally)
+- `$.bpm` — the normalized shape (`deviceData.service.js` / `patient.service.js` write
+  `bpm: data.pulse || data.heartRate || 0`) (85 rows)
+- `$.heartRate` — a third raw key the read-side code defends against (`data.pulse || data.heartRate`
+  across `doctor.service.js`, `messageController.js`); 0 rows locally but possible from some device.
+
+No row carries more than one key. The note read only `$.bpm`, so BP2A-only months were all-NULL.
+**Fixed on the read side** (`rpmNote.service` HR now `COALESCE($.pulse,$.heartRate,$.bpm)`; commit
+`7d21859`), matching how every other service reads it. But the read-side coalesce is a workaround for
+a **write-side inconsistency**: one ingest path normalizes to `bpm`, another stores the raw device
+payload verbatim. Open items:
+- **Audit the other vitals for the same key drift** — if pulse diverges, `systolic`/`diastolic`,
+  spo2, glucose, weight likely do too across the raw-vs-normalized paths. A blank vital on a signed
+  note is a silent record defect (the note is meant to BE the record), so this is worth a sweep.
+- **Decide on one normalized shape at ingest** so reads don't each have to know every device's raw
+  key. Until then, every new query over `dev_data` must coalesce the same way — easy to forget.
