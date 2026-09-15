@@ -134,12 +134,22 @@ async function getRpmNote({ patientId, orgScope, month }) {
     [patientId]
   );
 
-  // Monitoring: distinct transmission days (ordered, any device). The count sets
-  // the device-supply band; the ordered dates give its threshold-met DOS.
+  // Monitoring: distinct transmission days that count toward the device-supply band + its
+  // threshold-met DOS. INTERIM day-count fix (BILLING_FOLLOWUPS #18): only days from a
+  // dev_type that maps to an ACTIVE device_type count — CMS requires qualifying data from an
+  // ordered, reasonable-and-necessary device (CMS-1734-F pp.205-206), and a non-supported type
+  // (e.g. spo2) must not inflate the count. Kept device-agnostic across the ACTIVE types (99454
+  // is once per patient regardless of device count — CMS pp.205/214), NOT per-device. This is
+  // data-driven, not hardcoded to 'bp': activating another device_type includes it automatically.
+  // NEXT (post-backfill): tighten from "active type" to "the patient's RECORDED devices".
   const [txDays] = await db.query(
     `SELECT DISTINCT ${tzq.dayBucketSql("created_at")} AS d
        FROM dev_data
       WHERE user_id = ? AND ${tzq.monthWhereSql("created_at")}
+        AND dev_type IN (
+          SELECT dev_data_type FROM device_types
+           WHERE is_active = 1 AND dev_data_type IS NOT NULL
+        )
       ORDER BY d`,
     [clinicTz, patientId, ...tzq.monthParams(L, clinicTz)]
   );
