@@ -94,8 +94,25 @@ all three of the above.
    button with a "Download PDF" link to the endpoint, and **remove the print CSS + `window.print`
    path entirely** (the broken path goes away so nobody uses it). Ordered AFTER verification so a
    working PDF path always exists.
-3. **Phase 2:** store-at-signing → S3 when Husnain's bucket is ready (env-gated; inert until then).
+3. **Phase 2 — BUILT (inert).** `services/rpmNoteStorage.service.js` + a best-effort archival hook
+   in `signRpmNote` (after commit). Stores the exact signed bytes to S3 under SSE-KMS and records the
+   key in `rpm_notes.document_key`. Renders from `getSignedContentForRender` — the SAME inputs the
+   on-demand endpoint uses — so stored bytes == any later regeneration. **Inert until enabled:** the
+   hook is skipped unless `RPM_PDF_STORAGE_ENABLED=true` AND a bucket is set, and the AWS SDK is
+   lazy-required (NOT a package.json dependency yet) so nothing loads while Phase 2 is off. Archival
+   failure is non-fatal — the note is validly signed and the PDF is regenerable; `document_key` stays
+   NULL for a backfill. **Backfill:** re-store any signed note with a NULL `document_key`.
 
 ## Deployment prerequisites
-- `npm install` on the box (adds `@react-pdf/renderer` + the embedded font files).
-- Phase 2: the S3 bucket (SSE-KMS, BAA, access logging) + credentials/IAM before enabling.
+- **Phase 1:** `npm install` on the box (installs the exact-pinned `@react-pdf/renderer` + `react`).
+  No font files to ship — base-14 fonts (Emphasis 2). Restart the backend.
+- **Phase 2 (when Husnain's infra is ready):** provision the S3 bucket (SSE-KMS with a BAA-covered
+  CMK, access logging), grant the instance `s3:PutObject` (+ the KMS key) via IAM, then
+  `npm i @aws-sdk/client-s3` on the box and set:
+  - `RPM_PDF_STORAGE_ENABLED=true`
+  - `RPM_PDF_S3_BUCKET=<bucket>`
+  - `RPM_PDF_S3_REGION=<region>` (or rely on `AWS_REGION`)
+  - `RPM_PDF_S3_KMS_KEY_ID=<cmk-arn>` (REQUIRED when enabled — the service refuses to upload PHI
+    without an explicit CMK)
+  - `RPM_PDF_S3_PREFIX=rpm-notes` (optional; default `rpm-notes`)
+  Credentials come from the standard AWS chain (instance IAM role preferred over static keys).

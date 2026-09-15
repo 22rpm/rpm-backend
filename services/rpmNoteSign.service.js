@@ -258,6 +258,43 @@ async function signRpmNote({
     });
 
     await conn.commit();
+
+    // Phase 2 (RPM_NOTE_PDF_DESIGN.md §5): archive the EXACT signed PDF bytes to S3. BEST-EFFORT
+    // and strictly AFTER commit — the ledger row + hash-anchor is the source of truth and the PDF
+    // is deterministically regenerable, so an archival failure must NEVER roll back a valid
+    // signature. Inert unless RPM_PDF_STORAGE_ENABLED + bucket are set (Husnain's infra). Render
+    // from getSignedContentForRender — the SAME inputs the on-demand endpoint uses — so the stored
+    // bytes are byte-identical to any later regeneration.
+    try {
+      const storage = require("./rpmNoteStorage.service");
+      if (storage.isEnabled()) {
+        const forRender = await getSignedContentForRender({
+          patientId,
+          orgScope,
+          month: `${billingMonth.slice(0, 7)}`,
+        });
+        if (forRender && forRender.id === noteId) {
+          const { renderRpmNotePdf } = require("./rpmNotePdf.service");
+          const buffer = await renderRpmNotePdf({
+            note: forRender.content.computed,
+            clinical: forRender.content.clinical,
+            signed: forRender,
+          });
+          const key = await storage.storeSignedPdf({
+            orgScope,
+            patientId,
+            noteId,
+            contentHash,
+            buffer,
+          });
+          if (key) await db.query("UPDATE rpm_notes SET document_key = ? WHERE id = ?", [key, noteId]);
+        }
+      }
+    } catch (archiveErr) {
+      // Non-fatal: the note is signed; document_key stays NULL for a later backfill.
+      console.error("rpm-note PDF archival failed (non-fatal; note is signed):", archiveErr);
+    }
+
     return {
       id: noteId,
       patient_id: patientId,
