@@ -165,9 +165,15 @@ async function getRpmNote({ patientId, orgScope, month }) {
          MIN(CAST(data->>'$.diastolic' AS SIGNED)) AS dia_min,
          MAX(CAST(data->>'$.diastolic' AS SIGNED)) AS dia_max,
          ROUND(AVG(CAST(data->>'$.diastolic' AS SIGNED))) AS dia_avg,
-         MIN(CAST(data->>'$.bpm' AS SIGNED)) AS hr_min,
-         MAX(CAST(data->>'$.bpm' AS SIGNED)) AS hr_max,
-         ROUND(AVG(CAST(data->>'$.bpm' AS SIGNED))) AS hr_avg,
+         -- Pulse/heart rate: dev_data stores it under different keys depending on the ingest
+         -- path for a BP reading — the BP2A (viatom) device writes raw '$.pulse', another path
+         -- writes normalized '$.bpm', and raw '$.heartRate' is possible too (never more than one
+         -- on a row). Reading only '$.bpm' left HR blank for any patient on the BP2A. Coalesce
+         -- per-row, matching how the rest of the codebase reads it (data.pulse || data.heartRate,
+         -- normalized to bpm), so min/max/avg aggregate over whichever key each reading used.
+         MIN(COALESCE(CAST(data->>'$.pulse' AS SIGNED), CAST(data->>'$.heartRate' AS SIGNED), CAST(data->>'$.bpm' AS SIGNED))) AS hr_min,
+         MAX(COALESCE(CAST(data->>'$.pulse' AS SIGNED), CAST(data->>'$.heartRate' AS SIGNED), CAST(data->>'$.bpm' AS SIGNED))) AS hr_max,
+         ROUND(AVG(COALESCE(CAST(data->>'$.pulse' AS SIGNED), CAST(data->>'$.heartRate' AS SIGNED), CAST(data->>'$.bpm' AS SIGNED)))) AS hr_avg,
          COUNT(*) AS n
        FROM dev_data
       WHERE user_id = ? AND dev_type = 'bp'
