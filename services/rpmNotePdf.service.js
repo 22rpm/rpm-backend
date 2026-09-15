@@ -34,6 +34,8 @@ const {
   Text,
   View,
   StyleSheet,
+  Svg,
+  Polyline,
   renderToBuffer,
 } = require("@react-pdf/renderer");
 
@@ -151,7 +153,9 @@ const S = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  boxTick: { fontFamily: SANS_BOLD, fontSize: 8, lineHeight: 1, color: INK },
+  // NB: the tick is an SVG checkmark, NOT a text glyph — @react-pdf clips a flex-centered
+  // <Text> inside a fixed-height <View>, which silently dropped every checkbox tick. See
+  // CheckSquare(). (The base-14 fonts also lack a ballot/check glyph.)
   inlineFill: { borderBottomWidth: 1, borderBottomColor: RULE, minWidth: 140, paddingHorizontal: 3 },
 
   flag: {
@@ -285,13 +289,26 @@ function Fill({ label, value, minWidth }) {
   );
 }
 
-function Box({ checked, children }) {
+// Checkbox tick as an SVG checkmark. A fixed-height <View> with a flex-centered <Text> clips
+// the glyph in @react-pdf (every tick rendered blank — the "PDF shows all boxes unchecked" bug),
+// and base-14 fonts have no ballot/check glyph anyway. A vector polyline is deterministic
+// (byte-reproducible) and never clips.
+function CheckSquare({ checked }) {
   return h(
     View,
-    { style: S.box },
-    h(View, { style: S.boxSquare }, checked ? h(Text, { style: S.boxTick }, "X") : null),
-    h(Text, {}, children)
+    { style: S.boxSquare },
+    checked
+      ? h(
+          Svg,
+          { width: 7, height: 7, viewBox: "0 0 10 10" },
+          h(Polyline, { points: "1.5,5 4,8 8.5,2", fill: "none", stroke: INK, strokeWidth: 1.6 })
+        )
+      : null
   );
+}
+
+function Box({ checked, children }) {
+  return h(View, { style: S.box }, h(CheckSquare, { checked }), h(Text, {}, children));
 }
 
 function Bullets({ items, style }) {
@@ -455,7 +472,7 @@ function programEnrollment(note) {
       h(
         View,
         { style: S.box },
-        h(View, { style: S.boxSquare }, otherDevices.length ? h(Text, { style: S.boxTick }, "X") : null),
+        h(CheckSquare, { checked: otherDevices.length > 0 }),
         h(Text, {}, "Other: "),
         h(Text, { style: S.inlineFill }, txt(otherDevices.join(", ")))
       )
