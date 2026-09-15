@@ -109,3 +109,58 @@ payload verbatim. Open items:
   note is a silent record defect (the note is meant to BE the record), so this is worth a sweep.
 - **Decide on one normalized shape at ingest** so reads don't each have to know every device's raw
   key. Until then, every new query over `dev_data` must coalesce the same way — easy to forget.
+
+## Vitals key-drift audit (2026-09-15) — the gap is bigger than pulse
+Ran after the HR fix, on the hypothesis "if pulse was under the wrong key, the other vitals are
+too." What the audit actually found:
+
+**Write side stores the client payload VERBATIM — no normalization.** `deviceData.service.js`
+(ingest, ~line 858) writes `JSON.stringify({ ...deviceData })` — only adding `bpStatus` for bp.
+So the JSON keys in `dev_data.data` are whatever the client app / device SDK sent, and they have
+drifted across app versions. The `bpm: data.pulse || data.heartRate` normalization exists only on
+scattered READ paths (`patient.service`, `doctor.service`, `messageController`), never at write.
+
+**Observed `dev_data` shapes (local, `bp` only — no spo2/glucose/weight rows exist locally):**
+- `bpStatus, bpm, diastolic, result, systolic` (85 rows) — older/normalized shape (`bpm`)
+- `bpStatus, diastolic, mean, pulse, systolic` (32 rows) — raw BP2A/viatom shape (`pulse`, `mean`)
+
+Per-vital verdict:
+- **systolic / diastolic** — SAME key in both shapes → BP always displayed correctly. No drift.
+- **pulse/heart rate** — `bpm` vs `pulse` (and `heartRate` defended against elsewhere) → drift;
+  **fixed** by the read-side `COALESCE($.pulse,$.heartRate,$.bpm)` (commit `7d21859`).
+- **mean arterial pressure** — raw writes `mean`; read code elsewhere looks for `meanPressure`/`map`.
+  Drift exists, but the NOTE does not use MAP, so no note impact.
+
+**The bigger finding — the note computes ONLY blood pressure.** `rpmNote.service` runs a single
+vitals query on `dev_type = 'bp'` and returns a `vitals` object with only `bp_systolic`,
+`bp_diastolic`, `heart_rate`, `reading_count`. But the template (RpmNote.jsx AND the PDF) renders
+rows for **Blood Glucose, Weight, and O2 Saturation** that read `v.blood_glucose` / `v.weight` /
+`v.o2_saturation` — fields the service NEVER sets. So those three rows are **unconditionally blank
+on every note, for every patient**, regardless of data. This is not key drift — it is a missing
+computation. No impact TODAY (only `bp` is an active device type and only bp data exists), but:
+- Gracie (id 10, prod) has transmitted spo2. The moment spo2/glucose/weight go active, the note
+  will silently omit real, transmitted vitals — a signed-record defect, exactly the failure mode
+  that motivated this audit.
+- When those vitals ARE wired into the note, the query must COALESCE the raw client keys the same
+  way pulse now does, because the write side stores them unnormalized and the key is client-defined
+  (determine the real keys from the client app / production data, not the backend — the backend
+  never sees a normalized shape).
+
+**Recommended follow-ups (not built here):**
+1. Add spo2/glucose/weight to the note's vitals computation (with per-key COALESCE) when those
+   device types are activated — OR hide those template rows until they're computed, so the note
+   never shows a vital it isn't actually reading.
+2. Normalize device payloads to ONE shape at ingest, so every read path stops re-guessing keys.
+3. A migration/backfill to normalize historical `dev_data` keys is optional; the read-side coalesce
+   covers reads in the meantime.
+
+### Known record gap — Maria's signed September note has a blank heart rate
+Maria's September RPM note was **signed while this bug was live**: her September readings came from
+the BP2A (`$.pulse`), the note read only `$.bpm`, so the frozen snapshot captured an all-NULL heart
+rate even though pulse WAS transmitted and is in `dev_data`. The note is an append-only, hashed,
+signed record — **signed is signed, so it stands as filed** (regenerating it would break the hash;
+it faithfully reflects what the system computed at signing). But the blank HR is a KNOWN,
+explained gap, recorded here so anyone reading that note later knows the heart rate was blank due to
+the `$.pulse`/`$.bpm` key mismatch (fixed 2026-09-15, commit `7d21859`) — NOT because pulse was
+missing. If a corrected note is ever wanted, signing a correction (which supersedes) would
+re-compute and capture HR; that is a clinician decision, not an automatic backfill.
