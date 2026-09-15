@@ -539,3 +539,51 @@ created user id, and the requested role — in `register` (now admin-gated) and 
 `users.created_by`. Cheap now; the value is that the *next* time a creation-path question comes
 up (a new escalation, a disputed account), the answer is a query, not a 22-row eyeball that only
 works while the roster is small. Ties to #16 (the gap that made that check the only evidence).
+
+## 18. `npm install` reports 38 vulns (1 critical, 25 high) — triage before any `audit fix`
+Surfaced installing `@react-pdf/renderer` for the RPM-note PDF (2026-09-15). Counts:
+`{critical:1, high:25, moderate:9, low:3}`. **Do NOT run `npm audit fix --force` on the live
+backend** — the meaningful fixes are semver-major (`sqlite3`→6, `nodemailer`→10) and `--force`
+would take them blind. Triage first; this entry is the triage.
+
+### The one CRITICAL: `tar` — build-time only, NOT reachable in our runtime path
+The single critical is **`tar` ≤7.5.20**, specifically **GHSA-23hp-3jrh-7fpw — node-tar
+decompression/parse DoS via unlimited input** (the other tar advisories in the same package are
+high/moderate path-traversal/symlink issues). It is **transitive, one source only**:
+`sqlite3@5.1.7 → node-gyp@8.4.1 → make-fetch-happen/cacache → tar@6.2.1` (confirmed with
+`npm ls tar`). `node-gyp`/`tar` run **at install/build time** (compiling native addons), never in
+the request path, and the app never parses untrusted tar archives at runtime. **`sqlite3` is not
+imported anywhere in app code** (`grep` clean; prod runs MySQL via `mysql2`). So:
+- **Reachability: not reachable in our runtime code path.** The DoS needs a process that feeds
+  attacker-controlled input to tar's parser; ours doesn't. Build-time exposure only, on a box we
+  control, from packages we choose to install.
+- **Cleanest fix is removal, not `audit fix`.** If `sqlite3` is genuinely unused (it appears to be
+  — likely a leftover), **removing the `sqlite3` dependency** deletes the entire
+  tar/node-gyp/cacache/make-fetch-happen chain and clears the critical **plus** the `cacache`,
+  `make-fetch-happen`, `node-gyp` highs at once, with zero runtime risk. Confirm nothing (a script,
+  a test harness, a knex sqlite config) needs it, then drop it. `audit fix` would instead bump
+  `sqlite3`→6.0.1 (semver-major) — only worth it if sqlite3 is actually used.
+
+### The direct-dependency highs that ARE on runtime paths (review individually)
+These matter more than the transitive count because they sit on live code:
+- **`mysql2` ≤3.23.0 (high, GHSA-3f6p-5ww8-9rcr)** — auth-plugin downgrade to
+  `mysql_clear_password` leaks plaintext credentials. Our DB is localhost on the single box, so
+  exploiting it needs a MitM/rogue MySQL server on that host — low likelihood, but this is our DB
+  driver on every query. **Fix is non-major** (`mysql2` ≥3.23.1): low-risk, do it.
+- **`sequelize` v6 (high, GHSA-6457-6jrx-69cr)** — SQL injection via JSON column cast type.
+  Sequelize is only used in `migration-runner.js` / `models/*` (not the main query path, which is
+  `mysql2`/knex), and we don't build queries from untrusted JSON casts — but confirm. **Fix is
+  non-major.**
+- **`nodemailer` ≤9.1.0 (high)** — CRLF/command injection + SSRF in mail paths
+  (`config/mail.js`, `services/mail.service.js`, `controllers/emailController.js`). Reachable
+  wherever we put user-controlled data into an address/header/subject. **Fix is semver-major
+  (`nodemailer`→10.x)** — needs a compatibility check of our send paths before bumping.
+
+### Recommended order (no `--force`)
+1. Confirm `sqlite3` is unused → **remove it** (clears the critical + a cluster of highs).
+2. Bump `mysql2` to the patched non-major release.
+3. Check `sequelize` JSON-cast usage; bump non-major.
+4. Plan the `nodemailer` 10.x major separately (test mail sending).
+5. Re-run `npm audit`; the remaining highs are transitive dev/build tooling (ws/engine.io via
+   socket.io, minimatch/glob/brace-expansion ReDoS in build chains) — assess by reachability, not
+   by the raw count. `mysqldump` before any dependency change that touches a running service.
