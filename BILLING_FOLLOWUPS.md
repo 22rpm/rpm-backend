@@ -527,13 +527,22 @@ is complete enough that the floor won't spuriously block legitimately-enrolled p
 ## 18. RPM device-supply day-count includes NON-QUALIFYING device days (counts all dev_data)
 **Confirmed against CMS before characterizing (CY2021 PFS final rule CMS-1734-F, pp. 205, 213-214).**
 
-**What is already CORRECT (do not "fix" this):** 99454/99445 is billed **once per patient per
-30-day period, NOT per device** — CMS: "even when multiple medical devices are provided to a
-patient, the services associated with all the medical devices can be billed only once per patient
-per 30-day period" (p. 205). The note already emits a SINGLE device-supply code from a single
-per-patient `daysWithReadings` (`rpmNote.service.js:146,266`), and the 2026 tier split (99445=2–15,
-99454=16–30, one band wins → mutually exclusive) is implemented in `config/rpmBillingRules.js:33-39`.
-So do NOT change it to a per-device count — that would introduce a bug.
+**What is already CORRECT — do NOT "fix" this to per-device (verbatim CMS, so nobody reverses it later):**
+99454/99445 is billed **once per patient per 30-day period, regardless of the number of devices.**
+CMS-1734-F, **p. 205** (verbatim):
+> "even when multiple medical devices are provided to a patient, the services associated with all the
+> medical devices can be billed only once per patient per 30-day period and only when at least 16
+> days of data have been collected."
+
+CMS-1734-F, **p. 214** (verbatim, the definitive restatement):
+> "The medically necessary services associated with all the medical devices for a single patient can
+> be billed by only one practitioner, only once per patient per 30-day period, and only when at least
+> 16 days of data have been collected."
+
+The note already emits a SINGLE device-supply code from a single per-patient `daysWithReadings`
+(`rpmNote.service.js:146,266`), and the 2026 tier split (99445=2–15, 99454=16–30, one band wins →
+mutually exclusive) is implemented in `config/rpmBillingRules.js:33-39`. **A per-device count would
+be a REGRESSION, not a fix.**
 
 **The actual defect:** the day-count is device-AGNOSTIC over raw telemetry —
 `SELECT DISTINCT day FROM dev_data WHERE user_id=? AND <month>` (`rpmNote.service.js:139`) — so it
@@ -553,12 +562,17 @@ alongside bp; those spo2 days currently inflate her BP device-supply threshold.
   the Gracie spo2 inflation without zeroing anyone. Then backfill devices, then tighten to
   recorded-device-only.
 
-**Two points that need Cleo/Kinza (CMS leaves them less than explicit):**
+**OPEN QUESTIONS — NOT SETTLED — require Cleo/Kinza sign-off (CMS leaves these less than explicit;
+do not encode either as fact until confirmed):**
 1. **16-day aggregation across devices** — CMS says once-per-patient "when at least 16 days of data
-   have been collected" but never states whether distinct days from *different* devices combine to
-   16. Prevailing industry reading is patient-level aggregation; it is NOT an explicit CMS rule.
-2. **Device-to-condition relevance** — that an unrelated device's readings shouldn't count is derived
-   from the ordered + reasonable-and-necessary language, not a single explicit matching rule.
+   have been collected" but NEVER states whether distinct days from *different* devices combine to 16
+   (e.g. scale on 12 days + BP on 8 days = 20 qualifying days?). Prevailing industry reading is
+   patient-level aggregation; that is an interpretation, **NOT an explicit CMS rule.**
+2. **Device-to-condition relevance** — that an unrelated device's readings shouldn't count is *derived*
+   from the ordered + reasonable-and-necessary language (pp. 205-206), **NOT a single explicit
+   matching rule** in CMS text.
 
-Do not commit the code change until these two are confirmed. Primary sources: CMS-1734-F
+The interim fix below (restrict to `is_active` device types) does NOT depend on resolving either —
+it only drops an unsupported device type. The **recorded-device-only** tightening (step 3) is where
+#1 and #2 bite, so hold that until Cleo/Kinza confirm. Primary sources: CMS-1734-F
 (https://www.cms.gov/files/document/12120-pfs-final-rule.pdf); 2026 tiers CMS-1832-F.
