@@ -29,6 +29,7 @@ const {
   getRpmNote,
   signRpmNote,
   getSignedRpmNote,
+  getRpmNotePdf,
 } = require("../controllers/rpmNote.controller");
 const {
   getPatientComms,
@@ -241,6 +242,20 @@ router.get(
   resolveOrgScope,
   scopePatientParam("patientId"),
   getSignedRpmNote
+);
+
+// GET /api/patients/:patientId/rpm-note.pdf?month=YYYY-MM — server-side PDF of the
+// monthly note (RPM_NOTE_PDF_DESIGN.md). Signed month -> the frozen ledger snapshot,
+// rendered to match content_hash; otherwise the live pre-fill as a DRAFT (watermarked).
+// Downloading is a READ, so it uses the same view gate as the note itself
+// (BILLING_OVERVIEW_ROLES: clinical staff + biller). Org-scoped like the others.
+router.get(
+  "/:patientId/rpm-note.pdf",
+  authRequired,
+  requireRole(...BILLING_OVERVIEW_ROLES),
+  resolveOrgScope,
+  scopePatientParam("patientId"),
+  getRpmNotePdf
 );
 
 // POST /api/patients/:patientId/rpm-note/sign — sign the note into the

@@ -359,4 +359,41 @@ async function getSignedHead({ patientId, orgScope, month }) {
   };
 }
 
-module.exports = { signRpmNote, getSignedHead, verifyRow };
+// Full frozen snapshot of the current signed head, for rendering the signed PDF (the note's
+// own getSignedHead returns only the billing subset for drift detection). Returns the parsed
+// content ({ computed, clinical, ... } — the exact data that was hashed) plus signature metadata
+// and integrity, or null if there is no signed head for the month. The PDF renders from THIS,
+// never a live re-compute, so it matches content_hash. (RPM_NOTE_PDF_DESIGN.md §3.)
+async function getSignedContentForRender({ patientId, orgScope, month }) {
+  const billingMonth = /^\d{4}-\d{2}$/.test(month || "") ? `${month}-01` : null;
+  if (!billingMonth) return null;
+  const [rows] = await db.query(
+    `SELECT t.*, DATE_FORMAT(t.billing_month, '%Y-%m-%d') AS billing_month,
+            u.name AS signed_by_name
+       FROM rpm_notes t
+       LEFT JOIN rpm_notes s ON s.supersedes = t.id
+       LEFT JOIN users u ON u.id = t.signed_by
+      WHERE s.id IS NULL AND t.patient_id = ? AND t.organization_id = ?
+        AND t.billing_month = ?`,
+    [patientId, orgScope, billingMonth]
+  );
+  const row = rows[0];
+  if (!row) return null;
+  const content = typeof row.content === "string" ? JSON.parse(row.content) : row.content;
+  return {
+    id: row.id,
+    content, // { computed (note-shaped), clinical, rules_fingerprint } — the hashed snapshot
+    attestation_text: row.attestation_text,
+    signature_name: row.signature_name,
+    signature_method: row.signature_method,
+    signed_by_name: row.signed_by_name,
+    signed_role: row.signed_role,
+    signed_at: row.signed_at_iso || toSecondIso(row.signed_at),
+    content_hash: row.content_hash,
+    hash_valid: verifyRow(row),
+    supersedes: row.supersedes,
+    correction_reason: row.correction_reason,
+  };
+}
+
+module.exports = { signRpmNote, getSignedHead, getSignedContentForRender, verifyRow };
