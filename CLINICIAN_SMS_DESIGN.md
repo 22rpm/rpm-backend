@@ -281,6 +281,32 @@ what makes Phase 1 shippable.** Scope of adding her:
 escalation), owner (last-resort backstop only). The single point of failure is resolved and Phase 1
 clears its gate.
 
+### Coverage & escalation statement (v1 — the named commitment for gate item 4)
+- **Coverage window:** care texts are monitored **Monday–Friday, 9am–5pm Pacific.** This is the same
+  window stated to patients in the consent wording, and the same clock the escalation SLA runs on.
+- **Primary triager:** **Kinza (lead RN, `care_manager`).** She reads and triages inbound messages
+  within the window, handles what's within nursing scope, and routes clinical decisions up.
+- **Clinical escalation:** **Dr. Aamir** — anything requiring a clinical decision (med change,
+  diagnosis, an urgent symptom) goes to him. Kinza → Dr. Aamir is the routine clinical chain.
+- **Last-resort backstop:** **Ricky (owner, non-clinician)** — only when both Kinza and Dr. Aamir are
+  unreachable. Per the risk above, he does not clinically triage: he tries to reach a clinician, and
+  failing that redirects an emergency to 911/ER.
+- **SLA (proposed — adjust):** an inbound message during the window is acknowledged within **2 business
+  hours**; if not, re-notify Kinza and escalate to Dr. Aamir. A message arriving **outside** the window
+  gets the auto-acknowledgement ("we'll reply within one business day; emergencies call 911") and is
+  triaged at the next window open — never left silent.
+
+### RISK: the coverage plan is one household
+**Kinza is the owner's wife as well as the lead nurse.** Operationally she's the right triager, but be
+clear-eyed: with Kinza (primary) and Ricky (backstop) in the **same household**, a chunk of the
+coverage plan depends on **one household's availability**. If both are unavailable at once (travel,
+illness, a family event), the chain collapses to Dr. Aamir alone — and if he's also out, **there is no
+one.** This isn't a reason not to ship, but it is a concentration risk to record, not discover later:
+the durable fix is a **second person outside the household** in the chain (another RN/triager, or a
+covering clinician), and until then the coverage window + auto-ack + "not for emergencies, call 911"
+are what protect the gap. Revisit as the patient panel grows past what one household can reliably
+cover.
+
 ---
 
 ## Data model (deltas — no new parallel tables)
@@ -341,9 +367,8 @@ level. `[Clinic]` = the practice name shown to the patient (e.g. "Quantix Health
 >
 > - You don't have to agree. You can use our **secure app** or a **phone call** instead, and you'll
 >   get the same care either way.
-> - **When to expect a reply:** we read and reply to care texts during **[COVERAGE WINDOW — fill in,
->   e.g. "Monday–Friday, 9am–5pm PT"]**. Texts are **not for emergencies** — if you have a medical
->   emergency, call **911**.
+> - **When to expect a reply:** we read and reply to care texts **Monday–Friday, 9am–5pm Pacific
+>   time**. Texts are **not for emergencies** — if you have a medical emergency, call **911**.
 > - **Stopping texts:** reply **STOP** to stop **all** texts from us — care messages *and* reminders —
 >   because they come from the same number. To stop just **one** kind (for example, keep appointment
 >   reminders but stop care messages), tell your care team and we'll turn that one off.
@@ -352,11 +377,11 @@ level. `[Clinic]` = the practice name shown to the patient (e.g. "Quantix Health
 > **☐ I understand text messages are not secure, and I agree to send and receive care-related text
 > messages with [Clinic].**
 
-Two blanks must be filled before this ships:
-- **`[COVERAGE WINDOW]`** — the real monitored hours (owner sets it; §inbox gate item 4). This is not
-  cosmetic: the hours the patient is told are the hours the escalation SLA (gate item 3) must enforce.
-  A patient told "Mon–Fri 9–5" and left unanswered for two business days has been misled, so the
-  stated window and the escalation threshold are the same number, set once.
+On the two blanks:
+- **`[COVERAGE WINDOW]` — SET (2026-09-16): Monday–Friday, 9am–5pm Pacific.** The hours the patient is
+  told are the same number the escalation SLA (gate item 3) enforces — see the Coverage & escalation
+  statement in the inbox gate. Remaining owner item is the sensitive-category cut (§Sensitive
+  categories).
 - **STOP semantics are now explicit in the text**, because reminder consent (`sms_consent`) and
   clinical-text consent (`sms_clinical_consent`) are separate gates and a patient must not think a
   silent one-channel stop happened. The rule the wording promises, and the system MUST implement:
@@ -422,8 +447,15 @@ header). Each is revisitable if the reviewers engage.
   Users (role dropdown = Care Manager), NOT the Clinicians screen (which forces `clinician` and would
   over-grant note-signing). Recorded risk: a non-clinician escalation target cannot clinically triage
   — safe protocol is reach-a-clinician / redirect-to-911, never self-assess.
-- **[PENDING owner sign-off] — `sms_clinical_consent` wording** (DRAFT above; needs the real
-  `[COVERAGE WINDOW]` filled, which also sets the escalation SLA).
+- **2026-09-16 — Coverage window = Mon–Fri 9am–5pm Pacific; escalation chain = Kinza (RN, primary) →
+  Dr. Aamir (clinical) → Ricky (last-resort, non-clinician).** (§Coverage & escalation statement.)
+  SLA proposed at 2 business hours. Concentration risk RECORDED: Kinza is the owner's wife, so primary
+  + backstop are one household — the durable fix is a second person outside the household.
+- **2026-09-16 — Clinicians screen can't create `care_manager` (hardcodes `clinician`) — logged as a
+  followup** (rpm-dashboard FRONTEND_FOLLOWUPS.md #4): that screen should manage clinical staff
+  generally. Meanwhile create care_managers via Admin → Users.
+- **[PENDING owner sign-off] — `sms_clinical_consent` wording** (DRAFT above; coverage window now
+  filled).
 - **[PENDING owner decision] — sensitive-category policy** — DRAFT list + enforcement recommendation
   now in §Sensitive categories; owner to cut/confirm and pick block-vs-warn (open question #3).
 
