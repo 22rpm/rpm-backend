@@ -351,6 +351,66 @@ cover.
 - **Phase 3 — polish:** conversation assignment, sensitive-term soft warnings, per-patient preferred
   channel; per-clinician numbers only if 1:1 identity is later required.
 
+## Phase 1 — build checklist (in order, with dependencies)
+**What Phase 1 delivers:** one monitored inbox where inbound patient messages — in-app AND SMS replies
+— are surfaced, notified, and can't sit unread. It does NOT yet include free-text clinician→patient
+SMS (that's Phase 2). The gate items below are **ship-blocking**, not polish: merging this means
+patients can message and expect a reply, so "surfaced + monitored" is the whole point.
+
+**Prerequisites (no code; must be true before Phase 1 ships):**
+- **PRE-1 [gate item 4] — named inbox owner exists.** Create **Kinza as `care_manager`** (Admin →
+  Users), and record the coverage & escalation statement (done, §Coverage & escalation). Without a
+  named human accountable for reading the inbox, do not ship — go/no-go.
+- **PRE-2 — Twilio BAA confirmed** (asserted; verify the executed agreement). Not code.
+
+**Tickets:**
+- **P1-1 — Land `fix/messages-e2e`.** Merge/rebase it onto `feature/measured-at` +
+  `feature/vitals-integrated`. Supplies the clinician **inbox**, **`/unread-count`**, and
+  **`notifyOnPatientMessage`** that the rest builds on. *Blocks: everything.* On landing, **verify the
+  inbox surfaces org-wide for `care_manager`** (so Kinza sees every thread, not just assigned).
+  *[ship-blocking]*
+- **P1-2 — Migration: `messages.channel` + `notification_log.message_id`.** `channel` ENUM
+  (`in_app`|`sms`) default `in_app`; nullable `message_id` FK on `notification_log` linking an SMS
+  wire row to its human `messages` row. `mysqldump` first (prod has no backups). *Depends on: P1-1
+  (baseline messages model). Blocks: P1-3.* *[ship-blocking]*
+- **P1-3 — Inbound SMS → append a `messages` row.** In the `sms-inbound` path
+  (`notification.controller.smsInbound` → `recordInboundReply`), in addition to the existing
+  `notification_log` inbound row, create a `messages` row (`channel='sms'`, sender = patient) and set
+  `notification_log.message_id`. This is what makes an SMS reply appear in the unified thread/inbox.
+  **Decision inside this ticket:** `messages` is sender/receiver 1:1, but an inbound SMS is to "the
+  care team," not one person — pick the convention (receiver = the patient's assigned clinician / the
+  triager Kinza) or make the thread care-team-shared. This is where Q2's shared-thread meets the 1:1
+  schema; resolve it here, small model tweak if needed. *Depends on: P1-1, P1-2. Blocks: P1-4, P1-5,
+  P1-6, P1-7.* *[ship-blocking]*
+- **P1-4 [gate item 2] — Unread indicator in global nav.** Surface `/unread-count` in the main app
+  chrome (not only the Communication page), counting both channels (needs P1-3 so SMS inbound
+  counts). "Remember to check a page" is the failure this closes. *Depends on: P1-1, P1-3.*
+  *[ship-blocking / gate]*
+- **P1-5 [gate item 1] — Out-of-band notify on inbound.** Make `notifyOnPatientMessage` fire for
+  **SMS inbound too** (P1-3), not just in-app, and target the **triager (Kinza)** per the coverage
+  model. Best done by triggering notify off the unified `messages`-row creation, so one path covers
+  both channels. *Depends on: P1-1, P1-3.* *[ship-blocking / gate]*
+- **P1-6 [gate item 3] — Escalation SLA job.** A business-hours-aware job (respects Mon–Fri 9–5 PT):
+  an inbound `messages` row unacknowledged past **2 business hours** → re-notify Kinza and escalate to
+  Dr. Aamir. Reuse `notificationScheduler`'s loop + the P1-5 notify mechanism; ack clears it (the
+  existing `acknowledged_at`). This is the answer to "what happens to a message nobody reads."
+  *Depends on: P1-3, P1-5.* *[ship-blocking / gate]*
+- **P1-7 [gate item 5] — Auto-acknowledgement on inbound.** Automated template reply (no PHI) on the
+  first inbound in a window and for out-of-window inbound: "Thanks — a team member will reply within
+  one business day (Mon–Fri 9–5 PT). For an emergency call 911." Uses the existing send pipeline.
+  *Depends on: P1-3.* *[strongly recommended, not strictly blocking]*
+
+**Ship go/no-go:** PRE-1, PRE-2, and P1-1 through P1-6 all done; P1-7 strongly recommended. If PRE-1
+(a named owner) isn't real, stop — the code doesn't substitute for it.
+
+**Build order (critical path):** PRE-1 ∥ PRE-2 (parallel, no code) → P1-1 → P1-2 → P1-3 → { P1-4, P1-5
+} → P1-6; P1-7 any time after P1-3.
+
+**Explicitly OUT of Phase 1 (→ Phase 2):** free-text clinician→patient SMS (`sendClinicalMessage`),
+`sms_clinical_consent` flag + capture UI, the compose box with the notification-only-vs-free-text mode
+indicator + PHI warning + sensitive-category soft-warn, and the **SUD/Part 2 per-patient
+hard-disable**. Those ride on the outbound path, which Phase 1 doesn't build.
+
 ## Consent wording — `sms_clinical_consent` (DRAFT — owner sign-off required before it ships)
 Patient-facing risk acknowledgment obtained before any free-text clinical SMS. **Not yet approved —
 do not put in front of a patient until the owner signs off.** Plain language, ~8th-grade reading
