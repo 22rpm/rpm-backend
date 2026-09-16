@@ -233,6 +233,54 @@ owner + coverage window (item 4), **do not ship Phase 1** — the technical piec
 a human who is accountable for reading it. This is the operational commitment the owner asked to see
 made explicit; it is a go/no-go, not a nice-to-have.
 
+### RISK: escalating to a non-clinician is not a clinical safety net
+The escalation backstop named above is the owner (Ricky), who is **not a clinician**. That is a real
+patient-safety gap and must be recorded, not glossed: **if an urgent message escalates to a
+non-clinician, they cannot clinically assess it or give medical advice.** A patient texting "my chest
+hurts and my BP is 190" needs a clinician, and a non-clinician receiving that has no safe way to
+triage it.
+- **The only safe protocol for a non-clinician who receives an escalated message:** do NOT attempt to
+  assess or advise. Immediately try to reach a clinician (phone, not the same channel). If no
+  clinician is reachable and the message reads as an emergency, direct the patient to **call 911 / go
+  to the ER** — which is exactly why the channel's outbound consent language says "not for
+  emergencies, call 911," and why the auto-acknowledgement (item 5) matters: those are the safety net
+  when no clinician is in the loop.
+- **This is a reason to get a clinical triager in the chain (below), not a workaround.** A
+  non-clinician backstop is acceptable only as the *last* link for the rare both-clinicians-
+  unavailable window, never as the routine triager.
+
+### Resolving the single point of failure — add Kinza (lead nurse) as triager
+The owner identified Kinza (lead RN) as the obvious triager. She isn't in the system yet. Adding her
+**does resolve the single-point-of-failure** and moves the escalation chain to patient → Kinza (RN
+triage, within nursing scope) → physician — taking the non-clinician owner out of the routine
+clinical path (he remains only the last-resort backstop for the both-unavailable window). **This is
+what makes Phase 1 shippable.** Scope of adding her:
+- **Role = `care_manager`, NOT `clinician`.** This is the important call. `care_manager` is exactly the
+  modeled "clinical staff, under physician supervision" role: it is in `CLINICAL_STAFF` (so she can
+  read/reply to messages, send reminders, view/generate notes) and in `ORG_WIDE_ROLES` (so she sees
+  the **whole clinic's** inbox with no per-patient assignment), but it is **not** in `CLINICIAN_ONLY`
+  or `CONSENT_ROLES` — so she **cannot sign the RPM note** (the physician/QHP billing attestation) or
+  attest consent, which she shouldn't (RpmNote.jsx already renders read-only for care_manager). Her
+  time also attributes correctly as "clinical staff (under supervision)" in the note's time table.
+- **Creating a `clinician` instead would over-grant note-signing** and add assignment overhead
+  (clinician visibility is assignment-gated per patient; care_manager is org-wide). Don't.
+- **Path (≈5 minutes):** the **Clinicians screen hardcodes role `clinician`**
+  (`SuperAdminClinicians.jsx` → `createClinician` → `/api/auth/register` with `role:"clinician"`), so
+  it's the WRONG screen for her. Use the **Admin → Users** screen (`AddUserModal`), whose role
+  dropdown includes **Care Manager** → `/api/auth/register` (admin-gated). Fields: name, username,
+  email, phone (required — drives her SMS OTP login), an initial password, role = Care Manager,
+  Active.
+- **Caveats to note, not blockers:** (a) she won't appear in the "Clinicians" list, which filters
+  `role_type='clinician'` — expected. (b) The Phase-1 inbox (`fix/messages-e2e`) must surface
+  **org-wide** for `care_manager` so she actually sees every thread — verify when landing that branch.
+  (c) Account creation writes **no audit record** (SECURITY_FOLLOWUPS #17), so her creation is
+  unlogged — note it in the roster review. (d) The initial password is set by the creator; she should
+  change it on first login (no forced-change flow exists).
+
+**Net:** with Kinza as `care_manager`, item 4's named owner = Kinza (primary), physician (clinical
+escalation), owner (last-resort backstop only). The single point of failure is resolved and Phase 1
+clears its gate.
+
 ---
 
 ## Data model (deltas — no new parallel tables)
@@ -368,9 +416,12 @@ header). Each is revisitable if the reviewers engage.
   (Owner call, §Consent wording.) Reminder consent and clinical consent are separate gates, but STOP
   on the shared number stops everything; keeping one channel while dropping the other is a staff/
   patient toggle of the specific consent flag.
-- **2026-09-16 — Inbox coverage today is one active clinician, no clinical backup; escalation backstop
-  is the owner.** (Owner-acknowledged single point of failure, §inbox gate item 4.) Accepted
-  consciously; a second active clinician / triager is the real fix.
+- **2026-09-16 — Inbox coverage: add Kinza (lead RN) as `care_manager` to be the triager; that
+  resolves the single point of failure and makes Phase 1 shippable.** (§inbox gate.) Chain becomes
+  patient → Kinza (RN triage) → physician; owner is last-resort backstop only. Create her via Admin →
+  Users (role dropdown = Care Manager), NOT the Clinicians screen (which forces `clinician` and would
+  over-grant note-signing). Recorded risk: a non-clinician escalation target cannot clinically triage
+  — safe protocol is reach-a-clinician / redirect-to-911, never self-assess.
 - **[PENDING owner sign-off] — `sms_clinical_consent` wording** (DRAFT above; needs the real
   `[COVERAGE WINDOW]` filled, which also sets the escalation SLA).
 - **[PENDING owner decision] — sensitive-category policy** — DRAFT list + enforcement recommendation
