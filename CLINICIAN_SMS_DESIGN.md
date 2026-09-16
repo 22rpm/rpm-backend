@@ -398,36 +398,56 @@ Capture on agreement: who obtained it (`sms_clinical_consent_by`), when (`_at`),
 **version** (`_version`) so a later change to this text is distinguishable from what a given patient
 actually agreed to. Withdrawal via STOP (`opted_out`) or a staff toggle of the flag is logged.
 
-## Sensitive categories — do-not-text list (DRAFT to cut from)
-Even *with* `sms_clinical_consent`, some content shouldn't go over SMS — it belongs in the secure app.
-This is the owner's starting list to cut from; the enforcement mechanism (block vs warn) is open
-question #3. Starred (★) categories carry **specific heightened legal protection** beyond general
-HIPAA, so they warrant the firmest stance:
-- ★ **Substance use disorder** — treatment, diagnosis, or history. (Federal **42 CFR Part 2** — stricter
-  consent than HIPAA; consider disallowing free-text SMS entirely for Part 2–protected care.)
-- **Mental / behavioral health** — psychiatric diagnoses, therapy, psychiatric meds, and especially any
-  mention of self-harm or suicidal ideation (which is also an escalation event, not just a text).
-- ★ **HIV/AIDS status and other STIs** — many states have specific confidentiality statutes.
-- **Reproductive & sexual health** — pregnancy, abortion, contraception, fertility, miscarriage
-  (elevated sensitivity, including cross-state exposure).
-- ★ **Genetic information / test results** (GINA).
-- **Sexual orientation & gender identity.**
-- **Abuse / interpersonal violence / safety concerns** (child abuse, intimate-partner violence).
-- **Minors' confidential services** — adolescent care a minor may control without a parent (varies by
-  state; ties to open question #5).
-- **Immigration status** or other data that could expose a patient to legal/social harm.
+## Sensitive categories (narrowed to a cardiac/kidney/diabetes panel, 2026-09-16)
+A nine-item list gets ignored. Narrowed to what actually surfaces in **this** population's care and
+carries heightened sensitivity — the point is a bright line clinicians will respect, not
+completeness. Split into two buckets because they need different responses:
 
-Most of these are unlikely to surface for a cardiac/kidney/diabetes RPM population, but the policy
-should still name them so a clinician has a bright line.
+**A. Do-not-text content (belongs in the app — WARN at compose).** Even with `sms_clinical_consent`,
+keep these out of SMS:
+- **Substance use disorder** — comorbid alcohol/opioid use is common in cardiac/renal/diabetic
+  patients and they're often on controlled substances. Also the strongest legal case (42 CFR Part 2)
+  — see the hard-stop note below.
+- **Behavioral / mental health** — depression and anxiety are among the most common comorbidities in
+  this panel; psychiatric diagnoses, therapy, psych meds. (Self-harm/suicidal ideation is bucket B.)
+- **Pregnancy** — clinically you *must* know it (ACE inhibitors/ARBs are teratogenic, several
+  diabetes drugs are contraindicated), and it's sensitive. Knowing it is fine; texting about it isn't.
+- **HIV status** — plausible via med reconciliation (antiretrovirals affect renal function) and
+  legally heightened in many states.
 
-**Enforcement recommendation:** do **not** rely on a hard keyword block — it gives false confidence
-(misses coded language) and false positives (blocks "I am *not* depressed"), and a filter can't
-understand meaning. Instead: (1) **policy** — never text these, use the app; (2) a **soft compose-time
-acknowledgment** listing the categories that the clinician confirms before any free-text SMS send;
-(3) lean on the **notification-only default**, which already routes sensitive content to the app; and
-(4) optionally a **keyword soft-flag** as a nudge (warn, never block), labeled explicitly as a reminder,
-not a guarantee. The one place to consider a hard stance is ★ SUD/Part 2 — possibly no free-text SMS at
-all for those patients. Final call is open question #3.
+Cut from the earlier draft as noise for this panel (fold under "minimum necessary always applies,"
+not their own lines): genetic information, sexual orientation/gender identity, immigration status,
+minors' confidential services (that's a consent-authority question — open question #5, not a content
+category), and the broader STI list beyond HIV.
+
+**B. Safety-escalation triggers (ACT, don't just redirect).** These aren't "move to the app" — if a
+patient texts them, the response is **escalate to a clinician now** (the coverage/escalation chain),
+and the "not for emergencies, call 911" language is the backstop:
+- **Self-harm / suicidal ideation.**
+- **Abuse / intimate-partner violence / a safety concern.**
+- **Acute-emergency language** (chest pain, stroke symptoms, severe hypo/hyperglycemia).
+
+## Block vs warn — and the one exception (SUD / 42 CFR Part 2)
+**Warn, not hard-block, for content categories — agreed.** A keyword block gives false confidence
+(misses coded language) and false positives ("I am *not* depressed"); a filter can't read meaning.
+Mechanism: (1) policy — never text bucket A, use the app; (2) a **soft compose-time acknowledgment**
+before any free-text SMS; (3) the **notification-only default** already routes sensitive content to
+the app; (4) an optional **keyword soft-flag** as a nudge, explicitly labeled a reminder not a
+guarantee.
+
+**On SUD/Part 2 — yes, it justifies more than warn, but NOT a keyword hard-block.** The reasoning
+that kills keyword-blocking everywhere kills it for SUD too: you can't reliably detect SUD *content*
+by keyword. The hard control that actually works is **per-patient, not per-message** — for a patient
+**flagged** SUD / Part 2-protected, **disable free-text clinical SMS entirely** and route them to app
+or phone. That's a single boolean check, not content inspection: no false positives, no false
+confidence, and it gives Part 2's stricter consent + re-disclosure rules the extra margin they
+warrant. So: **warn for content in general; a patient-level hard-disable for SUD-flagged patients.**
+- *Caveat for the reviewer:* whether our RPM records are even Part 2 depends on facts (is any SUD-
+  treatment information actually flowing in?), and that's a legal determination. The patient-flag
+  disable is cheap insurance regardless of how that lands. (Mechanism: a per-patient sensitivity flag
+  — small addition; where it lives is a Phase-2 detail.)
+
+This resolves open question #3.
 
 ## Decisions of record
 Decisions made by the owner because the Cleo/Kinza queue is not moving (pending since Sept 9; see
@@ -456,8 +476,13 @@ header). Each is revisitable if the reviewers engage.
   generally. Meanwhile create care_managers via Admin → Users.
 - **[PENDING owner sign-off] — `sms_clinical_consent` wording** (DRAFT above; coverage window now
   filled).
-- **[PENDING owner decision] — sensitive-category policy** — DRAFT list + enforcement recommendation
-  now in §Sensitive categories; owner to cut/confirm and pick block-vs-warn (open question #3).
+- **2026-09-16 — Sensitive-category policy: narrowed + warn, with a SUD hard-disable.** (§Sensitive
+  categories.) Do-not-text content narrowed to SUD, behavioral health, pregnancy, HIV (rest cut as
+  noise for this panel); safety-escalation triggers (SI, IPV, acute emergency) split into their own
+  act-don't-redirect bucket. Enforcement = warn (soft compose acknowledgment + notification-only
+  default), NOT keyword block. **Exception: SUD/Part 2 gets a per-patient hard-disable of free-text
+  clinical SMS** (a patient-flag check, not content inspection). Resolves open question #3. Owner to
+  confirm the SUD patient-level disable.
 
 ## Open questions — routed to Cleo/Kinza, but NOT blocking (see REVIEW_FOR_CLEO_AND_KINZA.md)
 As of 2026-09-16 the review queue has been pending since Sept 9 and Cleo has not accessed her account.
@@ -466,6 +491,7 @@ unanswered items fall to the owner (§Decisions of record).
 1. Is consented limited-content clinical SMS acceptable, or notification-only for all PHI? *(Owner
    has provisionally DECIDED notification-only default + consented free-text exception — confirm.)*
 2. Exact `sms_clinical_consent` language + risk acknowledgment; do we version it? *(DRAFT above.)*
-3. Sensitive-category exclusions and how (if at all) we enforce them (block vs warn).
+3. Sensitive-category exclusions + enforcement. *(RESOLVED by owner 2026-09-16: narrowed list, warn
+   not block, SUD patient-level hard-disable — §Sensitive categories. Confirm if you engage.)*
 4. Retention/e-discovery: SMS content now lives in `messages` + `notification_log` — retention policy?
 5. Minor/proxy patients: who consents, who may text.
