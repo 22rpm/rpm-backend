@@ -105,3 +105,36 @@ reads "16 or more days."
 
 *Once Cleo confirms the billing side and Kinza confirms the clinical side, the list is
 final and the three held codes get added or dropped per Cleo's answer to question 5.*
+
+---
+
+# Second ask — texting patients directly (added 2026-09-16)
+
+**Heads up on timing:** this queue has been pending since Sept 9. We can't hold this feature
+indefinitely, so if we don't hear back, Ricky will make these calls himself and record that he did.
+Your input is still wanted — especially the consent wording (Kinza) and anything we've missed.
+
+**The plan in one line:** let a clinician text a patient and have a back-and-forth by SMS. Because
+text isn't secure, the default is a "you have a new message, open the app" nudge with **no health
+info in the text**; real health details by text would be an opt-in the patient signs off on first.
+Full design is in CLINICIAN_SMS_DESIGN.md; these are the five questions we need a compliance/clinical
+read on:
+
+1. **Is it OK to text patients real health details at all** — with their written OK first — or should
+   we keep ALL health info in the secure app and only ever text "log in to read it"? Ricky's leaning
+   is: nudge-only by default, real text only if the patient specifically consents. Does that sit right
+   with you?
+
+2. **The consent wording.** We drafted a plain-language note the patient agrees to before we ever text
+   them health info — it says texts aren't secure, they can use the app or a call instead, they can
+   stop anytime, and it's not for emergencies. Kinza, does the wording say enough / say it plainly
+   enough? (Draft is in the design doc under "Consent wording.")
+
+3. **Are there topics we should NEVER text**, even with consent — e.g. mental health, substance use,
+   anything especially sensitive? And should the system hard-block those, or just warn the clinician?
+
+4. **How long do we keep texts**, and where — the conversation is stored in our database. Any
+   retention rule we should follow?
+
+5. **Kids and caregivers** — for a patient who's a minor or has someone texting on their behalf, who
+   gives consent and who's allowed to text?

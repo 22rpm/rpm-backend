@@ -1,7 +1,26 @@
 # Two-way clinician↔patient SMS — design (SCOPE, not built)
 
-**Status:** DESIGN. **Date:** 2026-09-16. Compliance items (§Q4, §Q3) are **blocking prerequisites**
-routed to Cleo/Kinza — no code before they're settled.
+**Status:** DESIGN. **Date:** 2026-09-16.
+
+**Compliance gate — reality check (2026-09-16):** the Cleo/Kinza review queue has been pending since
+**Sept 9** and Cleo has **not logged into her account**. Phase 0 must not be blocked indefinitely on a
+reviewer who isn't engaging. Policy for this doc: the compliance questions are still routed to
+Cleo/Kinza (§Open questions, and REVIEW_FOR_CLEO_AND_KINZA.md), but **if they don't respond, the
+owner (Ricky) makes the call and records it here** with the date and rationale. Decisions made this
+way are logged in §Decisions of record below, not left implicit.
+
+**Twilio BAA — asserted in place (verify).** Owner states a Twilio BAA is executed. This design can't
+confirm it from code (a BAA is an account-level legal agreement, not config). **If it is NOT actually
+executed, that is a CURRENT exposure, not a future one** — months of BP-alert SMS (patient readings →
+clinicians) and OTP SMS already carry PHI/PHI-adjacent data through Twilio. Verification: Twilio
+Console → account/**Trust Hub / Compliance** (or the signed BAA in the org's legal records), or open a
+Twilio support ticket asking for BAA status on the account SID. Confirm you've seen the **executed**
+agreement, not just "we have a Twilio account." Proceeding on the owner's assertion.
+
+**Phase 0 (post-BAA) reduces to two owner decisions** — both made below, not waiting on Cleo:
+(1) notification-only vs limited-content → **DECIDED: notification-only default, free-text as a
+consented exception** (§Q4, §Decisions); (2) the `sms_clinical_consent` wording → **DRAFT below,
+pending owner sign-off before it ships** (§Consent wording).
 
 **Goal (user's words):** a clinician logs into the dashboard, texts a patient directly, and has a
 two-way conversation over SMS.
@@ -135,16 +154,22 @@ What RPM/telehealth companies normally do — two patterns:
   clinical content by SMS (logistics, "your BP readings look good this week," reminders), while
   **excluding sensitive categories** (behavioral health, substance use, HIV/repro, etc.).
 
-**Decision / recommendation:**
-- **Get a Twilio BAA** (Twilio signs one and offers HIPAA-eligible messaging). It covers Twilio's
-  handling; be honest that it does **not** secure the carrier/device last mile — consent covers that.
-- **Default to notification-only** for clinical content. The secure in-app thread is where real
-  clinical discussion happens.
-- **Allow free-text clinical SMS as a consented exception** (Q3), with: minimum-necessary content, a
-  **PHI warning banner in the compose box**, an optional **sensitive-term soft-warning** before send,
-  and full logging. This is the path that satisfies the user's stated goal without pretending SMS is
-  secure.
-- **Never** put PHI in the *outbound reminder/nudge* templates (they already avoid it — keep it so).
+**DECIDED (owner, 2026-09-16): notification-only is the default for anything clinical; free-text SMS
+is the consented exception.** Concretely:
+- **Twilio BAA** — asserted in place (see header; verify the executed agreement). Covers Twilio's
+  handling; does **not** secure the carrier/device last mile — consent covers that.
+- **Notification-only is the DEFAULT clinical path.** When a clinician posts clinical content, the
+  patient's SMS carries **no PHI** — just a nudge ("You have a new message from your care team — open
+  the app to read it"). The content lives in the secure in-app thread. This is what happens unless the
+  clinician deliberately chooses the exception below.
+- **Free-text clinical SMS is an explicit, consented EXCEPTION**, not a mode a clinician lands in by
+  accident. It requires `sms_clinical_consent` on file (§Q3, wording below) and is subject to:
+  minimum-necessary content, a **PHI warning in the compose box**, a **sensitive-term soft-warning**
+  before send, and full logging. The compose UI must make it obvious which mode is active (nudge vs
+  real content) — a clinician should never send PHI over SMS thinking they were sending a nudge.
+- **Never** put PHI in the outbound reminder/nudge templates (they already avoid it — keep it so).
+
+See §Decisions of record.
 
 ## Q5 — Relationship to the in-app messaging on `fix/messages-e2e`
 Two channels doing similar things is exactly how a clinician misses a message. **Do not build SMS as
@@ -159,6 +184,41 @@ the `messages` table; that inbox should be **the one inbox for both channels**.
   badge and the in-app unread badge become **one** unread signal.
 - A per-thread **channel indicator** (in-app vs SMS) and a **per-patient preferred channel** so a
   clinician composing once reaches the patient the right way.
+
+---
+
+## The inbox-monitoring gate (BLOCKS Phase 1)
+`fix/messages-e2e` was held for a reason that **still stands**: nobody monitors the clinician inbox.
+Merging it — or shipping SMS two-way — means **patients can message and expect a reply**. A message
+nobody reads is worse than no channel at all: the patient believes they've reached their care team.
+So the gate is operational, not just technical.
+
+**"A clinician has to remember to open a page" is NOT monitoring.** If that's all we have, don't ship.
+Real monitoring means an unread message becomes **visible without anyone choosing to go look**, and an
+unread message has a **defined fate**. Concretely, ALL of these before Phase 1 ships:
+
+1. **Push, don't pull — out-of-band notify on inbound.** When a patient messages, the responsible
+   clinician is notified where they already are (email/SMS, later push), not left to notice a badge.
+   `fix/messages-e2e` ships `notifyOnPatientMessage` (physician email/SMS on a new patient message) —
+   this is the load-bearing piece. Verify it fires reliably and targets the right person (assigned
+   clinician / care-team, not a black hole).
+2. **A persistent unread indicator in the global chrome**, not only on the Communication page. The
+   `/unread-count` badge from that branch must be surfaced in the main nav so it's visible from
+   wherever a clinician works — otherwise it's the "remember to check a page" failure.
+3. **An aging + escalation rule — the answer to "what happens to a message nobody reads."** An unread
+   inbound that ages past a threshold (e.g. 1 business day) **escalates**: re-notify, and/or notify a
+   named backup/supervisor. Without this, a message can sit unread forever and no one is accountable.
+4. **A named owner / coverage window.** Who watches the inbox, during what hours. At ~13 patients this
+   can be one person + a backup, but it must be a **named commitment**, written down — not "the team."
+5. **Patient expectation-setting** (ties to consent wording): the channel is **not 24/7 and not for
+   emergencies**. An auto-acknowledgement on first inbound ("Thanks — a team member will reply within
+   one business day. For an emergency call 911.") sets the response contract and covers the gap
+   between "patient sent" and "human read." Recommended, and cheap.
+
+**Gate:** items 1–4 are hard requirements; 5 is strongly recommended. If the org can't commit a named
+owner + coverage window (item 4), **do not ship Phase 1** — the technical pieces don't substitute for
+a human who is accountable for reading it. This is the operational commitment the owner asked to see
+made explicit; it is a go/no-go, not a nice-to-have.
 
 ---
 
@@ -189,22 +249,67 @@ the `messages` table; that inbox should be **the one inbox for both channels**.
   sent when clinical content is posted in-app to a patient whose preferred/available channel is SMS.
 
 ## Phasing
-- **Phase 0 — compliance gate (BLOCKING, Cleo/Kinza):** Twilio BAA signed; `sms_clinical_consent`
-  language + risk-acknowledgment wording; sensitive-category policy; sign-off that consented
-  limited-content clinical SMS is acceptable, or that we go notification-only. **No code until this
-  clears.**
-- **Phase 1 — unify + surface inbound:** land `fix/messages-e2e`; add `channel` to `messages`; make
-  the `sms-inbound` webhook append a `messages` row so patient replies appear in the unified thread/
-  inbox (today they only raise a badge). Low-risk, immediately useful.
+- **Phase 0 — compliance gate.** Twilio BAA (asserted in place — verify the executed agreement).
+  Owner decisions, made without waiting on Cleo (see §Decisions of record): notification-only default
+  **[DECIDED]**; `sms_clinical_consent` wording **[DRAFT — owner sign-off pending]**; sensitive-
+  category policy **[owner to decide]**. Questions still routed to Cleo/Kinza but not blocking.
+- **Phase 1 — unify + surface inbound. GATED by the inbox-monitoring gate above (items 1–4 are hard
+  go/no-go).** Land `fix/messages-e2e`; add `channel` to `messages`; make the `sms-inbound` webhook
+  append a `messages` row so patient replies appear in the unified thread/inbox (today they only raise
+  a badge); surface the unread badge in global nav; wire the aging/escalation rule. **Do not ship
+  without a named inbox owner + coverage window.**
 - **Phase 2 — outbound free-text SMS:** `sms_clinical_consent` flag + UI; `sendClinicalMessage`
   endpoint (gated, attribution, `messages`+`notification_log`+Twilio, delivery wired back); compose
   box in the thread with the PHI warning + consent state shown.
 - **Phase 3 — polish:** conversation assignment, sensitive-term soft warnings, per-patient preferred
   channel; per-clinician numbers only if 1:1 identity is later required.
 
-## Open questions for Cleo/Kinza (compliance) — see REVIEW_FOR_CLEO_AND_KINZA.md
-1. Is consented limited-content clinical SMS acceptable, or is the org notification-only for all PHI?
-2. Exact `sms_clinical_consent` language + risk acknowledgment; do we version it?
+## Consent wording — `sms_clinical_consent` (DRAFT — owner sign-off required before it ships)
+Patient-facing risk acknowledgment obtained before any free-text clinical SMS. **Not yet approved —
+do not put in front of a patient until the owner signs off.** Plain language, ~8th-grade reading
+level. `[Clinic]` = the practice name shown to the patient (e.g. "Quantix Health").
+
+> **Texting about your care — please read before you agree**
+>
+> Text messages (SMS) are **not secure**. Regular texts are not encrypted, and someone could read
+> them if your phone is shared, lost, or stolen. They also pass through your phone company, which we
+> don't control.
+>
+> If you agree, you're allowing **[Clinic]** to send and receive text messages about your care —
+> which may include health information such as your readings, symptoms, or medications.
+>
+> - You don't have to agree. You can use our **secure app** or a **phone call** instead, and you'll
+>   get the same care either way.
+> - You can stop care texts at any time by replying **STOP** or telling your care team.
+> - Texts are **not checked around the clock** and are **not for emergencies**. If you have a medical
+>   emergency, call **911**.
+> - Standard message and data rates may apply.
+>
+> **☐ I understand text messages are not secure, and I agree to send and receive care-related text
+> messages with [Clinic].**
+
+Capture on agreement: who obtained it (`sms_clinical_consent_by`), when (`_at`), and the wording
+**version** (`_version`) so a later change to this text is distinguishable from what a given patient
+actually agreed to. Withdrawal (STOP, or staff toggle) clears the flag and is logged.
+
+## Decisions of record
+Decisions made by the owner because the Cleo/Kinza queue is not moving (pending since Sept 9; see
+header). Each is revisitable if the reviewers engage.
+- **2026-09-16 — Notification-only is the default for clinical content; free-text SMS is a consented
+  exception.** (Owner call. §Q4.) Rationale: SMS last mile is unsecured; default must not leak PHI,
+  but the owner's goal of real two-way texting is preserved as a deliberate, consented path.
+- **2026-09-16 — Twilio BAA asserted in place; proceeding on that basis pending sight of the executed
+  agreement.** (Owner assertion. If untrue, it's a current exposure — header.)
+- **[PENDING owner sign-off] — `sms_clinical_consent` wording** (DRAFT above).
+- **[PENDING owner decision] — sensitive-category policy** (block vs warn; which categories).
+
+## Open questions — routed to Cleo/Kinza, but NOT blocking (see REVIEW_FOR_CLEO_AND_KINZA.md)
+As of 2026-09-16 the review queue has been pending since Sept 9 and Cleo has not accessed her account.
+These remain the right questions for a compliance reviewer, but Phase 0 will not wait indefinitely —
+unanswered items fall to the owner (§Decisions of record).
+1. Is consented limited-content clinical SMS acceptable, or notification-only for all PHI? *(Owner
+   has provisionally DECIDED notification-only default + consented free-text exception — confirm.)*
+2. Exact `sms_clinical_consent` language + risk acknowledgment; do we version it? *(DRAFT above.)*
 3. Sensitive-category exclusions and how (if at all) we enforce them (block vs warn).
 4. Retention/e-discovery: SMS content now lives in `messages` + `notification_log` — retention policy?
 5. Minor/proxy patients: who consents, who may text.
