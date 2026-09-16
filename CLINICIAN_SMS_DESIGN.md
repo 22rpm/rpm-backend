@@ -208,8 +208,21 @@ unread message has a **defined fate**. Concretely, ALL of these before Phase 1 s
 3. **An aging + escalation rule — the answer to "what happens to a message nobody reads."** An unread
    inbound that ages past a threshold (e.g. 1 business day) **escalates**: re-notify, and/or notify a
    named backup/supervisor. Without this, a message can sit unread forever and no one is accountable.
-4. **A named owner / coverage window.** Who watches the inbox, during what hours. At ~13 patients this
-   can be one person + a backup, but it must be a **named commitment**, written down — not "the team."
+4. **A named owner / coverage window.** Who watches the inbox, during what hours — a **named
+   commitment**, written down, not "the team."
+   **Actual state (2026-09-16):** the practice has **one active clinician**. The second clinician
+   account was a functional/test account, now deactivated. So today coverage is **one person, with no
+   clinical backup.** Consequences to face before shipping, not after:
+   - The escalation rule (item 3) has **no second clinician to escalate to.** Its backstop is the
+     owner (Ricky) — escalation = re-notify the clinician, then notify the owner. Name that explicitly
+     as the fallback; don't leave "escalate" pointing at nobody.
+   - One person means **no coverage when that person is off** (PTO, sick, after hours). The stated
+     `[COVERAGE WINDOW]` in the consent wording must reflect that honestly (e.g. business hours only,
+     one clinician), and out-of-window inbound gets the auto-acknowledgement (item 5) rather than a
+     false promise of a quick reply.
+   - This is a **single point of failure by design today.** It's not a blocker to *deciding* to ship,
+     but it must be a conscious acceptance by the owner, recorded — a second active clinician (or a
+     designated non-clinician triager who can at least see and route messages) is the real fix.
 5. **Patient expectation-setting** (ties to consent wording): the channel is **not 24/7 and not for
    emergencies**. An auto-acknowledgement on first inbound ("Thanks — a team member will reply within
    one business day. For an emergency call 911.") sets the response contract and covers the gap
@@ -280,17 +293,68 @@ level. `[Clinic]` = the practice name shown to the patient (e.g. "Quantix Health
 >
 > - You don't have to agree. You can use our **secure app** or a **phone call** instead, and you'll
 >   get the same care either way.
-> - You can stop care texts at any time by replying **STOP** or telling your care team.
-> - Texts are **not checked around the clock** and are **not for emergencies**. If you have a medical
+> - **When to expect a reply:** we read and reply to care texts during **[COVERAGE WINDOW — fill in,
+>   e.g. "Monday–Friday, 9am–5pm PT"]**. Texts are **not for emergencies** — if you have a medical
 >   emergency, call **911**.
+> - **Stopping texts:** reply **STOP** to stop **all** texts from us — care messages *and* reminders —
+>   because they come from the same number. To stop just **one** kind (for example, keep appointment
+>   reminders but stop care messages), tell your care team and we'll turn that one off.
 > - Standard message and data rates may apply.
 >
 > **☐ I understand text messages are not secure, and I agree to send and receive care-related text
 > messages with [Clinic].**
 
+Two blanks must be filled before this ships:
+- **`[COVERAGE WINDOW]`** — the real monitored hours (owner sets it; §inbox gate item 4). This is not
+  cosmetic: the hours the patient is told are the hours the escalation SLA (gate item 3) must enforce.
+  A patient told "Mon–Fri 9–5" and left unanswered for two business days has been misled, so the
+  stated window and the escalation threshold are the same number, set once.
+- **STOP semantics are now explicit in the text**, because reminder consent (`sms_consent`) and
+  clinical-text consent (`sms_clinical_consent`) are separate gates and a patient must not think a
+  silent one-channel stop happened. The rule the wording promises, and the system MUST implement:
+  - **STOP = the universal kill switch.** It sets `opted_out` and blocks **every** SMS from the shared
+    number — reminders and clinical alike — because carrier/Twilio STOP is per-number, not
+    per-message-type. There is no way to honor "STOP clinical only" via the STOP keyword; the number
+    is one number. Pretending otherwise would be the exact "we ignored them" failure.
+  - **Granular opt-out** (drop one gate, keep the other) is a **staff/patient toggle of the specific
+    consent flag**, not STOP: clearing `sms_clinical_consent` stops clinical texts while
+    `sms_consent` reminders continue, or vice versa. Reachable by "tell your care team"; a
+    patient-facing preference is a later nicety.
+
 Capture on agreement: who obtained it (`sms_clinical_consent_by`), when (`_at`), and the wording
 **version** (`_version`) so a later change to this text is distinguishable from what a given patient
-actually agreed to. Withdrawal (STOP, or staff toggle) clears the flag and is logged.
+actually agreed to. Withdrawal via STOP (`opted_out`) or a staff toggle of the flag is logged.
+
+## Sensitive categories — do-not-text list (DRAFT to cut from)
+Even *with* `sms_clinical_consent`, some content shouldn't go over SMS — it belongs in the secure app.
+This is the owner's starting list to cut from; the enforcement mechanism (block vs warn) is open
+question #3. Starred (★) categories carry **specific heightened legal protection** beyond general
+HIPAA, so they warrant the firmest stance:
+- ★ **Substance use disorder** — treatment, diagnosis, or history. (Federal **42 CFR Part 2** — stricter
+  consent than HIPAA; consider disallowing free-text SMS entirely for Part 2–protected care.)
+- **Mental / behavioral health** — psychiatric diagnoses, therapy, psychiatric meds, and especially any
+  mention of self-harm or suicidal ideation (which is also an escalation event, not just a text).
+- ★ **HIV/AIDS status and other STIs** — many states have specific confidentiality statutes.
+- **Reproductive & sexual health** — pregnancy, abortion, contraception, fertility, miscarriage
+  (elevated sensitivity, including cross-state exposure).
+- ★ **Genetic information / test results** (GINA).
+- **Sexual orientation & gender identity.**
+- **Abuse / interpersonal violence / safety concerns** (child abuse, intimate-partner violence).
+- **Minors' confidential services** — adolescent care a minor may control without a parent (varies by
+  state; ties to open question #5).
+- **Immigration status** or other data that could expose a patient to legal/social harm.
+
+Most of these are unlikely to surface for a cardiac/kidney/diabetes RPM population, but the policy
+should still name them so a clinician has a bright line.
+
+**Enforcement recommendation:** do **not** rely on a hard keyword block — it gives false confidence
+(misses coded language) and false positives (blocks "I am *not* depressed"), and a filter can't
+understand meaning. Instead: (1) **policy** — never text these, use the app; (2) a **soft compose-time
+acknowledgment** listing the categories that the clinician confirms before any free-text SMS send;
+(3) lean on the **notification-only default**, which already routes sensitive content to the app; and
+(4) optionally a **keyword soft-flag** as a nudge (warn, never block), labeled explicitly as a reminder,
+not a guarantee. The one place to consider a hard stance is ★ SUD/Part 2 — possibly no free-text SMS at
+all for those patients. Final call is open question #3.
 
 ## Decisions of record
 Decisions made by the owner because the Cleo/Kinza queue is not moving (pending since Sept 9; see
@@ -300,8 +364,17 @@ header). Each is revisitable if the reviewers engage.
   but the owner's goal of real two-way texting is preserved as a deliberate, consented path.
 - **2026-09-16 — Twilio BAA asserted in place; proceeding on that basis pending sight of the executed
   agreement.** (Owner assertion. If untrue, it's a current exposure — header.)
-- **[PENDING owner sign-off] — `sms_clinical_consent` wording** (DRAFT above).
-- **[PENDING owner decision] — sensitive-category policy** (block vs warn; which categories).
+- **2026-09-16 — STOP is the universal kill switch; per-type opt-out is a flag toggle, not STOP.**
+  (Owner call, §Consent wording.) Reminder consent and clinical consent are separate gates, but STOP
+  on the shared number stops everything; keeping one channel while dropping the other is a staff/
+  patient toggle of the specific consent flag.
+- **2026-09-16 — Inbox coverage today is one active clinician, no clinical backup; escalation backstop
+  is the owner.** (Owner-acknowledged single point of failure, §inbox gate item 4.) Accepted
+  consciously; a second active clinician / triager is the real fix.
+- **[PENDING owner sign-off] — `sms_clinical_consent` wording** (DRAFT above; needs the real
+  `[COVERAGE WINDOW]` filled, which also sets the escalation SLA).
+- **[PENDING owner decision] — sensitive-category policy** — DRAFT list + enforcement recommendation
+  now in §Sensitive categories; owner to cut/confirm and pick block-vs-warn (open question #3).
 
 ## Open questions — routed to Cleo/Kinza, but NOT blocking (see REVIEW_FOR_CLEO_AND_KINZA.md)
 As of 2026-09-16 the review queue has been pending since Sept 9 and Cleo has not accessed her account.
