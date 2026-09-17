@@ -54,6 +54,20 @@ email/username → **email** OTP. So a patient with no email:
 - must therefore recover via **SMS**. This is the reason SMS-to-phone-on-file is the primary recovery
   channel, not a preference.
 
+**Count the affected patients (run on PROD — `mysql -u root -proot -h 127.0.0.1 rpm_db`; the local dev
+DB is not representative):**
+```sql
+SELECT
+  COUNT(*) AS patients,
+  SUM(u.email IS NULL OR u.email = '')             AS no_email,
+  SUM(u.phoneNumber IS NULL OR u.phoneNumber = '') AS no_phone,
+  SUM((u.email IS NULL OR u.email='') AND (u.phoneNumber IS NULL OR u.phoneNumber='')) AS neither
+FROM users u JOIN role r ON r.user_id = u.id AND r.role_type = 'patient';
+```
+`no_email` sizes the login-bug/SMS-recovery population; `neither` is the group that can receive no code
+at all and always needs a manual reset (open question #4). (Local dev DB on 2026-09-17: 7 patients, 0
+no_email, 4 no_phone — illustrative only, NOT prod.)
+
 ## The shared backend primitive
 Reuse what exists — do NOT build a parallel OTP system:
 - **Issue:** `createOtp(user.id, code, "reset")` + `twilioService.sendSMS(phoneOnFile, code)`. Code is
@@ -78,18 +92,62 @@ Reuse what exists — do NOT build a parallel OTP system:
   today writes no audit record (SECURITY_FOLLOWUPS #17); don't repeat that here.
 - Consider **invalidating active sessions / device trust** on a completed reset (a forgotten password
   can mean a compromised or lost device).
-- **Gating for the dashboard button:** the founder asked for "any staff member." That widens reset
-  from admin-only to clinical staff — a deliberate privilege change to confirm (staffRoles vs
-  ADMIN_ROLES). The patient-scoping (`scopePatientParam`) still applies.
+- **Gating for the dashboard button — DECIDED (owner, 2026-09-17): ADMIN-ONLY, not widened.**
+  Keep it `requireRole(...ADMIN_ROLES)`. Rationale: the bottleneck isn't real yet (two clinicians + a
+  care manager), and password reset is an **account-takeover path if a staff account is compromised** —
+  the fewer accounts that can trigger it, the smaller the blast radius. Revisit widening to clinical
+  staff when the team is larger. The patient-scoping (`scopePatientParam`) still applies.
 
-## Cleanup folded into this work
-- Remove the **decoy** "Reset Password" button (or wire it to the primitive). Logged in
-  rpm-dashboard FRONTEND_FOLLOWUPS.
-- Remove/replace the broken `POST /org/admins/:id/reset-password` endpoint.
-- Fix (separately) the **username-login-with-no-email** OTP failure.
+## Cleanup
+- **DONE (2026-09-17, dashboard commit 9d7c734):** removed the **decoy** "Reset Password" buttons from
+  both routed screens (AdminLayout, SuperAdminLayout) — shipped ahead of this checklist because staff
+  believing a reset happened is worse than no button. See FRONTEND_FOLLOWUPS #5.
+- Remove/replace the broken `POST /org/admins/:id/reset-password` endpoint (folded into PR-1).
+- The **username-login-with-no-email** OTP failure is a SEPARATE, higher-priority bug — it's an active
+  lockout at the front door, not a recovery gap. Tracked below, outside the recovery track.
+
+## Build checklist (ordered)
+Prereq: Twilio BAA (asserted in place from the SMS work) — recovery reuses the same SMS channel.
+
+**PR-1 — Backend reset primitive.** *[blocks PR-2, PR-3]*
+- `POST /api/auth/password-reset/request`: look up user; issue a 6-digit code via
+  `otp.service.createOtp(user.id, code, "reset")` + `twilioService.sendSMS(phoneOnFile, code)`; ~10-min
+  expiry, single-use. Sends ONLY to the contact on file. Self-service response is anti-enumeration
+  ("if an account matches, we sent a code"); the staff path (PR-2) may be explicit.
+- `POST /api/auth/password-reset/confirm`: `verifyOtp(user.id, code, "reset")` → set new password
+  (min length, bcrypt) → consume code → (decide PR-1a) invalidate sessions/device-trust.
+- Rate-limit per account/number; audit request + completion (actor). Remove/replace the broken
+  `/org/admins/:id/reset-password` here.
+
+**PR-2 — Dashboard patient-row reset button (ADMIN-ONLY). Ships first.** *[depends: PR-1]*
+- A real "Send password reset" action on the patient row → calls `.../request` server-side so the
+  patient gets the SMS code; staff never sees/handles the credential. Gate `requireRole(...ADMIN_ROLES)`
+  + `scopePatientParam`. This is the real replacement for the removed decoy. Smallest increment on
+  PR-1; removes the founder as the sole reset path.
+
+**PR-3 — In-app "Forgot password?" (iOS + Android). Scales to zero-touch.** *[depends: PR-1]*
+- Login-screen link → enter identifier → `.../request` (SMS to phone on file) → enter code + new
+  password → `.../confirm`. Anti-enumeration copy. Two app codebases; each is thin over PR-1.
+
+**Order:** PR-1 → PR-2 (ship) → PR-3 (ship). Decoy removal already done.
+
+**Separate track — LOGIN BUG (higher priority than recovery):** username/email login for a patient
+with **no email** routes the OTP to a non-existent address and fails with no explanation
+(`auth.controller.js:255-355`) — an active lockout. Fix: when the resolved user has no email, fall
+back to SMS OTP if a phone is on file, else return a clear message. Do this before/independent of the
+recovery track — it locks people out at the front door today. (Count of affected patients: run the
+prod query in §"No email".)
+
+## Decisions of record
+- **2026-09-17 — Dashboard reset stays ADMIN-ONLY** (not widened to all staff). Account-takeover blast
+  radius; bottleneck not yet real. Revisit when the team grows.
+- **2026-09-17 — Do both options** (dashboard button + in-app), on one shared SMS primitive; SMS to
+  phone-on-file is the primary channel.
+- **2026-09-17 — Decoy reset buttons removed immediately** (ahead of the build).
 
 ## Open questions
-1. Confirm widening dashboard reset to all clinical staff (vs admin-only).
-2. Email as a secondary recovery channel at all, or SMS-only for simplicity?
-3. Invalidate sessions/device-trust on reset — yes/no?
-4. Minor/proxy patients: whose phone receives the code (ties to CLINICIAN_SMS_DESIGN open Q5).
+1. Email as a secondary recovery channel at all, or SMS-only for simplicity?
+2. Invalidate sessions/device-trust on reset — yes/no? (PR-1a)
+3. Minor/proxy patients: whose phone receives the code (ties to CLINICIAN_SMS_DESIGN open Q5).
+4. Patients with **neither email nor phone** on file can't receive any code — they always need a
+   manual/in-person reset. How many are there (see prod query), and what's the fallback for them?
