@@ -137,9 +137,14 @@ Prereq: Twilio BAA (asserted in place from the SMS work) — recovery reuses the
   (`admin.routes.js`, `passwordReset.controller.adminSendReset`). Surfaces the channel-aware result and
   the explicit "no phone or email — manual reset required" failure. Replaces the removed decoy.
 
-**PR-3 — In-app "Forgot password?" (iOS + Android). Scales to zero-touch.** *[depends: PR-1]*
-- Login-screen link → enter identifier → `.../request` (SMS to phone on file) → enter code + new
-  password → `.../confirm`. Anti-enumeration copy. Two app codebases; each is thin over PR-1.
+**PR-3 — In-app "Forgot password?" — iOS BUILT (2026-09-17), Android NEXT.** *[depends: PR-1]*
+- **iOS (`rpm-ios-app/Login.js`, commit 9b581dd):** "Forgot password?" link → two-step modal →
+  `.../request` (generic/anti-enumeration, always advances) → enter code + new password (min 8) →
+  `.../confirm` → success prompts sign-in. Mirrors the OTP modal.
+- **Android — still TODO** (`22-rpm-android-app`, thin port of the same flow). Until it ships, an
+  Android patient who gets a code still has nowhere to enter it — so PR-3 isn't fully closed until
+  Android lands. **IMPORTANT: PR-3 was reclassified BLOCKING, not "next"** — sending a code (PR-1/PR-2)
+  with no entry point is a half-built feature that misleads staff into thinking reset works.
 
 **Order:** PR-1 → PR-2 (ship) → PR-3 (ship). Decoy removal already done.
 
@@ -158,8 +163,11 @@ prod query in §"No email".)
   neither.** Corrected from an interim email-primary call once the panel reality was clear (elderly →
   phone; but 11 current patients have no phone, so email fallback is mandatory day one, not later).
 - **2026-09-17 — Decoy reset buttons removed immediately** (ahead of the build).
-- **2026-09-17 — PR-1 + PR-2 BUILT** (SMS-primary). PR-3 (in-app) next; login no-email bug is a
-  separate higher-priority track.
+- **2026-09-17 — PR-1 + PR-2 BUILT** (SMS-primary).
+- **2026-09-17 — PR-3 reclassified BLOCKING** (was "next"): PR-1/PR-2 send a code with nowhere to enter
+  it — confirmed there is NO reset-entry anywhere (not the dashboard: staff-facing, send-only; not the
+  apps until this). **iOS PR-3 BUILT** (`Login.js`); **Android PR-3 still TODO** — feature not fully
+  closed until Android ships. Login no-email bug remains a separate higher-priority track.
 
 ## Open questions
 1. Email as a secondary recovery channel at all, or SMS-only for simplicity?
