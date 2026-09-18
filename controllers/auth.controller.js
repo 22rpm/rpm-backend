@@ -39,6 +39,25 @@ const twilioService = require("../services/twillio.service");
 
 const TRUST_DAYS = 60;
 
+// ---- Apple App Review OTP bypass ------------------------------------------------
+// App Review can't receive our SMS/email OTP, so a login-gated app is an automatic
+// rejection. ONE dedicated, PHI-free review account skips the OTP send and signs in with
+// a fixed code. Design constraints (SECURITY_FOLLOWUPS "Apple App Review OTP bypass"):
+//   - OFF BY DEFAULT. If APPLE_REVIEW_USER_ID is unset/invalid, appleReviewUserId()
+//     returns null and NOTHING is bypassed. An auth bypass that defaults on is a backdoor.
+//   - Gated by IMMUTABLE numeric user id from the ENV (never email — an email compare is one
+//     typo from a hole), so the account can be recreated by changing the env, no code change.
+//   - The id is ENVIRONMENT-SPECIFIC and DANGEROUS if wrong: set it ONLY in the environment
+//     whose user of that id is the isolated review PATIENT. (e.g. locally id 44 is a
+//     super-admin — setting it there would hand that account out for the fixed code.) On prod,
+//     confirm the id maps to the applereview PHI-free patient before setting it.
+//   - Every fire is audit-logged; use of the fixed code on any OTHER account is logged too.
+const APPLE_REVIEW_OTP = process.env.APPLE_REVIEW_OTP || "624019"; // code handed to Apple
+function appleReviewUserId() {
+  const n = Number(process.env.APPLE_REVIEW_USER_ID);
+  return Number.isInteger(n) && n > 0 ? n : null; // null => bypass disabled
+}
+
 // Session-cookie flags — the SINGLE source of truth for both setting and clearing
 // the auth cookies, so they can NEVER drift (a cookie set with SameSite=None but
 // cleared with SameSite=Strict may not clear, leaving a live session after logout).
@@ -347,6 +366,28 @@ if (!user) {
     }
 
     // ---- 6. Otherwise: send an OTP ----------------------------------------
+    // Apple App Review bypass (OFF unless APPLE_REVIEW_USER_ID is set): for the dedicated
+    // review account ONLY, skip the real send (App Review can't receive it) and tell the app
+    // to show the OTP screen; verifyOtpController accepts APPLE_REVIEW_OTP for this id.
+    const appleReviewId = appleReviewUserId();
+    if (appleReviewId && user.id === appleReviewId) {
+      audit.recordAsync({
+        req,
+        actorId: user.id,
+        actorRole: "patient",
+        action: audit.ACTIONS.APPLE_REVIEW_BYPASS,
+        entityType: "user",
+        entityId: user.id,
+        organizationId: user.organization_id ?? null,
+        metadata: { phase: "login_send_skipped" },
+      });
+      return res.status(200).json({
+        message: "OTP sent, please verify",
+        requiresOtp: true,
+        otpChannel: loginChannel === "sms" ? "sms" : "email",
+      });
+    }
+
     // Cryptographically secure — this is a second factor on PHI, so not Math.random.
     const otp = String(crypto.randomInt(100000, 1000000));
     await createOtp(user.id, otp, "login");
@@ -544,6 +585,50 @@ const verifyOtpController = async (req, res) => {
     }
 
     if (!user) return res.status(400).json({ error: "User not found" });
+
+    // Apple App Review bypass (OFF unless APPLE_REVIEW_USER_ID is set): accept the fixed code
+    // for the dedicated review account ONLY, gated by immutable user id. Audited on every fire.
+    const appleReviewId = appleReviewUserId();
+    if (appleReviewId && user.id === appleReviewId && otp === APPLE_REVIEW_OTP) {
+      audit.recordAsync({
+        req,
+        actorId: user.id,
+        actorRole: "patient",
+        action: audit.ACTIONS.APPLE_REVIEW_BYPASS,
+        entityType: "user",
+        entityId: user.id,
+        organizationId: user.organization_id ?? null,
+        metadata: { phase: "otp_bypass_accepted" },
+      });
+      const role = await findRoleByUserId(user.id);
+      const fp = buildDeviceFingerprint(req, req.body.client_device_id);
+      return await issueSession({
+        req,
+        res,
+        user,
+        role,
+        role_type: role,
+        org_id: user.organization_id,
+        fingerprintHash: fp.fingerprintHash,
+        extendTrust: true,
+      });
+    }
+    // Guardrail: the fixed review code presented on any OTHER account (bypass enabled but this
+    // is not the review id). NEVER accepted here — it falls through to normal verification
+    // (which rejects it unless it happens to be this user's real generated OTP) — but log it so
+    // misuse of the review code is visible, exactly as requested.
+    if (appleReviewId && otp === APPLE_REVIEW_OTP && user.id !== appleReviewId) {
+      audit.recordAsync({
+        req,
+        actorId: user.id,
+        actorRole: null,
+        action: audit.ACTIONS.APPLE_REVIEW_BYPASS,
+        entityType: "user",
+        entityId: user.id,
+        organizationId: user.organization_id ?? null,
+        metadata: { phase: "review_code_on_non_review_account", severity: "warning" },
+      });
+    }
 
     const valid = await verifyOtp(user.id, otp, "login");
     if (!valid) {

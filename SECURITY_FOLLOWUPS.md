@@ -587,3 +587,36 @@ These matter more than the transitive count because they sit on live code:
 5. Re-run `npm audit`; the remaining highs are transitive dev/build tooling (ws/engine.io via
    socket.io, minimatch/glob/brace-expansion ReDoS in build chains) — assess by reachability, not
    by the raw count. `mysqldump` before any dependency change that touches a running service.
+
+## 19. Apple App Review OTP bypass — shipped in review notes before it was live; now built (env-gated, audited)
+**Two-part finding (2026-09-18).**
+
+**(a) The retrospective — 1.0.50 shipped telling Apple to use a code that did not work.** The App
+Review login bypass was written on a side branch (`feature/apple-review-bypass`, `b54a683`, Aug 25)
+and **never merged into `feature/measured-at` (prod)** — and even on that branch it was disabled
+(`APPLE_REVIEW_USER_ID = 0`, "DISABLED until id set"). Yet the 1.0.50 review notes told Apple to sign
+in as `applereview` with code `624019`. So the notes and the running system disagreed: the reviewer's
+`624019` would have been rejected as an ordinary wrong OTP. **1.0.50 was approved anyway** — which
+almost certainly means **the reviewer did not exercise login**. We got lucky; a reviewer who tested
+login would have rejected the build, and we'd have had no idea our notes were describing a code path
+that wasn't deployed. Lesson: when review notes assert a credential/bypass, a pre-submit check must
+confirm that exact path is live on prod. Nobody caught the divergence.
+
+**(b) The fix (now on `feature/measured-at`).** Ported the bypass into the current `auth.controller.js`
+with an **env-var gate** instead of a hardcoded id:
+- `appleReviewUserId()` reads `process.env.APPLE_REVIEW_USER_ID`; unset / empty / `0` / non-numeric ⇒
+  `null` ⇒ **bypass fully OFF**. An auth bypass must never default on. Verified for all those inputs.
+- `login()` skips the OTP send for that id and returns the normal "show OTP screen" response;
+  `verifyOtpController()` accepts `APPLE_REVIEW_OTP` (default `624019`, env-overridable) for that id.
+  Gated by immutable numeric id, never email.
+- **Audited every fire** (`ACTIONS.APPLE_REVIEW_BYPASS`): `login_send_skipped`, `otp_bypass_accepted`,
+  and — the guardrail — `review_code_on_non_review_account` (warning) if the fixed code is presented on
+  any other account.
+- **DANGER — the id is environment-specific.** On prod, id 44 = `applereview` (PHI-free, isolated org).
+  In OTHER environments the same id is a different account (locally id 44 is a **super-admin**), so
+  setting `APPLE_REVIEW_USER_ID` there would hand that account out for the fixed code. Set it **only**
+  in prod's `.env`, only after confirming the id maps to the review patient. Rotate `APPLE_REVIEW_OTP`
+  (env) + the account password if the review credentials ever leak; blast radius is one fake PHI-free
+  account.
+- **Prereq to actually work on prod:** `APPLE_REVIEW_USER_ID=44` in prod `.env`, backend redeployed,
+  AND user 44 must exist as the isolated review patient WITH sample readings (see the deploy check).

@@ -24,6 +24,9 @@ const ACTIONS = {
   OTP_SENT: "auth.otp_sent",
   OTP_VERIFIED: "auth.otp_verified",
   DEVICE_TRUSTED: "auth.device_trusted",
+  // Apple App Review OTP bypass fired (or the fixed review code was used on some other
+  // account). Every occurrence is recorded so this path is never invisible.
+  APPLE_REVIEW_BYPASS: "auth.apple_review_bypass",
 
   // PHI access — the ones 164.312(b) is actually about
   PATIENT_VIEW: "patient.view",
