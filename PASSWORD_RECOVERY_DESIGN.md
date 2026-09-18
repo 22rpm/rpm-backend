@@ -141,10 +141,12 @@ Prereq: Twilio BAA (asserted in place from the SMS work) — recovery reuses the
 - **iOS (`rpm-ios-app/Login.js`, commit 9b581dd):** "Forgot password?" link → two-step modal →
   `.../request` (generic/anti-enumeration, always advances) → enter code + new password (min 8) →
   `.../confirm` → success prompts sign-in. Mirrors the OTP modal.
-- **Android — still TODO** (`22-rpm-android-app`, thin port of the same flow). Until it ships, an
-  Android patient who gets a code still has nowhere to enter it — so PR-3 isn't fully closed until
-  Android lands. **IMPORTANT: PR-3 was reclassified BLOCKING, not "next"** — sending a code (PR-1/PR-2)
-  with no entry point is a half-built feature that misleads staff into thinking reset works.
+- **Android BUILT (2026-09-17)** — `22-rpm-android-app` `Login.js`, commit 8ca21a8 on the stack tip
+  `fix/login-phone-label` (it edits the same Login.js that branch changes, so it rides with the
+  Android stack — no fork). Same two-step flow; uses `AUTH_BASE` from the centralized apiConfig.
+  **IMPORTANT: PR-3 was reclassified BLOCKING, not "next"** — sending a code (PR-1/PR-2) with no entry
+  point is a half-built feature that misleads staff into thinking reset works. Both platforms now have
+  the entry point (each reaches patients only via a new app build, not a server pull).
 
 **Order:** PR-1 → PR-2 (ship) → PR-3 (ship). Decoy removal already done.
 
@@ -166,8 +168,9 @@ prod query in §"No email".)
 - **2026-09-17 — PR-1 + PR-2 BUILT** (SMS-primary).
 - **2026-09-17 — PR-3 reclassified BLOCKING** (was "next"): PR-1/PR-2 send a code with nowhere to enter
   it — confirmed there is NO reset-entry anywhere (not the dashboard: staff-facing, send-only; not the
-  apps until this). **iOS PR-3 BUILT** (`Login.js`); **Android PR-3 still TODO** — feature not fully
-  closed until Android ships. Login no-email bug remains a separate higher-priority track.
+  apps until this). **iOS + Android PR-3 BUILT** (`Login.js` on each; Android on stack tip
+  `fix/login-phone-label` 8ca21a8). Reset entry now exists on both platforms — reaches patients only
+  via a new app build. Login no-email bug remains a separate higher-priority track.
 
 ## Open questions
 1. Email as a secondary recovery channel at all, or SMS-only for simplicity?
