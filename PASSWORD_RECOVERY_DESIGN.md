@@ -17,9 +17,13 @@ gap the other doesn't. **Order:**
    enter identifier → receive SMS code → set new password. Reuses the same verify/set endpoints; adds
    UI in **both** apps + anti-enumeration.
 
-**Channel: SMS to the phone on file is primary.** It works for every patient including those with no
-email; email recovery is at best a secondary for patients who have and prefer it. (See "no email"
-below — email is not a reliable channel for this panel.)
+**Channel (DECIDED 2026-09-17): SMS to the phone on file is primary; EMAIL is the fallback; if
+neither is on file, a LOUD failure that tells staff a manual reset is required — never a silent
+nothing.** SMS is the channel an elderly panel actually uses, and new enrollees won't all have email.
+But the email fallback is **not optional**: prod today is 21 patients / 0 no-email / **11 no-phone**,
+so until those 11 phone numbers are entered, email is the ONLY channel that reaches them — the
+fallback has to work from day one. (A patient who replied STOP can't receive SMS regardless, so an
+opted-out patient also falls through to email.)
 
 ## Which is smaller, and why not both
 - **Option 2 is the smaller build:** the patient list already exists in the dashboard; the only new
@@ -46,13 +50,16 @@ below — email is not a reliable channel for this panel.)
   (`PUT /api/admin/users/:id`), then reading it to the patient by phone. Admin-only (not clinicians),
   manual, unnotified, and the staff member handles the plaintext credential.
 
-## "No email" patients — SMS is the only channel that works
-Login OTP channel is chosen by the identifier used (`auth.controller.js:255-355`): phone → SMS OTP;
-email/username → **email** OTP. So a patient with no email:
-- can only log in via **phone → SMS OTP**; logging in by username emails the OTP to a non-existent
-  address and **fails** (adjacent bug worth its own fix — username login assumes an email exists).
-- must therefore recover via **SMS**. This is the reason SMS-to-phone-on-file is the primary recovery
-  channel, not a preference.
+## Channel populations (why both SMS and email must work)
+Prod: 21 patients / 0 no-email / 11 no-phone. So today **email reaches everyone and SMS reaches the
+~10 with a phone**; as phones are entered and new (possibly no-email) patients enrol, SMS becomes the
+one most will use. Recovery therefore tries **SMS first, email second**. The group to watch is
+**neither on file** — they can receive no code and always need a manual reset (open question #4).
+
+Adjacent (separate) issue in LOGIN (not recovery): login's OTP channel is picked by the identifier
+(`auth.controller.js:255-355`) — phone → SMS, email/username → email. A no-email patient logging in by
+**username** gets the OTP emailed to a non-existent address and **fails silently**. Tracked as its own
+higher-priority bug below.
 
 **Count the affected patients (run on PROD — `mysql -u root -proot -h 127.0.0.1 rpm_db`; the local dev
 DB is not representative):**
@@ -109,21 +116,26 @@ Reuse what exists — do NOT build a parallel OTP system:
 ## Build checklist (ordered)
 Prereq: Twilio BAA (asserted in place from the SMS work) — recovery reuses the same SMS channel.
 
-**PR-1 — Backend reset primitive.** *[blocks PR-2, PR-3]*
-- `POST /api/auth/password-reset/request`: look up user; issue a 6-digit code via
-  `otp.service.createOtp(user.id, code, "reset")` + `twilioService.sendSMS(phoneOnFile, code)`; ~10-min
-  expiry, single-use. Sends ONLY to the contact on file. Self-service response is anti-enumeration
-  ("if an account matches, we sent a code"); the staff path (PR-2) may be explicit.
-- `POST /api/auth/password-reset/confirm`: `verifyOtp(user.id, code, "reset")` → set new password
-  (min length, bcrypt) → consume code → (decide PR-1a) invalidate sessions/device-trust.
-- Rate-limit per account/number; audit request + completion (actor). Remove/replace the broken
-  `/org/admins/:id/reset-password` here.
+**PR-1 — Backend reset primitive. BUILT (2026-09-17).** *[blocks PR-2, PR-3]*
+- `services/passwordReset.service.js` — `otp_type="password_reset"`, 6-digit, 15-min expiry,
+  single-use (via `otp.service`). Channel order per row: **SMS (`twillio.service.sendSMS`) if a valid
+  phone is on file AND not opted-out → EMAIL (`mail.sendPasswordResetEmail`) fallback → `no_contact`
+  loud failure**. One code, whichever channel delivers it; SMS-send failure also falls through to
+  email. Request rate-limit 3/15min (DB-backed via otp_tokens); confirm attempt-limit 8/15min
+  (in-memory); audited (`ACTIONS.PASSWORD_RESET`, metadata records the actual channel).
+- `POST /api/auth/password-reset/request` (public, anti-enumeration, channel-agnostic message) and
+  `/confirm` (verify → bcrypt set → consume; generic failure; min 8-char). `controllers/passwordReset.controller.js`,
+  routes in `auth.routes.js`. Verified locally: SMS→email fallback, single-use, wrong/weak/reuse
+  rejected, password set correctly.
+- STILL OPEN: PR-1a (invalidate sessions/device-trust on reset) — deferred, open question #2. The
+  broken `/org/admins/:id/reset-password` is now superseded; remove it in a follow-up.
 
-**PR-2 — Dashboard patient-row reset button (ADMIN-ONLY). Ships first.** *[depends: PR-1]*
-- A real "Send password reset" action on the patient row → calls `.../request` server-side so the
-  patient gets the SMS code; staff never sees/handles the credential. Gate `requireRole(...ADMIN_ROLES)`
-  + `scopePatientParam`. This is the real replacement for the removed decoy. Smallest increment on
-  PR-1; removes the founder as the sole reset path.
+**PR-2 — Dashboard patient-row reset button (ADMIN-ONLY). BUILT (2026-09-17).** *[depends: PR-1]*
+- "Send password reset" action on the user row (`AdminLayout.jsx` UsersManagementView) → confirm →
+  `POST /api/admin/users/:userId/send-password-reset` → the patient gets the code (SMS→email); staff
+  never see or set it. Gate `requireRole(...ADMIN_ROLES) + resolveOrgScope + scopePatientParam`
+  (`admin.routes.js`, `passwordReset.controller.adminSendReset`). Surfaces the channel-aware result and
+  the explicit "no phone or email — manual reset required" failure. Replaces the removed decoy.
 
 **PR-3 — In-app "Forgot password?" (iOS + Android). Scales to zero-touch.** *[depends: PR-1]*
 - Login-screen link → enter identifier → `.../request` (SMS to phone on file) → enter code + new
@@ -141,9 +153,13 @@ prod query in §"No email".)
 ## Decisions of record
 - **2026-09-17 — Dashboard reset stays ADMIN-ONLY** (not widened to all staff). Account-takeover blast
   radius; bottleneck not yet real. Revisit when the team grows.
-- **2026-09-17 — Do both options** (dashboard button + in-app), on one shared SMS primitive; SMS to
-  phone-on-file is the primary channel.
+- **2026-09-17 — Do both options** (dashboard button + in-app), on one shared primitive.
+- **2026-09-17 — Channel order: SMS to phone-on-file → EMAIL fallback → loud "manual reset" failure if
+  neither.** Corrected from an interim email-primary call once the panel reality was clear (elderly →
+  phone; but 11 current patients have no phone, so email fallback is mandatory day one, not later).
 - **2026-09-17 — Decoy reset buttons removed immediately** (ahead of the build).
+- **2026-09-17 — PR-1 + PR-2 BUILT** (SMS-primary). PR-3 (in-app) next; login no-email bug is a
+  separate higher-priority track.
 
 ## Open questions
 1. Email as a secondary recovery channel at all, or SMS-only for simplicity?

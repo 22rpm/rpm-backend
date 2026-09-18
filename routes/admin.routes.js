@@ -11,6 +11,7 @@ const {
   digestStatus,
   setDigestPref,
 } = require("../controllers/admin.controller");
+const { adminSendReset } = require("../controllers/passwordReset.controller");
 const { authRequired, requireRole } = require("../middleware/auth");
 const { ADMIN_ROLES, ADMIN_OR_CLINICIAN } = require("../config/roles");
 const { resolveOrgScope, scopePatientParam } = require("../middleware/orgScope");
@@ -56,6 +57,19 @@ router.put(
   resolveOrgScope,
   scopePatientParam("userId"),
   updateUser
+);
+
+// Admin-initiated password reset (PASSWORD_RECOVERY_DESIGN.md PR-2): emails a reset code to the
+// patient's on-file address so the patient sets their own password — staff never see or set it.
+// ADMIN-ONLY by decision (account-takeover blast radius; not widened to all staff yet), org-scoped
+// to the target like the other user-mutation routes. Replaces the removed decoy "Reset Password".
+router.post(
+  "/users/:userId/send-password-reset",
+  authRequired,
+  requireRole(...ADMIN_ROLES),
+  resolveOrgScope,
+  scopePatientParam("userId"),
+  adminSendReset
 );
 
 // Toggle user status (admin-only)
