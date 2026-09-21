@@ -19,8 +19,8 @@ agreement, not just "we have a Twilio account." Proceeding on the owner's assert
 
 **Phase 0 (post-BAA) reduces to two owner decisions** — both made below, not waiting on Cleo:
 (1) notification-only vs limited-content → **DECIDED: notification-only default, free-text as a
-consented exception** (§Q4, §Decisions); (2) the `sms_clinical_consent` wording → **DRAFT below,
-pending owner sign-off before it ships** (§Consent wording).
+consented exception** (§Q4, §Decisions); (2) the `sms_clinical_consent` wording → **APPROVED by owner
+2026-09-21 — no longer pending** (§Consent wording).
 
 **Goal (user's words):** a clinician logs into the dashboard, texts a patient directly, and has a
 two-way conversation over SMS.
@@ -44,9 +44,15 @@ one. Concretely:
 4. **Keep the single clinic Twilio number**, but make every thread a **care-team-shared** thread with
    **per-message clinician attribution** (who sent it) stamped both in the DB and in the SMS body
    ("Dr. Chen, Quantix Health: …"). Per-clinician numbers are the wrong default at ~13 patients.
-5. **Merge/land `fix/messages-e2e` FIRST** and build SMS on top of its inbox — don't fork a parallel
-   inbox. (Today that branch's clinician inbox + unread badge are unmerged; SMS two-way without it
-   would create the exact second-silo problem in Q5.)
+5. **~~Merge/land `fix/messages-e2e` FIRST~~ — SUPERSEDED 2026-09-21. Do NOT merge it; build on
+   mainline.** When this was written the inbox primitives were assumed to live only on that branch.
+   They don't: `feature/measured-at` already has the `messages` table, `messageService`,
+   `/api/messages/*`, `getUserConversations` (unread counts), `getCliniciansByPatient` (org-scoped),
+   and a working dashboard chat UI (`PatientCommunication.jsx` → `ChatInterface`). Meanwhile
+   `fix/messages-e2e` branched 2026-08-27 and is now ~18,359 lines behind — merging it would DELETE
+   the RPM-note PDF, billing, and password-reset work. Its only unique asset (the debounced
+   notify-physician logic) is used as read-only reference and rewritten for the daily cadence here.
+   **Plan: build Phase 1 on mainline, then delete the branch.** See §"Phase 1 — CONCRETE BUILD SPEC".
 
 Rationale for each below.
 
@@ -358,9 +364,10 @@ SMS (that's Phase 2). The gate items below are **ship-blocking**, not polish: me
 patients can message and expect a reply, so "surfaced + monitored" is the whole point.
 
 **Prerequisites (no code; must be true before Phase 1 ships):**
-- **PRE-1 [gate item 4] — named inbox owner exists.** Create **Kinza as `care_manager`** (Admin →
-  Users), and record the coverage & escalation statement (done, §Coverage & escalation). Without a
-  named human accountable for reading the inbox, do not ship — go/no-go.
+- **PRE-1 [gate item 4] — named inbox owner exists. ✅ MET (2026-09-21).** Kinza's account exists:
+  **user id 47, role `care_manager`, organization 2, active.** She is the named, accountable inbox
+  owner; the coverage & escalation statement (§Coverage & escalation) stands. Gate item 4 is
+  satisfied — go on this axis.
 - **PRE-2 — Twilio BAA confirmed** (asserted; verify the executed agreement). Not code.
 
 **Tickets:**
@@ -411,10 +418,13 @@ patients can message and expect a reply, so "surfaced + monitored" is the whole 
 indicator + PHI warning + sensitive-category soft-warn, and the **SUD/Part 2 per-patient
 hard-disable**. Those ride on the outbound path, which Phase 1 doesn't build.
 
-## Consent wording — `sms_clinical_consent` (DRAFT — owner sign-off required before it ships)
-Patient-facing risk acknowledgment obtained before any free-text clinical SMS. **Not yet approved —
-do not put in front of a patient until the owner signs off.** Plain language, ~8th-grade reading
-level. `[Clinic]` = the practice name shown to the patient (e.g. "Quantix Health").
+## Consent wording — `sms_clinical_consent` (APPROVED 2026-09-21 by owner — no longer pending)
+Patient-facing risk acknowledgment obtained before any free-text clinical SMS. **APPROVED for use
+2026-09-21 by the owner (Ricky), self-signed because the Cleo/Kinza review queue never engaged (see
+header). This is the version below — coverage window filled (Mon–Fri 9am–5pm Pacific) and STOP
+clarified.** Phase 2 is no longer blocked on a reviewer. Plain language, ~8th-grade reading level.
+`[Clinic]` = the practice name shown to the patient (e.g. "Quantix Health"). Store the wording
+`_version` on each patient's consent so a later change is distinguishable from what they agreed to.
 
 > **Texting about your care — please read before you agree**
 >
@@ -534,8 +544,10 @@ header). Each is revisitable if the reviewers engage.
 - **2026-09-16 — Clinicians screen can't create `care_manager` (hardcodes `clinician`) — logged as a
   followup** (rpm-dashboard FRONTEND_FOLLOWUPS.md #4): that screen should manage clinical staff
   generally. Meanwhile create care_managers via Admin → Users.
-- **[PENDING owner sign-off] — `sms_clinical_consent` wording** (DRAFT above; coverage window now
-  filled).
+- **2026-09-21 — `sms_clinical_consent` wording APPROVED by owner (self-signed).** Was
+  [PENDING]; the owner signed off the version in §Consent wording (Mon–Fri 9–5 PT window filled, STOP
+  clarified) because the Cleo/Kinza queue never engaged. Phase 2's outbound free-text SMS is no longer
+  gated on a reviewer. Wording `_version` is captured per patient on consent.
 - **2026-09-16 — Sensitive-category policy: narrowed + warn, with a SUD hard-disable.** (§Sensitive
   categories.) Do-not-text content narrowed to SUD, behavioral health, pregnancy, HIV (rest cut as
   noise for this panel); safety-escalation triggers (SI, IPV, acute emergency) split into their own
@@ -555,3 +567,110 @@ unanswered items fall to the owner (§Decisions of record).
    not block, SUD patient-level hard-disable — §Sensitive categories. Confirm if you engage.)*
 4. Retention/e-discovery: SMS content now lives in `messages` + `notification_log` — retention policy?
 5. Minor/proxy patients: who consents, who may text.
+
+---
+
+# Phase 1 — CONCRETE BUILD SPEC (2026-09-21) — supersedes the fix/messages-e2e-based Phase 1 plan above
+
+Owner approved the build 2026-09-21 with four decisions (below). This section is the plan of record;
+the earlier `fix/messages-e2e`-based P1-1..P1-7 checklist is retained for history but **not the plan**
+(that branch is not being merged — Recommendation #5, revised).
+
+## Trigger (why now, in one line)
+A patient replied **4 times on Sept 17 and nobody saw it for 4 days.** Phase 1 exists to make an
+inbound patient message — SMS **or** in-app — impossible to miss: it lands in one shared inbox, raises
+a shared unread badge, and pushes a no-PHI email to the care team the first time each day.
+
+## Decisions of record — 2026-09-21 (owner)
+- **D1 — One inbox.** Rename the existing dashboard tab **"Patient Communication" → "Messages"** and
+  **extend** its `ChatInterface` (`rpm-dashboard-v1.0/src/pages/PatientCommunication.jsx`) into the
+  care-team-shared inbox. Do NOT add a second messaging tab (that would reintroduce the Alerts-vs-
+  Messages confusion this design avoids). "Alerts" stays BP-reading alerts; "Messages" is patient
+  conversations.
+- **D2 — Email on BOTH channels.** The no-PHI inbound-alert email fires for **SMS inbound AND in-app
+  inbound**, keyed off the single unified `messages`-row insert (one code path covers both). An unseen
+  in-app message fails exactly like the Sept-17 SMS miss.
+- **D3 — Super-admin scope.** The **Messages tab is org-scoped** (the currently-selected clinic via
+  `?organizationId`, consistent with every other screen). The **email reaches the owner (super-admin)
+  for every org**, so the last-resort backstop is never blind. A true cross-org aggregate view is a
+  future additive endpoint, not built now (one live org today).
+- **D4 — Ship Phase 1 first**, then Phase 2 (outbound free-text SMS). **Delete `fix/messages-e2e`
+  once Phase 1 lands.**
+- **Gate item 4 MET** — Kinza = **user 47, `care_manager`, org 2, active** (§PRE-1).
+- **Consent wording APPROVED** — owner self-signed 2026-09-21 (§Consent wording); Phase 2 unblocked.
+
+## The core model decision — patient-keyed, care-team-shared conversation
+The existing `messages` table is a **1:1 user↔user DM** (`sender_id`,`receiver_id`,`is_read` per
+receiver). That cannot express "read for the whole team" (D-req #5) or "the whole care team sees every
+patient's thread." So:
+- Add **`messages.patient_id`** = the conversation key (the patient party; set at insert, one-time
+  backfill of existing rows). The "conversation" is all rows for a `patient_id`, not a sender/receiver
+  pair.
+- **Shared read = repurpose `is_read` on inbound rows.** An inbound row (`sender_id` = the patient) has
+  `is_read` meaning **the care team has read it** — cleared for EVERYONE when any staff member opens
+  the patient's thread (keyed to `patient_id`, not the viewer). `read_at`/`read_by` audit who cleared
+  it. Outbound rows keep `is_read` = "the patient read it" (for the mobile app) — no conflict.
+- The mobile app's existing `/api/messages/*` (send, `/conversations`, `/conversation/:userId`) is
+  **untouched** — the new staff endpoints are additive and the schema deltas are nullable/defaulted.
+
+## Data model deltas (one migration, `config/migrations/`; mysqldump prod first — no backups)
+- `messages`: **+`patient_id`** INT UNSIGNED NULL FK users (indexed); **+`channel`**
+  ENUM('in_app','sms') DEFAULT 'in_app'; **+`notification_log_id`** BIGINT NULL FK notification_log;
+  **+`read_at`** TIMESTAMP NULL; **+`read_by`** INT UNSIGNED NULL FK users. Backfill `patient_id` =
+  whichever of sender/receiver has role `patient`.
+- `notification_log`: **+`message_id`** BIGINT NULL FK messages (back-reference to the human row).
+- `patient_comm_prefs`: **+`sms_clinical_consent`** BOOL DEFAULT false, **+`_at`**, **+`_by`** FK users,
+  **+`_version`** VARCHAR. (Phase 2 uses these; column added in Phase 1's migration so it's one change.)
+- **new `message_notify_log`**: (`id`, `patient_id` FK, `notified_on` DATE, `created_at`),
+  **UNIQUE(`patient_id`,`notified_on`)** — the daily-cadence dedupe key.
+
+## Backend tickets (rpm-backend, feature/measured-at)
+- **B1 — Migration** (schema deltas + backfill) as above.
+- **B2 — `saveMessage` sets `patient_id` + `channel`** (compute the patient party). Additive; mobile
+  send path keeps working.
+- **B3 — Staff inbox service + endpoints** (role+org scoped; clinician → assigned patients,
+  care_manager/admin/super-admin → org via `resolveOrgScope`; access re-checked with `patientAccess`):
+  - `GET /api/messages/inbox` — patients in scope, last-message snippet + time + channel + **shared
+    unread count**, **unread sorted to top**.
+  - `GET /api/messages/unread-count` — total shared inbound unread in scope (nav badge).
+  - `GET /api/messages/thread/:patientId` — unified in-app+SMS thread; **marks inbound read (shared)**
+    + writes `read_at`/`read_by` + audit (`ACTIONS`).
+  - Reply in Phase 1 uses the **in-app** channel via the existing `POST /api/messages/send`
+    (sender = staff, receiver = patient; now also stamps `patient_id`/`channel='in_app'`). Outbound
+    **free-text SMS** is Phase 2 (gated on `sms_clinical_consent`).
+- **B4 — Inbound webhook writes a `messages` row.** In `recordInboundReply`
+  (`controllers/notification.controller.js` → `services/notification.service.js`), in addition to the
+  existing `notification_log` inbound row, insert a `messages` row (`channel='sms'`,
+  `sender_id`=patient, `patient_id`=patient, `is_read=false`) and set `notification_log.message_id`.
+  This is what surfaces an SMS reply in the thread + badge (the Sept-17 fix).
+- **B5 — No-PHI email fanout + daily cadence.** On the unified `messages`-row insert for an **inbound**
+  message (both channels — D2), fan out a no-PHI email to **assigned clinician(s) + org
+  care_managers + org admins + all super-admins**. Body: *"You have a new message from a patient in
+  [org name]. Log in to view: [link to Messages]."* — no name, no content, no number (copy the
+  `sendDigestEmail` no-PHI pattern, nodemailer/Gmail). **Cadence:** `INSERT … ON DUPLICATE KEY` into
+  `message_notify_log(patient_id, notified_on)` with `notified_on` in **America/Los_Angeles** (matches
+  the coverage clock); send only when the row is newly inserted (first inbound that Pacific day),
+  skip otherwise. Fire-and-forget — never blocks/fails the inbound handler or the send.
+
+## Dashboard tickets (rpm-dashboard-v1.0, feature/…)
+- **D-1 — Rename tab → "Messages"** (`Sidebar.jsx` label; keep internal id/route to avoid churn in
+  `fetchInterceptor` regexes) and **gate visibility** to `clinician, care_manager, admin, super-admin`
+  (the existing biller-filter pattern).
+- **D-2 — Extend `ChatInterface` into the shared inbox:** source the conversations list from
+  **`/api/messages/inbox`** (all patients in scope) instead of `/conversations` (only my DMs); render
+  the thread via `/api/messages/thread/:patientId`; keep the reply box posting to `/api/messages/send`
+  (in-app, Phase 1).
+- **D-3 — Unread badge** on the sidebar "Messages" item from `/api/messages/unread-count` (reuse the
+  `Navbar` bell-badge markup). Add any new patient-scoped `/api/messages/*` route to the
+  `fetchInterceptor` clinical regexes so super-admin org-scoping (`?organizationId`) is appended.
+
+## What Phase 1 deliberately does NOT include (→ Phase 2)
+Outbound **free-text SMS** (`sendClinicalMessage`), the `sms_clinical_consent` capture UI, the compose
+box's notification-only-vs-free-text mode + PHI warning + sensitive-term soft-warn, and the SUD/Part-2
+per-patient hard-disable. Phase 1's reply box is **in-app only** — so it ships without putting the
+(now-approved) consent wording in front of a patient. Phase 1 alone closes the "nobody saw it" gap.
+
+## Ship go/no-go for Phase 1
+Gate item 4 (named owner) ✅ MET (Kinza, user 47). Coverage window, escalation chain, and auto-ack
+(P1-7 / gate item 5) still apply operationally — the auto-acknowledgement on inbound is recommended
+alongside this. Twilio BAA remains owner-asserted (verify the executed agreement).
