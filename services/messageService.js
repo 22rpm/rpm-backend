@@ -1,8 +1,60 @@
 // services/messageService.js
 const db = require("../config/knex");
-const { isOrgWide } = require("./patientAccess");
+const { isOrgWide, canAccessPatient } = require("./patientAccess");
 
 class MessageService {
+  // Look up a user's role + org in one place (used by the send access gate).
+  // One role per user in this model; take the first if somehow multiple.
+  async getUserRoleOrg(userId) {
+    const user = await db("users")
+      .select("organization_id")
+      .where("id", userId)
+      .first();
+    if (!user) return null;
+    const roleRow = await db("role")
+      .select("role_type")
+      .where("user_id", userId)
+      .first();
+    return {
+      organization_id: user.organization_id,
+      role_type: roleRow?.role_type || null,
+    };
+  }
+
+  // ACCESS GATE for POST /api/messages/send. Previously the endpoint was only
+  // authRequired — ANY authenticated user could POST to ANY receiverId, including
+  // a patient messaging another patient. Every message is patient<->staff; enforce
+  // that, by direction:
+  //   - sender is a PATIENT  -> may only message a clinician on their OWN care team
+  //     (getCliniciansByPatient is org-bounded; this blocks patient->patient and
+  //     cross-org).
+  //   - sender is STAFF      -> receiver must be a PATIENT the sender may access:
+  //       super-admin  -> any patient (global);
+  //       admin/care_manager -> a patient in the sender's org;
+  //       clinician    -> a patient ASSIGNED to them (all via canAccessPatient).
+  //   - staff->staff / patient->patient / patient->non-clinician -> denied.
+  async canSend(sender, receiverId) {
+    const senderRole = sender?.role_type || sender?.role || null;
+    if (!senderRole || !receiverId) return false;
+
+    const recv = await this.getUserRoleOrg(receiverId);
+    if (!recv) return false;
+
+    if (senderRole === "patient") {
+      if (recv.role_type !== "clinician") return false;
+      const clinicians = await this.getCliniciansByPatient(sender.id);
+      return clinicians.some((c) => Number(c.id) === Number(receiverId));
+    }
+
+    // Staff sender: the receiver must be a patient.
+    if (recv.role_type !== "patient") return false;
+    if (senderRole === "super-admin") return true; // global access
+
+    const orgScope = sender.org_id ?? sender.organization_id ?? null;
+    if (orgScope == null) return false;
+    return canAccessPatient(sender, orgScope, receiverId);
+  }
+
   // saveMessage now stamps the patient-keyed conversation fields (patient_id, channel)
   // so an in-app message joins the same shared thread the Messages inbox reads
   // (CLINICIAN_SMS_DESIGN.md Phase 1). Backward compatible: the mobile app calls it

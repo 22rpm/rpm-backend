@@ -16,7 +16,8 @@
 
 const db = require("../config/db");
 const twilio = require("./twillio.service");
-const { TYPES } = require("../config/notifications");
+const { TYPES, AUTO_ACK_BODY } = require("../config/notifications");
+const { pacificDay } = require("./messageNotify.service");
 
 const PUBLIC_BASE_URL =
   process.env.PUBLIC_BASE_URL || process.env.APP_BASE_URL || null;
@@ -206,7 +207,92 @@ async function recordInboundReply({ patientId, organizationId, from, body }) {
     .notifyInboundMessage({ patientId, organizationId: organizationId ?? null })
     .catch(() => {});
 
+  // Auto-acknowledge the patient (P1-7): once per Pacific day, no PHI, sets the
+  // reply-window expectation + the 911 emergency backstop. Fire-and-forget.
+  maybeSendAutoAck({ patientId }).catch(() => {});
+
   return logId;
+}
+
+// Send a one-per-day no-PHI auto-acknowledgement to a patient who texted the clinic
+// (CLINICIAN_SMS_DESIGN P1-7 / gate item 5). This is the safety net for the window
+// between "patient sent" and "a human read it": it tells them when to expect a reply
+// and to call 911 in an emergency.
+//
+// message_autoack_log UNIQUE(patient_id, acked_on) is the once-per-day lock. We
+// respect the STOP kill switch (opted_out) but deliberately do NOT gate on
+// sms_consent — this is a transactional reply to an inbound text, not an automated
+// reminder (same rationale as the existing HELP auto-reply).
+async function maybeSendAutoAck({ patientId }) {
+  try {
+    if (!patientId) return;
+    const day = pacificDay();
+
+    // Claim today's slot — the UNIQUE index is the concurrency lock.
+    try {
+      await db.query(
+        "INSERT INTO message_autoack_log (patient_id, acked_on) VALUES (?, ?)",
+        [patientId, day]
+      );
+    } catch (e) {
+      if (e && (e.code === "ER_DUP_ENTRY" || e.errno === 1062)) return;
+      throw e;
+    }
+
+    const releaseSlot = () =>
+      db
+        .query(
+          "DELETE FROM message_autoack_log WHERE patient_id = ? AND acked_on = ?",
+          [patientId, day]
+        )
+        .catch(() => {});
+
+    const prefs = await getPrefs(patientId);
+    const ctx = await loadSendContext(patientId);
+    const to =
+      ctx && ctx.phoneNumber ? twilio.formatPhoneNumber(ctx.phoneNumber) : null;
+
+    // Opted out (STOP) or unreachable → don't send; release the slot so a later
+    // inbound can retry if the situation changes (e.g. START).
+    if (!ctx || !to || (prefs && prefs.opted_out)) {
+      await releaseSlot();
+      return;
+    }
+
+    const body = AUTO_ACK_BODY({ clinicName: ctx.clinic_name });
+    const statusCallback = PUBLIC_BASE_URL
+      ? `${PUBLIC_BASE_URL.replace(/\/$/, "")}/api/notifications/sms-status`
+      : undefined;
+    const result = await twilio.sendSMS(
+      to,
+      body,
+      statusCallback ? { statusCallback } : {}
+    );
+
+    await insertLog({
+      patient_id: patientId,
+      organization_id: ctx.organization_id ?? null,
+      type: "auto_ack",
+      direction: "outbound",
+      to_number: to,
+      body,
+      twilio_sid: result.messageId ?? null,
+      status: result.success ? "sent" : "failed",
+      error_code: result.code ? String(result.code) : null,
+      error_message: result.success ? null : result.error || null,
+      sent_at: result.success ? new Date() : null,
+    });
+
+    if (!result.success) {
+      // Carrier-level STOP surfaced on send — self-heal our opt-out record (rule #1).
+      if (result.code === 21610) {
+        await setOptOut({ patientId, source: "twilio_21610" });
+      }
+      await releaseSlot();
+    }
+  } catch (err) {
+    console.error("maybeSendAutoAck error:", err.message);
+  }
 }
 
 // Mark every unacknowledged inbound reply for a patient as seen (clears the

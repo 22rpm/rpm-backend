@@ -52,11 +52,24 @@ class MessageController {
     try {
       const { receiverId, message } = req.body;
       const senderId = req.user.id; // From JWT middleware
-      console.log("sendMessage called with:", {
-        senderId,
-        receiverId,
-        message,
-      });
+
+      if (!receiverId || !message || !String(message).trim()) {
+        return res.status(400).json({
+          success: false,
+          message: "receiverId and a non-empty message are required",
+        });
+      }
+
+      // ACCESS GATE — a message is patient<->staff; enforce it by direction so a
+      // patient can't message another patient and staff can't message a patient
+      // outside their scope. (Was only authRequired.)
+      const allowed = await messageService.canSend(req.user, receiverId);
+      if (!allowed) {
+        return res.status(403).json({
+          success: false,
+          message: "You are not permitted to message this recipient",
+        });
+      }
 
       const savedMessage = await messageService.saveMessage(
         senderId,

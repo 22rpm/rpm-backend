@@ -686,8 +686,9 @@ the shared inbox/thread, sidebar unread badge, interceptor regex broadened.
 
 **DEPLOY ORDER (strict — the code reads new columns):**
 1. `mysqldump` prod (`rpm_db` on 50.18.96.20) — no backups exist.
-2. Run the migration (`knex migrate:latest` against prod) — adds columns + `message_notify_log`,
-   backfills `messages.patient_id`.
+2. Run the migrations (`knex migrate:latest` runs BOTH pending: `20260921120000_messages_sms_bridge`
+   and `20260921130000_message_autoack_log`) — adds columns + `message_notify_log` +
+   `message_autoack_log`, backfills `messages.patient_id`.
 3. Deploy backend (`feature/measured-at`).
 4. Deploy dashboard (`feature/vitals-integrated`).
 5. Set `MESSAGES_LOGIN_URL` (optional; falls back to `DIGEST_LOGIN_URL` then the API base) to the
@@ -700,10 +701,25 @@ SMS same day → no second email. (b) Open the thread as one staff member → ba
 (c) As super-admin with no clinic selected → Messages shows the select-a-clinic state (409), badge
 absent.
 
-**Followups (not blocking Phase 1):**
-- **`POST /api/messages/send` has no per-patient access control** (only `authRequired`) — a
-  pre-existing gap the staff reply path now leans on. A clinician could POST a message to any
-  `receiverId`. Phase 2 hardening: gate `send` with `canAccessPatient` when the sender is staff.
+**Access gate — CLOSED IN PHASE 1 (2026-09-21).** `POST /api/messages/send` was only
+`authRequired` — any authenticated user could POST to any `receiverId`, including a patient
+messaging another patient. Now gated by `messageService.canSend(sender, receiverId)` in the
+controller (403 otherwise): a message is patient↔staff, enforced by direction — a **patient** may
+only message a **clinician on their own care team** (via `getCliniciansByPatient`, org-bounded); a
+**staff** sender may only message a **patient they can access** (super-admin → any; admin/care_manager
+→ same org; clinician → assigned) via `canAccessPatient`. Blocks patient→patient, cross-org, and
+staff→staff. This shipped in Phase 1 because the feature is what makes people depend on the endpoint.
+
+**P1-7 auto-acknowledgement — BUILT IN PHASE 1 (2026-09-21).** When a patient texts the clinic, they
+get ONE no-PHI SMS auto-reply per Pacific day (`message_autoack_log` UNIQUE lock, migration
+`20260921130000`): *"Thanks for your message. A team member will reply within one business day
+(Mon–Fri 9–5 Pacific). This line isn't monitored 24/7 — if this is a medical emergency, call 911."*
+(`config/notifications.AUTO_ACK_BODY`, sent from `notification.service.maybeSendAutoAck`, wired into
+the SMS `recordInboundReply` path). Respects the STOP kill switch (`opted_out`); does NOT gate on
+`sms_consent` (a transactional reply to an inbound text, like the existing HELP reply); self-heals
+opt-out on a Twilio 21610. SMS-inbound only (an in-app message is answered in-app).
+
+**Remaining followups (not blocking Phase 1):**
 - **Real-time is polling-based** — `socketServer` message handlers are stubbed (commented out), so
   the badge polls (60s) and the list refreshes on thread open. Live push is a later nicety.
 - **"Start a NEW conversation" tab** still uses `/api/doctor/assigned` (clinician-scoped), so a
@@ -712,5 +728,3 @@ absent.
   Phase 2 outbound).
 - **Unmatched inbound numbers still dropped** (`notification_log.patient_id` NOT NULL) — unchanged;
   the catch-table option remains a separate SECURITY_FOLLOWUPS item.
-- **P1-7 auto-acknowledgement** ("we'll reply within one business day; emergencies call 911") is
-  recommended alongside this and not yet built.

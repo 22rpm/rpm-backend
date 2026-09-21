@@ -55,6 +55,12 @@ const TYPES = {
 const HELP_BODY = ({ clinicName, clinicPhone }) =>
   `${clinicName}: For help, call ${clinicPhone || "your clinic"}. Reply STOP to opt out.`;
 
+// Auto-acknowledgement to a patient who texts the clinic (CLINICIAN_SMS_DESIGN P1-7).
+// NO PHI. Sets the response expectation (the coverage window) and the emergency
+// backstop — the safety net for the gap between "patient sent" and "human read".
+const AUTO_ACK_BODY = ({ clinicName }) =>
+  `${clinicName || "Your care team"}: Thanks for your message. A team member will reply within one business day (Mon-Fri, 9am-5pm Pacific). This line isn't monitored 24/7 — if this is a medical emergency, call 911.`;
+
 const LIVE_TYPES = Object.values(TYPES).filter((t) => t.live).map((t) => t.key);
 
-module.exports = { TYPES, LIVE_TYPES, SEND_WINDOW, HELP_BODY, OPT_OUT };
+module.exports = { TYPES, LIVE_TYPES, SEND_WINDOW, HELP_BODY, AUTO_ACK_BODY, OPT_OUT };
