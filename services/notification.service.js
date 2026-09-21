@@ -140,10 +140,39 @@ async function insertLog(row) {
   return res.insertId;
 }
 
+// Mirror an inbound SMS reply into the patient-keyed `messages` thread so it shows
+// in the Messages inbox and drives the shared unread + email alert. receiver_id is
+// only for the NOT NULL constraint + the mobile 1:1 pairing — the STAFF inbox keys
+// on patient_id, not receiver. Prefer an assigned clinician; fall back to the patient
+// (a harmless self-reference) if the org has no assignment. channel='sms', is_read=0.
+async function insertInboundMessageRow({ patientId, body, notificationLogId }) {
+  let receiverId = patientId;
+  const [rows] = await db.query(
+    `SELECT u.id FROM users u
+       JOIN role r ON r.user_id = u.id AND r.role_type = 'clinician'
+       JOIN patient_doctor_assignments pda ON pda.doctor_id = u.id
+      WHERE pda.patient_id = ? AND u.is_active = 1
+      LIMIT 1`,
+    [patientId]
+  );
+  if (rows[0]) receiverId = rows[0].id;
+  const now = new Date();
+  const [res] = await db.query(
+    `INSERT INTO messages
+       (sender_id, receiver_id, message, patient_id, channel, is_read,
+        notification_log_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'sms', 0, ?, ?, ?)`,
+    [patientId, receiverId, body || "", patientId, notificationLogId, now, now]
+  );
+  return res.insertId;
+}
+
 // Store an inbound patient SMS reply (a non-keyword message — STOP/START/HELP are
 // handled as commands separately). This is what the webhook used to drop.
+// Now ALSO: mirror it into the Messages thread and fire the no-PHI, once-per-day
+// care-team email alert (CLINICIAN_SMS_DESIGN.md Phase 1 — the Sept-17 fix).
 async function recordInboundReply({ patientId, organizationId, from, body }) {
-  return insertLog({
+  const logId = await insertLog({
     patient_id: patientId,
     organization_id: organizationId ?? null,
     type: "reply",
@@ -152,6 +181,32 @@ async function recordInboundReply({ patientId, organizationId, from, body }) {
     body: body || null,
     status: "received",
   });
+
+  // Surface it in the unified Messages thread. Never let a mirror failure break
+  // inbound handling — the notification_log row (the compliance record) is written.
+  try {
+    const messageId = await insertInboundMessageRow({
+      patientId,
+      body: body || "",
+      notificationLogId: logId,
+    });
+    if (messageId) {
+      await db.query("UPDATE notification_log SET message_id = ? WHERE id = ?", [
+        messageId,
+        logId,
+      ]);
+    }
+  } catch (e) {
+    console.error("recordInboundReply: messages mirror failed:", e.message);
+  }
+
+  // No-PHI, once-per-patient-per-day care-team email alert (fire-and-forget).
+  // organizationId is already known here (may be null → super-admins only).
+  require("./messageNotify.service")
+    .notifyInboundMessage({ patientId, organizationId: organizationId ?? null })
+    .catch(() => {});
+
+  return logId;
 }
 
 // Mark every unacknowledged inbound reply for a patient as seen (clears the

@@ -1,8 +1,53 @@
 // controllers/messageController.js
 const messageService = require("../services/messageService");
+const staffMessages = require("../services/staffMessages.service");
 const { getIO } = require("../socket/socketServer");
 
 class MessageController {
+  // ---- STAFF: the care-team-shared Messages inbox (CLINICIAN_SMS_DESIGN Phase 1) ----
+  // All three require the STAFF role gate + resolveOrgScope (see messageRoutes).
+
+  // GET /api/messages/inbox — patient conversations in scope, unread-first.
+  async getInbox(req, res) {
+    try {
+      const rows = await staffMessages.getInbox(req.user, req.orgScope);
+      res.json({ success: true, data: rows });
+    } catch (error) {
+      res.status(500).json({ success: false, message: "Failed to load inbox", error: error.message });
+    }
+  }
+
+  // GET /api/messages/unread-count — shared inbound unread total for the nav badge.
+  async getUnreadCount(req, res) {
+    try {
+      const count = await staffMessages.getUnreadCount(req.user, req.orgScope);
+      res.json({ success: true, data: { unread: count } });
+    } catch (error) {
+      res.status(500).json({ success: false, message: "Failed to load unread count", error: error.message });
+    }
+  }
+
+  // GET /api/messages/thread/:patientId — unified in-app+SMS thread; marks inbound
+  // read for the WHOLE team. Access is re-checked (org boundary + assignment).
+  async getPatientThread(req, res) {
+    try {
+      const patientId = parseInt(req.params.patientId, 10);
+      if (!Number.isInteger(patientId)) {
+        return res.status(400).json({ success: false, message: "Invalid patientId" });
+      }
+      const allowed = await staffMessages.canAccessPatient(req.user, req.orgScope, patientId);
+      if (!allowed) {
+        return res.status(404).json({ success: false, message: "Not found" });
+      }
+      const messages = await staffMessages.getThread(patientId);
+      // Shared mark-read: clears the unread badge for everyone.
+      await staffMessages.markThreadRead(patientId, req.user.id);
+      res.json({ success: true, data: messages });
+    } catch (error) {
+      res.status(500).json({ success: false, message: "Failed to load thread", error: error.message });
+    }
+  }
+
   async sendMessage(req, res) {
     try {
       const { receiverId, message } = req.body;

@@ -63,7 +63,34 @@ async function sendDigestEmail(to, { periodLabel, loginUrl }) {
   });
 }
 
-module.exports = { sendOtpEmail, sendPasswordResetEmail, sendDigestEmail, verifyTransport };
+// Inbound-patient-message alert — NO PHI. No patient name, no message content, no phone number:
+// just "there is a message in <org>, log in to view". This is the whole point — the alert can go
+// to email (an unsecured channel) precisely because it carries nothing sensitive. Throws on
+// failure so the caller (messageNotify.service) can log the miss, never a silent no-send.
+async function sendPatientMessageAlert(to, { orgName, loginUrl }) {
+  const org = orgName || "your clinic";
+  await transporter.sendMail({
+    from: `"TwentyTwo RPM" <${process.env.GMAIL_USER}>`,
+    to,
+    subject: "New patient message",
+    text:
+      `You have a new message from a patient in ${org}. ` +
+      `Log in to view: ${loginUrl}`,
+    html:
+      `<p>You have a new message from a patient in <b>${org}</b>.</p>` +
+      `<p><a href="${loginUrl}">Log in to view</a></p>` +
+      `<p style="color:#667085;font-size:12px">This alert contains no patient details by design. ` +
+      `Sign in to read and reply.</p>`,
+  });
+}
+
+module.exports = {
+  sendOtpEmail,
+  sendPasswordResetEmail,
+  sendDigestEmail,
+  sendPatientMessageAlert,
+  verifyTransport,
+};
 
 // services/mail.service.js
 // const nodemailer = require("nodemailer");

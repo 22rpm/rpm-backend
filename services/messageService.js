@@ -3,20 +3,61 @@ const db = require("../config/knex");
 const { isOrgWide } = require("./patientAccess");
 
 class MessageService {
-  async saveMessage(senderId, receiverId, message) {
+  // saveMessage now stamps the patient-keyed conversation fields (patient_id, channel)
+  // so an in-app message joins the same shared thread the Messages inbox reads
+  // (CLINICIAN_SMS_DESIGN.md Phase 1). Backward compatible: the mobile app calls it
+  // as before (senderId, receiverId, message); opts is optional.
+  //   opts.channel            'in_app' (default) | 'sms'
+  //   opts.patientId          override the resolved patient party (the SMS webhook sets it)
+  //   opts.notificationLogId  link an SMS row to its wire/delivery row
+  async saveMessage(senderId, receiverId, message, opts = {}) {
     try {
+      const channel = opts.channel || "in_app";
+      let patientId =
+        opts.patientId != null
+          ? Number(opts.patientId)
+          : await this._resolvePatientParty(senderId, receiverId);
+
       const [messageId] = await db("messages").insert({
         sender_id: senderId,
         receiver_id: receiverId,
         message: message,
+        patient_id: patientId ?? null,
+        channel,
+        notification_log_id: opts.notificationLogId ?? null,
         created_at: new Date(),
         updated_at: new Date(),
       });
 
-      return await this.getMessageById(messageId);
+      const saved = await this.getMessageById(messageId);
+
+      // Inbound = the PATIENT sent it. Fire the no-PHI, once-per-day care-team alert
+      // (fire-and-forget; never blocks or fails the send). Outbound (staff -> patient)
+      // does not notify. Covers BOTH channels via this single insert path (decision D2).
+      if (patientId != null && Number(senderId) === Number(patientId)) {
+        require("./messageNotify.service")
+          .notifyInboundMessage({ patientId })
+          .catch(() => {});
+      }
+
+      return saved;
     } catch (error) {
       throw error;
     }
+  }
+
+  // The patient party of a message is the conversation key. A message is
+  // patient<->staff, so exactly one side has role 'patient'. Returns its user id
+  // (or null if neither side is a patient — e.g. a staff-to-staff message).
+  async _resolvePatientParty(senderId, receiverId) {
+    const rows = await db("role")
+      .select("user_id")
+      .whereIn("user_id", [senderId, receiverId])
+      .where("role_type", "patient");
+    const ids = new Set(rows.map((r) => Number(r.user_id)));
+    if (ids.has(Number(senderId))) return Number(senderId);
+    if (ids.has(Number(receiverId))) return Number(receiverId);
+    return null;
   }
 
   async getMessageById(messageId) {
