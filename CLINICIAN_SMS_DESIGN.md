@@ -674,3 +674,43 @@ per-patient hard-disable. Phase 1's reply box is **in-app only** — so it ships
 Gate item 4 (named owner) ✅ MET (Kinza, user 47). Coverage window, escalation chain, and auto-ack
 (P1-7 / gate item 5) still apply operationally — the auto-acknowledgement on inbound is recommended
 alongside this. Twilio BAA remains owner-asserted (verify the executed agreement).
+
+## Phase 1 — BUILT 2026-09-21 (commits + deploy + followups)
+**Backend** (`feature/measured-at`): migration `20260921120000_messages_sms_bridge.js`;
+`staffMessages.service.js` + `messageNotify.service.js`; `messageService.saveMessage` stamps
+patient_id/channel + fires the alert on inbound; `notification.service.recordInboundReply` mirrors
+SMS into `messages`; `mail.sendPatientMessageAlert`; endpoints `GET /api/messages/{inbox,
+unread-count,thread/:patientId}` (STAFF + resolveOrgScope).
+**Dashboard** (`feature/vitals-integrated`): tab renamed → Messages, `ChatInterface` retargeted to
+the shared inbox/thread, sidebar unread badge, interceptor regex broadened.
+
+**DEPLOY ORDER (strict — the code reads new columns):**
+1. `mysqldump` prod (`rpm_db` on 50.18.96.20) — no backups exist.
+2. Run the migration (`knex migrate:latest` against prod) — adds columns + `message_notify_log`,
+   backfills `messages.patient_id`.
+3. Deploy backend (`feature/measured-at`).
+4. Deploy dashboard (`feature/vitals-integrated`).
+5. Set `MESSAGES_LOGIN_URL` (optional; falls back to `DIGEST_LOGIN_URL` then the API base) to the
+   dashboard URL so the alert email links somewhere useful.
+6. Then delete `fix/messages-e2e` (decision D4).
+
+**Verify after deploy:** (a) send an SMS from a test patient's phone to the clinic number → it
+appears in the Messages thread, raises the badge, and the care team gets ONE no-PHI email; a second
+SMS same day → no second email. (b) Open the thread as one staff member → badge clears for all.
+(c) As super-admin with no clinic selected → Messages shows the select-a-clinic state (409), badge
+absent.
+
+**Followups (not blocking Phase 1):**
+- **`POST /api/messages/send` has no per-patient access control** (only `authRequired`) — a
+  pre-existing gap the staff reply path now leans on. A clinician could POST a message to any
+  `receiverId`. Phase 2 hardening: gate `send` with `canAccessPatient` when the sender is staff.
+- **Real-time is polling-based** — `socketServer` message handlers are stubbed (commented out), so
+  the badge polls (60s) and the list refreshes on thread open. Live push is a later nicety.
+- **"Start a NEW conversation" tab** still uses `/api/doctor/assigned` (clinician-scoped), so a
+  care_manager/admin sees no patients there to initiate a brand-new thread — they can still REPLY to
+  any inbound. An org-wide patient picker for initiating threads is a follow-up (matters more for
+  Phase 2 outbound).
+- **Unmatched inbound numbers still dropped** (`notification_log.patient_id` NOT NULL) — unchanged;
+  the catch-table option remains a separate SECURITY_FOLLOWUPS item.
+- **P1-7 auto-acknowledgement** ("we'll reply within one business day; emergencies call 911") is
+  recommended alongside this and not yet built.
