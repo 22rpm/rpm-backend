@@ -41,6 +41,8 @@ const ACTIONS = {
   // searchable on its own rather than folded into patient.update.
   PATIENT_ENROLLMENT_CHANGE: "patient.enrollment_change",
   PATIENT_CONSENT_RECORDED: "patient.consent_recorded",
+  // Separate from RPM consent: the clinical-SMS (free-text texting) consent attestation.
+  SMS_CLINICAL_CONSENT_RECORDED: "patient.sms_clinical_consent",
   DOCTOR_CREATE: "doctor.create",
   ADMIN_CREATE: "admin.create",
   USER_DEACTIVATE: "user.deactivate",

@@ -34,6 +34,8 @@ const {
 const {
   getPatientComms,
   setPatientComms,
+  getClinicalSmsConsent,
+  recordClinicalSmsConsent,
   sendNow,
   getPatientNotificationLog,
   acknowledgeInbound,
@@ -188,6 +190,28 @@ router.put(
   resolveOrgScope,
   scopePatientParam("patientId"),
   setPatientComms
+);
+
+// GET/POST /api/patients/:patientId/clinical-sms-consent — the SEPARATE consent for
+// free-text clinical SMS (CLINICIAN_SMS_DESIGN Phase 2), distinct from comm-prefs
+// (reminders) and from RPM consent. GET (view state) is staffRoles. POST (ATTEST) is
+// staffRoles at the route PLUS an actual-clinical-role check in the handler, so a
+// management-only admin/super-admin — which passes staffRoles — still cannot attest.
+router.get(
+  "/:patientId/clinical-sms-consent",
+  authRequired,
+  staffRoles,
+  resolveOrgScope,
+  scopePatientParam("patientId"),
+  getClinicalSmsConsent
+);
+router.post(
+  "/:patientId/clinical-sms-consent",
+  authRequired,
+  staffRoles,
+  resolveOrgScope,
+  scopePatientParam("patientId"),
+  recordClinicalSmsConsent
 );
 
 // GET /api/patients/:patientId/notifications — the patient's notification log

@@ -61,6 +61,20 @@ const HELP_BODY = ({ clinicName, clinicPhone }) =>
 const AUTO_ACK_BODY = ({ clinicName }) =>
   `${clinicName || "Your care team"}: Thanks for your message. A team member will reply within one business day (Mon-Fri, 9am-5pm Pacific). This line isn't monitored 24/7 — if this is a medical emergency, call 911.`;
 
+// Version of the APPROVED sms_clinical_consent wording (CLINICIAN_SMS_DESIGN.md,
+// owner-approved 2026-09-21). Stamped SERVER-SIDE on every consent record — never taken
+// from the client — so a later wording change is distinguishable from what a given
+// patient actually agreed to.
+const SMS_CLINICAL_CONSENT_VERSION = "v1-2026-09-21";
+
 const LIVE_TYPES = Object.values(TYPES).filter((t) => t.live).map((t) => t.key);
 
-module.exports = { TYPES, LIVE_TYPES, SEND_WINDOW, HELP_BODY, AUTO_ACK_BODY, OPT_OUT };
+module.exports = {
+  TYPES,
+  LIVE_TYPES,
+  SEND_WINDOW,
+  HELP_BODY,
+  AUTO_ACK_BODY,
+  OPT_OUT,
+  SMS_CLINICAL_CONSENT_VERSION,
+};

@@ -4,7 +4,8 @@
 // health/failures endpoints, and the per-patient comm prefs + toggles.
 const db = require("../config/db");
 const notif = require("../services/notification.service");
-const { HELP_BODY } = require("../config/notifications");
+const audit = require("../services/audit.service");
+const { HELP_BODY, SMS_CLINICAL_CONSENT_VERSION } = require("../config/notifications");
 
 const STOP_WORDS = new Set(["stop", "stopall", "unsubscribe", "cancel", "end", "quit"]);
 const START_WORDS = new Set(["start", "yes", "unstop"]);
@@ -181,6 +182,77 @@ async function setPatientComms(req, res) {
   }
 }
 
+// GET /api/patients/:patientId/clinical-sms-consent — read the clinical-SMS consent
+// state (separate from reminder sms_consent and from RPM consent). staffRoles may VIEW.
+async function getClinicalSmsConsent(req, res) {
+  try {
+    const patientId = Number(req.params.patientId);
+    const prefs = await notif.getPrefs(patientId);
+    return res.status(200).json({
+      ok: true,
+      sms_clinical_consent: !!(prefs && prefs.sms_clinical_consent),
+      sms_clinical_consent_at: prefs ? prefs.sms_clinical_consent_at : null,
+      sms_clinical_consent_by: prefs ? prefs.sms_clinical_consent_by : null,
+      sms_clinical_consent_version: prefs ? prefs.sms_clinical_consent_version : null,
+      // The wording version a NEW record would be stamped with, for the UI to show.
+      current_version: SMS_CLINICAL_CONSENT_VERSION,
+    });
+  } catch (err) {
+    console.error("getClinicalSmsConsent error:", err.message);
+    return res.status(500).json({ ok: false, message: "Server error" });
+  }
+}
+
+// POST /api/patients/:patientId/clinical-sms-consent — record/revoke the SEPARATE
+// clinical-SMS consent. Body: { consent: bool }. Staff records it on the patient's
+// behalf. ATTESTATION requires an actual clinical role: a management-only admin/
+// super-admin passes the coarse staffRoles route gate but is refused here, so a
+// non-clinician cannot attest. The wording version is stamped server-side; every
+// record is audited (actor + timestamp come from the audit row; version in metadata;
+// no PHI).
+async function recordClinicalSmsConsent(req, res) {
+  try {
+    const patientId = Number(req.params.patientId);
+    const consent = (req.body || {}).consent === true;
+
+    const isClinical = await notif.actorHoldsClinicalRole(req.user.id);
+    if (!isClinical) {
+      return res.status(403).json({
+        ok: false,
+        message:
+          "Recording clinical-SMS consent requires a clinical role (clinician or care manager).",
+      });
+    }
+
+    await notif.setClinicalConsent({
+      patientId,
+      consent,
+      version: SMS_CLINICAL_CONSENT_VERSION,
+      actorId: req.user.id,
+    });
+
+    await audit.record({
+      req,
+      action: audit.ACTIONS.SMS_CLINICAL_CONSENT_RECORDED,
+      entityType: "patient",
+      entityId: patientId,
+      organizationId: req.orgScope,
+      // Explicit grant/revoke discriminator so the two are distinguishable without
+      // inferring from the bool. NO PHI, no name — patient is entityId, not metadata.
+      metadata: { event: consent ? "grant" : "revoke", consent, version: SMS_CLINICAL_CONSENT_VERSION },
+    });
+
+    return res.status(200).json({
+      ok: true,
+      sms_clinical_consent: consent,
+      sms_clinical_consent_version: consent ? SMS_CLINICAL_CONSENT_VERSION : null,
+    });
+  } catch (err) {
+    console.error("recordClinicalSmsConsent error:", err.message);
+    return res.status(500).json({ ok: false, message: "Server error" });
+  }
+}
+
 // POST /api/patients/:patientId/notifications/send — fire an existing template
 // NOW. Body: { type, force }. Returns the outcome so the UI can react:
 //   sent | compliant (patient is current; re-send with force) |
@@ -242,6 +314,8 @@ module.exports = {
   getFailures,
   getPatientComms,
   setPatientComms,
+  getClinicalSmsConsent,
+  recordClinicalSmsConsent,
   sendNow,
   getPatientNotificationLog,
   acknowledgeInbound,

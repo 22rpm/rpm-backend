@@ -18,6 +18,13 @@ const db = require("../config/db");
 const twilio = require("./twillio.service");
 const { TYPES, AUTO_ACK_BODY } = require("../config/notifications");
 const { pacificDay } = require("./messageNotify.service");
+const { ROLES } = require("../config/roles");
+
+// Roles that may ATTEST clinical-SMS consent — the actual clinical staff, from the
+// shared role constants (config/roles.js), not bare strings. No named group is exactly
+// this pair (CONSENT_ROLES is clinician+super-admin; CLINICAL_STAFF adds admin), so it's
+// composed here.
+const CLINICAL_ATTESTER_ROLES = [ROLES.CLINICIAN, ROLES.CARE_MANAGER];
 
 const PUBLIC_BASE_URL =
   process.env.PUBLIC_BASE_URL || process.env.APP_BASE_URL || null;
@@ -47,6 +54,45 @@ async function setConsent({ patientId, consent, actorId }) {
     [patientId, consent ? 1 : 0, actorId ?? null]
   );
   return getPrefs(patientId);
+}
+
+// Record/revoke the SEPARATE clinical-SMS consent (free-text clinical texting) — distinct
+// from sms_consent (reminders) and from RPM consent. The wording `version` is stamped by
+// the caller from a server-side constant, never the client. On GRANT: set the flag +
+// _at=NOW() + _by=actor + _version. On REVOKE: clear the flag but KEEP the historical
+// _at/_by/_version (the record of the last grant), mirroring setConsent.
+async function setClinicalConsent({ patientId, consent, version, actorId }) {
+  await db.query(
+    `INSERT INTO patient_comm_prefs
+       (patient_id, sms_clinical_consent, sms_clinical_consent_at,
+        sms_clinical_consent_by, sms_clinical_consent_version)
+     VALUES (?, ?, ${consent ? "NOW()" : "NULL"}, ?, ?)
+     ON DUPLICATE KEY UPDATE
+       sms_clinical_consent = VALUES(sms_clinical_consent),
+       sms_clinical_consent_at = ${consent ? "NOW()" : "sms_clinical_consent_at"},
+       sms_clinical_consent_by = ${consent ? "VALUES(sms_clinical_consent_by)" : "sms_clinical_consent_by"},
+       sms_clinical_consent_version = ${consent ? "VALUES(sms_clinical_consent_version)" : "sms_clinical_consent_version"},
+       updated_at = NOW()`,
+    [patientId, consent ? 1 : 0, actorId ?? null, consent ? version : null]
+  );
+  return getPrefs(patientId);
+}
+
+// Does this user hold an actual CLINICAL role (clinician or care_manager) AND is the
+// account active? Consent ATTESTATION requires both: a management-only admin/super-admin
+// passes the coarse CLINICAL_STAFF route gate but must NOT attest, and a DEACTIVATED
+// clinician (e.g. the old test account) must not either. Checks the role table (a user
+// may hold several roles — a super-admin who is ALSO an active clinician passes) joined
+// to users for the active check (u.is_active = 1, matching the rest of the codebase).
+async function actorHoldsClinicalRole(userId) {
+  const [rows] = await db.query(
+    `SELECT 1 FROM role r
+       JOIN users u ON u.id = r.user_id
+      WHERE r.user_id = ? AND r.role_type IN (?) AND u.is_active = 1
+      LIMIT 1`,
+    [userId, CLINICAL_ATTESTER_ROLES]
+  );
+  return rows.length > 0;
 }
 
 // Opt OUT — idempotent upsert. `source` records which of the three layers set it.
@@ -594,6 +640,8 @@ async function getPatientLog(patientId, limit = 50) {
 module.exports = {
   getPrefs,
   setConsent,
+  setClinicalConsent,
+  actorHoldsClinicalRole,
   setOptOut,
   clearOptOut,
   getSettings,
