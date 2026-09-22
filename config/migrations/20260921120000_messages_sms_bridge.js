@@ -6,68 +6,130 @@
 //
 // `messages` becomes a PATIENT-KEYED conversation, not just a 1:1 DM:
 //   - patient_id        = the patient party of the conversation (set at insert; backfilled here).
-//                         The "conversation" is all rows for a patient_id, not a sender/receiver pair.
-//   - channel           = in_app | sms (the transport the row came in / went out on).
-//   - is_read on an INBOUND row (sender = the patient) now means "the CARE TEAM has read it" —
-//     cleared for EVERYONE when any staff member opens the thread (keyed to patient_id, not the
-//     viewer). read_at/read_by audit who cleared it. On OUTBOUND rows is_read keeps its old meaning
-//     ("the patient has read it", for the mobile app) — no conflict.
+//   - channel           = in_app | sms.
+//   - is_read on an INBOUND row (sender = the patient) means "the CARE TEAM has read it".
 //   - notification_log_id links an SMS row to its Twilio wire/delivery row.
 //
-// The mobile app's existing 1:1 send/thread endpoints keep working: every new column is
-// nullable or defaulted.
+// FULLY IDEMPOTENT / RESUMABLE. A first attempt failed on prod partway through (MySQL
+// has no DDL rollback) with the migration NOT recorded in knex_migrations, leaving a
+// half-applied schema: the `messages` columns + their FKs already existed, and
+// `notification_log.message_id` had been created as `bigint unsigned` (the wrong type)
+// with NO foreign key, because messages.id is `int unsigned` and the FK add failed on
+// the type mismatch. So every step here is guarded — hasColumn / hasTable, plus
+// information_schema checks before adding any index or foreign key, and message_id is
+// ALTERed to the right type (not dropped). This runs cleanly on that half-applied
+// state AND on a fresh DB.
 //
 // PROD HAS NO BACKUPS — mysqldump before running this migration on prod.
 
+// ---- guarded-DDL helpers (information_schema against the current DATABASE()) ----
+
+async function hasColumn(knex, table, column) {
+  return knex.schema.hasColumn(table, column);
+}
+
+async function hasIndex(knex, table, indexName) {
+  const [rows] = await knex.raw(
+    `SELECT 1 FROM information_schema.statistics
+      WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ? LIMIT 1`,
+    [table, indexName]
+  );
+  return rows.length > 0;
+}
+
+async function hasForeignKey(knex, table, constraintName) {
+  const [rows] = await knex.raw(
+    `SELECT 1 FROM information_schema.table_constraints
+      WHERE table_schema = DATABASE() AND table_name = ?
+        AND constraint_name = ? AND constraint_type = 'FOREIGN KEY' LIMIT 1`,
+    [table, constraintName]
+  );
+  return rows.length > 0;
+}
+
+// The COLUMN_TYPE string, lowercased (e.g. "int unsigned", "bigint unsigned"), or null.
+async function columnType(knex, table, column) {
+  const [rows] = await knex.raw(
+    `SELECT COLUMN_TYPE AS t FROM information_schema.columns
+      WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ? LIMIT 1`,
+    [table, column]
+  );
+  return rows[0] ? String(rows[0].t).toLowerCase() : null;
+}
+
+function isIntUnsigned(colType) {
+  // matches "int unsigned" and "int(10) unsigned"; NOT "bigint unsigned".
+  return !!colType && colType.startsWith("int") && colType.includes("unsigned");
+}
+
 exports.up = async function (knex) {
-  // --- messages: patient_id ---
-  if (!(await knex.schema.hasColumn("messages", "patient_id"))) {
-    await knex.schema.alterTable("messages", (table) => {
-      table.integer("patient_id").unsigned().nullable(); // match users.id
-      table
-        .foreign("patient_id")
+  // ========================= messages =========================
+  // patient_id (column, index, FK) — each guarded independently.
+  if (!(await hasColumn(knex, "messages", "patient_id"))) {
+    await knex.schema.alterTable("messages", (t) => {
+      t.integer("patient_id").unsigned().nullable(); // match users.id (int unsigned)
+    });
+  }
+  if (!(await hasIndex(knex, "messages", "messages_patient_index"))) {
+    await knex.schema.alterTable("messages", (t) => {
+      t.index(["patient_id"], "messages_patient_index");
+    });
+  }
+  if (!(await hasForeignKey(knex, "messages", "messages_patient_id_foreign"))) {
+    await knex.schema.alterTable("messages", (t) => {
+      t.foreign("patient_id", "messages_patient_id_foreign")
         .references("id")
         .inTable("users")
         .onDelete("CASCADE");
-      table.index(["patient_id"], "messages_patient_index");
     });
   }
 
-  // --- messages: channel ---
-  if (!(await knex.schema.hasColumn("messages", "channel"))) {
-    await knex.schema.alterTable("messages", (table) => {
-      table.enu("channel", ["in_app", "sms"]).notNullable().defaultTo("in_app");
+  // channel
+  if (!(await hasColumn(knex, "messages", "channel"))) {
+    await knex.schema.alterTable("messages", (t) => {
+      t.enu("channel", ["in_app", "sms"]).notNullable().defaultTo("in_app");
     });
   }
 
-  // --- messages: notification_log_id (link an SMS row to its wire/delivery row) ---
-  if (!(await knex.schema.hasColumn("messages", "notification_log_id"))) {
-    await knex.schema.alterTable("messages", (table) => {
-      table.bigInteger("notification_log_id").unsigned().nullable();
-      table
-        .foreign("notification_log_id")
+  // notification_log_id (bigint unsigned — matches notification_log.id, a bigIncrements) + FK
+  if (!(await hasColumn(knex, "messages", "notification_log_id"))) {
+    await knex.schema.alterTable("messages", (t) => {
+      t.bigInteger("notification_log_id").unsigned().nullable();
+    });
+  }
+  if (
+    !(await hasForeignKey(knex, "messages", "messages_notification_log_id_foreign"))
+  ) {
+    await knex.schema.alterTable("messages", (t) => {
+      t.foreign("notification_log_id", "messages_notification_log_id_foreign")
         .references("id")
         .inTable("notification_log")
         .onDelete("SET NULL");
     });
   }
 
-  // --- messages: shared-read audit (read_at / read_by) ---
-  if (!(await knex.schema.hasColumn("messages", "read_at"))) {
-    await knex.schema.alterTable("messages", (table) => {
-      table.timestamp("read_at").nullable();
-      table.integer("read_by").unsigned().nullable();
-      table
-        .foreign("read_by")
+  // read_at / read_by (+ FK on read_by)
+  if (!(await hasColumn(knex, "messages", "read_at"))) {
+    await knex.schema.alterTable("messages", (t) => {
+      t.timestamp("read_at").nullable();
+    });
+  }
+  if (!(await hasColumn(knex, "messages", "read_by"))) {
+    await knex.schema.alterTable("messages", (t) => {
+      t.integer("read_by").unsigned().nullable();
+    });
+  }
+  if (!(await hasForeignKey(knex, "messages", "messages_read_by_foreign"))) {
+    await knex.schema.alterTable("messages", (t) => {
+      t.foreign("read_by", "messages_read_by_foreign")
         .references("id")
         .inTable("users")
         .onDelete("SET NULL");
     });
   }
 
-  // Backfill patient_id = whichever of sender/receiver has role 'patient'. Roles live in
-  // the `role` table (role.user_id, role.role_type). A message is patient<->staff, so
-  // exactly one side is a patient. Two passes (sender side, then receiver side).
+  // Backfill patient_id = whichever of sender/receiver has role 'patient'. Idempotent
+  // (only touches rows still NULL). Two passes (sender side, then receiver side).
   await knex.raw(
     `UPDATE messages m
        JOIN role rs ON rs.user_id = m.sender_id AND rs.role_type = 'patient'
@@ -81,45 +143,88 @@ exports.up = async function (knex) {
       WHERE m.patient_id IS NULL`
   );
 
-  // --- notification_log: message_id back-reference to the human `messages` row ---
-  if (!(await knex.schema.hasColumn("notification_log", "message_id"))) {
-    await knex.schema.alterTable("notification_log", (table) => {
-      table.bigInteger("message_id").unsigned().nullable();
-      table
-        .foreign("message_id")
+  // ===================== notification_log.message_id =====================
+  // MUST be int unsigned to match messages.id (int unsigned). On the half-applied prod
+  // state this column exists as bigint unsigned with no FK — ALTER it (don't drop),
+  // then add the index + FK.
+  if (!(await hasColumn(knex, "notification_log", "message_id"))) {
+    await knex.schema.alterTable("notification_log", (t) => {
+      t.integer("message_id").unsigned().nullable();
+    });
+  } else if (!isIntUnsigned(await columnType(knex, "notification_log", "message_id"))) {
+    // e.g. bigint unsigned -> int unsigned. Column is empty (all NULL) and has no FK yet.
+    await knex.raw(
+      "ALTER TABLE notification_log MODIFY COLUMN message_id INT UNSIGNED NULL"
+    );
+  }
+  if (!(await hasIndex(knex, "notification_log", "notification_log_message_index"))) {
+    await knex.schema.alterTable("notification_log", (t) => {
+      t.index(["message_id"], "notification_log_message_index");
+    });
+  }
+  if (
+    !(await hasForeignKey(
+      knex,
+      "notification_log",
+      "notification_log_message_id_foreign"
+    ))
+  ) {
+    await knex.schema.alterTable("notification_log", (t) => {
+      t.foreign("message_id", "notification_log_message_id_foreign")
         .references("id")
         .inTable("messages")
         .onDelete("SET NULL");
-      table.index(["message_id"], "notification_log_message_index");
     });
   }
 
-  // --- patient_comm_prefs: sms_clinical_consent (Phase 2 gate; added now so it's one change) ---
-  if (!(await knex.schema.hasColumn("patient_comm_prefs", "sms_clinical_consent"))) {
-    await knex.schema.alterTable("patient_comm_prefs", (table) => {
-      // Separate from sms_consent (reminders). Free-text clinical SMS gates on THIS + !opted_out.
-      table.boolean("sms_clinical_consent").notNullable().defaultTo(false);
-      table.timestamp("sms_clinical_consent_at").nullable();
-      table.integer("sms_clinical_consent_by").unsigned().nullable();
-      table
-        .foreign("sms_clinical_consent_by")
+  // ===================== patient_comm_prefs (Phase 2 gate) =====================
+  if (!(await hasColumn(knex, "patient_comm_prefs", "sms_clinical_consent"))) {
+    await knex.schema.alterTable("patient_comm_prefs", (t) => {
+      t.boolean("sms_clinical_consent").notNullable().defaultTo(false);
+    });
+  }
+  if (!(await hasColumn(knex, "patient_comm_prefs", "sms_clinical_consent_at"))) {
+    await knex.schema.alterTable("patient_comm_prefs", (t) => {
+      t.timestamp("sms_clinical_consent_at").nullable();
+    });
+  }
+  if (!(await hasColumn(knex, "patient_comm_prefs", "sms_clinical_consent_by"))) {
+    await knex.schema.alterTable("patient_comm_prefs", (t) => {
+      t.integer("sms_clinical_consent_by").unsigned().nullable();
+    });
+  }
+  if (
+    !(await hasForeignKey(
+      knex,
+      "patient_comm_prefs",
+      "patient_comm_prefs_sms_clinical_consent_by_foreign"
+    ))
+  ) {
+    await knex.schema.alterTable("patient_comm_prefs", (t) => {
+      t.foreign(
+        "sms_clinical_consent_by",
+        "patient_comm_prefs_sms_clinical_consent_by_foreign"
+      )
         .references("id")
         .inTable("users")
         .onDelete("SET NULL");
-      // The approved consent-wording version the patient agreed to (CLINICIAN_SMS_DESIGN.md).
-      table.string("sms_clinical_consent_version", 32).nullable();
+    });
+  }
+  if (
+    !(await hasColumn(knex, "patient_comm_prefs", "sms_clinical_consent_version"))
+  ) {
+    await knex.schema.alterTable("patient_comm_prefs", (t) => {
+      t.string("sms_clinical_consent_version", 32).nullable();
     });
   }
 
-  // --- message_notify_log: the daily-cadence dedupe key ---
-  // One no-PHI email fanout per patient per Pacific day. UNIQUE(patient_id, notified_on):
-  // the inbound handler INSERTs and only sends when the row is newly created.
+  // ===================== message_notify_log (daily email lock) =====================
   if (!(await knex.schema.hasTable("message_notify_log"))) {
     await knex.schema.createTable("message_notify_log", function (table) {
       table.bigIncrements("id").primary();
       table.integer("patient_id").unsigned().notNullable();
       table
-        .foreign("patient_id")
+        .foreign("patient_id", "message_notify_log_patient_id_foreign")
         .references("id")
         .inTable("users")
         .onDelete("CASCADE");
@@ -133,42 +238,78 @@ exports.up = async function (knex) {
 exports.down = async function (knex) {
   await knex.schema.dropTableIfExists("message_notify_log");
 
-  if (await knex.schema.hasColumn("patient_comm_prefs", "sms_clinical_consent")) {
+  // patient_comm_prefs
+  if (
+    await hasForeignKey(
+      knex,
+      "patient_comm_prefs",
+      "patient_comm_prefs_sms_clinical_consent_by_foreign"
+    )
+  ) {
     await knex.schema.alterTable("patient_comm_prefs", (t) => {
-      t.dropForeign("sms_clinical_consent_by");
-    });
-    await knex.schema.alterTable("patient_comm_prefs", (t) => {
-      t.dropColumn("sms_clinical_consent");
-      t.dropColumn("sms_clinical_consent_at");
-      t.dropColumn("sms_clinical_consent_by");
-      t.dropColumn("sms_clinical_consent_version");
+      t.dropForeign(
+        "sms_clinical_consent_by",
+        "patient_comm_prefs_sms_clinical_consent_by_foreign"
+      );
     });
   }
-
-  if (await knex.schema.hasColumn("notification_log", "message_id")) {
-    await knex.schema.alterTable("notification_log", (t) => {
-      t.dropForeign("message_id");
-    });
-    await knex.schema.alterTable("notification_log", (t) => {
-      t.dropColumn("message_id");
-    });
-  }
-
-  // messages: drop FKs first, then columns.
-  for (const col of ["notification_log_id", "read_by", "patient_id"]) {
-    if (await knex.schema.hasColumn("messages", col)) {
-      await knex.schema.alterTable("messages", (t) => {
-        t.dropForeign(col);
-      });
+  for (const col of [
+    "sms_clinical_consent",
+    "sms_clinical_consent_at",
+    "sms_clinical_consent_by",
+    "sms_clinical_consent_version",
+  ]) {
+    if (await hasColumn(knex, "patient_comm_prefs", col)) {
+      await knex.schema.alterTable("patient_comm_prefs", (t) => t.dropColumn(col));
     }
   }
-  await knex.schema.alterTable("messages", (t) => {
-    if (t) {
-      t.dropColumn("channel");
-      t.dropColumn("notification_log_id");
-      t.dropColumn("read_at");
-      t.dropColumn("read_by");
-      t.dropColumn("patient_id");
+
+  // notification_log.message_id
+  if (
+    await hasForeignKey(
+      knex,
+      "notification_log",
+      "notification_log_message_id_foreign"
+    )
+  ) {
+    await knex.schema.alterTable("notification_log", (t) => {
+      t.dropForeign("message_id", "notification_log_message_id_foreign");
+    });
+  }
+  if (await hasIndex(knex, "notification_log", "notification_log_message_index")) {
+    await knex.schema.alterTable("notification_log", (t) => {
+      t.dropIndex(["message_id"], "notification_log_message_index");
+    });
+  }
+  if (await hasColumn(knex, "notification_log", "message_id")) {
+    await knex.schema.alterTable("notification_log", (t) => t.dropColumn("message_id"));
+  }
+
+  // messages — drop FKs, then index, then columns (each guarded).
+  const messagesFks = [
+    ["patient_id", "messages_patient_id_foreign"],
+    ["notification_log_id", "messages_notification_log_id_foreign"],
+    ["read_by", "messages_read_by_foreign"],
+  ];
+  for (const [col, name] of messagesFks) {
+    if (await hasForeignKey(knex, "messages", name)) {
+      await knex.schema.alterTable("messages", (t) => t.dropForeign(col, name));
     }
-  });
+  }
+  if (await hasIndex(knex, "messages", "messages_patient_index")) {
+    await knex.schema.alterTable("messages", (t) =>
+      t.dropIndex(["patient_id"], "messages_patient_index")
+    );
+  }
+  for (const col of [
+    "channel",
+    "notification_log_id",
+    "read_at",
+    "read_by",
+    "patient_id",
+  ]) {
+    if (await hasColumn(knex, "messages", col)) {
+      await knex.schema.alterTable("messages", (t) => t.dropColumn(col));
+    }
+  }
 };
