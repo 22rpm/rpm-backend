@@ -17,7 +17,7 @@
 const db = require("../config/db");
 const twilio = require("./twillio.service");
 const { TYPES, AUTO_ACK_BODY, NUDGE_BODY } = require("../config/notifications");
-const { pacificDay } = require("./messageNotify.service");
+const { pacificDay, pacificDayStartUtc } = require("./messageNotify.service");
 const messageService = require("./messageService");
 const { ROLES } = require("../config/roles");
 
@@ -701,15 +701,19 @@ async function hasRecentReading(patientId, days) {
 }
 
 // Was a notification of this type already logged (sent/queued) to this patient
-// today? Idempotency guard so a scheduler re-run can't double-send.
+// today? Idempotency guard so a scheduler re-run can't double-send. "Today" is the
+// PACIFIC day (the clinic day), not the UTC day: on this UTC box CURDATE() rolls over at
+// UTC midnight (5pm PDT / 4pm PST), which let a reminder re-send in the same Pacific
+// evening. Bound on the Pacific-day start instead, via the same pacificDay() mechanism the
+// message limiters use.
 async function sentTypeToday(patientId, type) {
   const [rows] = await db.query(
     `SELECT 1 FROM notification_log
       WHERE patient_id = ? AND type = ?
         AND status IN ('queued','sent','delivered','undelivered')
-        AND created_at >= CURDATE()
+        AND created_at >= ?
       LIMIT 1`,
-    [patientId, type]
+    [patientId, type, pacificDayStartUtc()]
   );
   return rows.length > 0;
 }

@@ -40,6 +40,39 @@ function pacificDay(date = new Date()) {
   }).format(date);
 }
 
+// The UTC instant at which the CURRENT Pacific day began, as a 'YYYY-MM-DD HH:MM:SS' UTC
+// string — the range-query equivalent of pacificDay() for comparing a UTC timestamp column
+// against "since Pacific midnight". Same Intl/America-Los_Angeles mechanism as pacificDay
+// (no MySQL CONVERT_TZ / tz tables, no hardcoded offset), so it stays DST-correct.
+function pacificDayStartUtc(date = new Date()) {
+  const dayStr = pacificDay(date); // 'YYYY-MM-DD' in Pacific
+  const guess = new Date(`${dayStr}T00:00:00Z`); // that calendar date at 00:00 UTC
+  // What Pacific wall-clock time is `guess`? Interpret those parts as UTC to get the offset.
+  const p = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Los_Angeles",
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  })
+    .formatToParts(guess)
+    .reduce((a, part) => ((a[part.type] = part.value), a), {});
+  const wallAsUtc = Date.UTC(
+    +p.year,
+    +p.month - 1,
+    +p.day,
+    p.hour === "24" ? 0 : +p.hour,
+    +p.minute,
+    +p.second
+  );
+  const offsetMs = wallAsUtc - guess.getTime(); // Pacific = UTC + offsetMs (negative here)
+  const startUtc = new Date(guess.getTime() - offsetMs); // Pacific midnight, as a UTC instant
+  return startUtc.toISOString().slice(0, 19).replace("T", " ");
+}
+
 async function resolveRecipientEmails(patientId, organizationId) {
   const emails = new Set();
   const add = (rows) => {
@@ -169,4 +202,4 @@ async function notifyInboundMessage({ patientId, organizationId }) {
   }
 }
 
-module.exports = { notifyInboundMessage, pacificDay, resolveRecipientEmails };
+module.exports = { notifyInboundMessage, pacificDay, pacificDayStartUtc, resolveRecipientEmails };
