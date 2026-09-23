@@ -104,6 +104,22 @@ class StaffMessagesService {
     }));
   }
 
+  // READ-ONLY patient-reported timeline for the CHART (Option A). Patient-SENT messages
+  // only (inbound = sender_id === patient_id), verbatim, dated, newest-first, both channels.
+  // Deliberately does NOT mark anything read — viewing the chart must not clear the shared
+  // Messages-inbox unread badge (that's why this exists instead of reusing getThread).
+  // ACCESS IS THE CALLER'S JOB — gate with canAccessPatient before calling.
+  async getReportedMessages(patientId, limit = 200) {
+    const sql = `
+      SELECT m.id, m.message, m.channel, m.created_at
+      FROM messages m
+      WHERE m.patient_id = ? AND m.sender_id = m.patient_id
+      ORDER BY m.created_at DESC, m.id DESC
+      LIMIT ?`;
+    const [rows] = await db.query(sql, [patientId, Number(limit)]);
+    return rows;
+  }
+
   // SHARED mark-read: clear every unread inbound row for this patient, for the
   // whole team. read_by/read_at record who opened it. Returns rows cleared.
   async markThreadRead(patientId, staffUserId) {

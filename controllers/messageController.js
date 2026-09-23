@@ -50,6 +50,27 @@ class MessageController {
     }
   }
 
+  // GET /api/messages/reported/:patientId — READ-ONLY patient-reported timeline for the
+  // chart (Option A). Patient-sent messages only, verbatim + dated. Same org+assignment
+  // gate as the thread, but it does NOT mark anything read (viewing the chart must not
+  // touch the shared unread badge).
+  async getReportedMessages(req, res) {
+    try {
+      const patientId = parseInt(req.params.patientId, 10);
+      if (!Number.isInteger(patientId)) {
+        return res.status(400).json({ success: false, message: "Invalid patientId" });
+      }
+      const allowed = await staffMessages.canAccessPatient(req.user, req.orgScope, patientId);
+      if (!allowed) {
+        return res.status(404).json({ success: false, message: "Not found" });
+      }
+      const messages = await staffMessages.getReportedMessages(patientId);
+      res.json({ success: true, data: messages });
+    } catch (error) {
+      res.status(500).json({ success: false, message: "Failed to load reported messages", error: error.message });
+    }
+  }
+
   // POST /api/messages/:patientId/clinical-sms — flag-gated outbound clinical SMS
   // (CLINICIAN_SMS_DESIGN Phase 2, increment 3). Body: { text, mode: 'free_text'|'nudge' }.
   // All gating is server-side in notification.sendClinicalMessage (flag -> canSend ->

@@ -16,6 +16,9 @@ const STAFF = requireRole(...CLINICAL_STAFF);
 router.get('/inbox', STAFF, resolveOrgScope, messageController.getInbox);
 router.get('/unread-count', STAFF, resolveOrgScope, messageController.getUnreadCount);
 router.get('/thread/:patientId', STAFF, resolveOrgScope, messageController.getPatientThread);
+// Read-only patient-reported timeline for the chart (Option A) — patient-sent messages
+// only, verbatim + dated, and NO mark-read side effect (unlike /thread).
+router.get('/reported/:patientId', STAFF, resolveOrgScope, messageController.getReportedMessages);
 
 // Flag-gated outbound clinical SMS. STAFF + org boundary (resolveOrgScope +
 // scopePatientParam) at the route; notification.sendClinicalMessage runs the full gate
