@@ -519,6 +519,16 @@ warrant. So: **warn for content in general; a patient-level hard-disable for SUD
 
 This resolves open question #3.
 
+### SUD hard-disable status (2026-09-22)
+- **No patients are flagged for hard-disable as of 2026-09-22.** Dr. Aamir Jamal (clinician of
+  record) reviewed the current **21 patients** and identified **none** as requiring free-text clinical
+  SMS to be disabled. Relayed by Ricky; **written confirmation from Dr. Aamir is still pending.**
+- **OPEN QUESTION — enrollment trigger not yet defined.** What triggers a hard-disable flag for a
+  **NEW** patient at enrollment — **who checks, and against what?** There is currently no defined step,
+  owner, or criteria for setting the flag at intake. The flag *mechanism* is built (Phase 2 increment 2)
+  and the set-control is available to clinician/care_manager, but the *process* that decides when to
+  apply it to a new patient is undefined. Needs an owner and a rule before enrollment can rely on it.
+
 ## Decisions of record
 Decisions made by the owner because the Cleo/Kinza queue is not moving (pending since Sept 9; see
 header). Each is revisitable if the reviewers engage.
@@ -553,8 +563,9 @@ header). Each is revisitable if the reviewers engage.
   noise for this panel); safety-escalation triggers (SI, IPV, acute emergency) split into their own
   act-don't-redirect bucket. Enforcement = warn (soft compose acknowledgment + notification-only
   default), NOT keyword block. **Exception: SUD/Part 2 gets a per-patient hard-disable of free-text
-  clinical SMS** (a patient-flag check, not content inspection). Resolves open question #3. Owner to
-  confirm the SUD patient-level disable.
+  clinical SMS** (a patient-flag check, not content inspection). Resolves open question #3.
+  **ANSWERED 2026-09-22** — the per-patient hard-disable is built (Phase 2 increment 2) and, on
+  Dr. Aamir's review, no current patients are flagged; see §SUD hard-disable status (2026-09-22).
 
 ## Open questions — routed to Cleo/Kinza, but NOT blocking (see REVIEW_FOR_CLEO_AND_KINZA.md)
 As of 2026-09-16 the review queue has been pending since Sept 9 and Cleo has not accessed her account.
