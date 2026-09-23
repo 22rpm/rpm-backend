@@ -1,6 +1,19 @@
-# Two-way clinician↔patient SMS — design (SCOPE, not built)
+# Two-way clinician↔patient SMS — design
 
-**Status:** DESIGN. **Date:** 2026-09-16.
+**Status: LIVE IN PRODUCTION.** Reminders send, patients text in, clinicians text back.
+**Owner-confirmed by testing, 2026-09-23** — that is the basis for this status line; it was
+not verified from this repo, and the repo alone still reads like a design. Two things to
+know when reading the rest of this document:
+
+- **The enabling flag lives in the prod environment, not here.** `SMS_CLINICAL_ENABLED`
+  ("on") gates the outbound clinical path in `services/notification.service.js`; it appears
+  in no env file in this repo, so the server holds it. Don't conclude from the repo that the
+  feature is off.
+- **The design sections below were written before it shipped** and are kept as the record of
+  *why* it is built this way — consent model, PHI handling, threading. Where a section says
+  "not built" or "planned", read it as history unless it is called out as still open.
+
+**Original status:** DESIGN. **Date:** 2026-09-16.
 
 **Compliance gate — reality check (2026-09-16):** the Cleo/Kinza review queue has been pending since
 **Sept 9** and Cleo has **not logged into her account**. Phase 0 must not be blocked indefinitely on a
@@ -193,7 +206,15 @@ the `messages` table; that inbox should be **the one inbox for both channels**.
 
 ---
 
-## The inbox-monitoring gate (BLOCKS Phase 1)
+## The inbox-monitoring gate (was BLOCKING; Phase 1 has shipped)
+
+> **Read this first (2026-09-23).** Phase 1 is live, so this gate was either satisfied or
+> consciously accepted — **this document does not record which, and it should.** The gate is
+> operational, not technical: it asks who watches the inbox, over what hours, and what
+> happens to a message that ages out. Record the named owner, the coverage window, and the
+> escalation path here. Patients are now told, in the printed overview and in the app, that
+> they can text about symptoms — the promise is already made.
+
 `fix/messages-e2e` was held for a reason that **still stands**: nobody monitors the clinician inbox.
 Merging it — or shipping SMS two-way — means **patients can message and expect a reply**. A message
 nobody reads is worse than no channel at all: the patient believes they've reached their care team.
