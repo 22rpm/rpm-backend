@@ -61,21 +61,57 @@ async function setConsent({ patientId, consent, actorId }) {
 // the caller from a server-side constant, never the client. On GRANT: set the flag +
 // _at=NOW() + _by=actor + _version. On REVOKE: clear the flag but KEEP the historical
 // _at/_by/_version (the record of the last grant), mirroring setConsent.
-async function setClinicalConsent({ patientId, consent, version, actorId }) {
+async function setClinicalConsent({ patientId, consent, version, method, actorId }) {
   await db.query(
     `INSERT INTO patient_comm_prefs
        (patient_id, sms_clinical_consent, sms_clinical_consent_at,
-        sms_clinical_consent_by, sms_clinical_consent_version)
-     VALUES (?, ?, ${consent ? "NOW()" : "NULL"}, ?, ?)
+        sms_clinical_consent_by, sms_clinical_consent_version, consent_method)
+     VALUES (?, ?, ${consent ? "NOW()" : "NULL"}, ?, ?, ?)
      ON DUPLICATE KEY UPDATE
        sms_clinical_consent = VALUES(sms_clinical_consent),
        sms_clinical_consent_at = ${consent ? "NOW()" : "sms_clinical_consent_at"},
        sms_clinical_consent_by = ${consent ? "VALUES(sms_clinical_consent_by)" : "sms_clinical_consent_by"},
        sms_clinical_consent_version = ${consent ? "VALUES(sms_clinical_consent_version)" : "sms_clinical_consent_version"},
+       consent_method = ${consent ? "VALUES(consent_method)" : "consent_method"},
        updated_at = NOW()`,
-    [patientId, consent ? 1 : 0, actorId ?? null, consent ? version : null]
+    [patientId, consent ? 1 : 0, actorId ?? null, consent ? version : null, consent ? method : null]
   );
   return getPrefs(patientId);
+}
+
+// Set/clear the SUD/Part 2 per-patient HARD-DISABLE of free-text clinical SMS. A NEUTRAL
+// boolean — WHY it's disabled is never stored (that would be Part 2-protected data). On
+// disable: flag=1 + _at=NOW() + _by=actor. On enable (clear): flag=0, keep the historical
+// _at/_by (the record of the last disable; the audit log carries the enable event). The
+// send path (increment 3) blocks only FREE-TEXT clinical SMS on this flag — the no-PHI
+// nudge is still allowed. Permission asymmetry (set vs clear) is enforced in the controller.
+async function setClinicalHardDisable({ patientId, disabled, actorId }) {
+  await db.query(
+    `INSERT INTO patient_comm_prefs
+       (patient_id, sms_clinical_hard_disabled, sms_clinical_hard_disabled_at, sms_clinical_hard_disabled_by)
+     VALUES (?, ?, ${disabled ? "NOW()" : "NULL"}, ?)
+     ON DUPLICATE KEY UPDATE
+       sms_clinical_hard_disabled = VALUES(sms_clinical_hard_disabled),
+       sms_clinical_hard_disabled_at = ${disabled ? "NOW()" : "sms_clinical_hard_disabled_at"},
+       sms_clinical_hard_disabled_by = ${disabled ? "VALUES(sms_clinical_hard_disabled_by)" : "sms_clinical_hard_disabled_by"},
+       updated_at = NOW()`,
+    [patientId, disabled ? 1 : 0, actorId ?? null]
+  );
+  return getPrefs(patientId);
+}
+
+// Is this user an ACTIVE clinician (role_type = clinician, not care_manager)? Clearing the
+// hard-disable is clinician-only by design — a care_manager can SET the safety flag but not
+// LIFT it. Deactivated accounts are excluded (u.is_active = 1), like actorHoldsClinicalRole.
+async function actorIsActiveClinician(userId) {
+  const [rows] = await db.query(
+    `SELECT 1 FROM role r
+       JOIN users u ON u.id = r.user_id
+      WHERE r.user_id = ? AND r.role_type = ? AND u.is_active = 1
+      LIMIT 1`,
+    [userId, ROLES.CLINICIAN]
+  );
+  return rows.length > 0;
 }
 
 // Does this user hold an actual CLINICAL role (clinician or care_manager) AND is the
@@ -641,7 +677,9 @@ module.exports = {
   getPrefs,
   setConsent,
   setClinicalConsent,
+  setClinicalHardDisable,
   actorHoldsClinicalRole,
+  actorIsActiveClinician,
   setOptOut,
   clearOptOut,
   getSettings,

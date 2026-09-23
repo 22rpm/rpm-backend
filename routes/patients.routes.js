@@ -36,6 +36,7 @@ const {
   setPatientComms,
   getClinicalSmsConsent,
   recordClinicalSmsConsent,
+  setClinicalHardDisable,
   sendNow,
   getPatientNotificationLog,
   acknowledgeInbound,
@@ -212,6 +213,19 @@ router.post(
   resolveOrgScope,
   scopePatientParam("patientId"),
   recordClinicalSmsConsent
+);
+
+// POST /api/patients/:patientId/clinical-sms-hard-disable — SUD/Part 2 hard-disable of
+// free-text clinical SMS. Body: { disabled: bool }. staffRoles at the route; the handler
+// enforces the ASYMMETRY (set = clinician|care_manager, clear = clinician only) and the
+// active-account check. Reason is never stored.
+router.post(
+  "/:patientId/clinical-sms-hard-disable",
+  authRequired,
+  staffRoles,
+  resolveOrgScope,
+  scopePatientParam("patientId"),
+  setClinicalHardDisable
 );
 
 // GET /api/patients/:patientId/notifications — the patient's notification log

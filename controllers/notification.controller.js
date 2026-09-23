@@ -5,7 +5,11 @@
 const db = require("../config/db");
 const notif = require("../services/notification.service");
 const audit = require("../services/audit.service");
-const { HELP_BODY, SMS_CLINICAL_CONSENT_VERSION } = require("../config/notifications");
+const {
+  HELP_BODY,
+  SMS_CLINICAL_CONSENT_VERSION,
+  SMS_CLINICAL_CONSENT_METHODS,
+} = require("../config/notifications");
 
 const STOP_WORDS = new Set(["stop", "stopall", "unsubscribe", "cancel", "end", "quit"]);
 const START_WORDS = new Set(["start", "yes", "unstop"]);
@@ -194,6 +198,11 @@ async function getClinicalSmsConsent(req, res) {
       sms_clinical_consent_at: prefs ? prefs.sms_clinical_consent_at : null,
       sms_clinical_consent_by: prefs ? prefs.sms_clinical_consent_by : null,
       sms_clinical_consent_version: prefs ? prefs.sms_clinical_consent_version : null,
+      consent_method: prefs ? prefs.consent_method : null,
+      // The SUD/Part 2 hard-disable state (neutral boolean; reason never stored).
+      sms_clinical_hard_disabled: !!(prefs && prefs.sms_clinical_hard_disabled),
+      sms_clinical_hard_disabled_at: prefs ? prefs.sms_clinical_hard_disabled_at : null,
+      sms_clinical_hard_disabled_by: prefs ? prefs.sms_clinical_hard_disabled_by : null,
       // The wording version a NEW record would be stamped with, for the UI to show.
       current_version: SMS_CLINICAL_CONSENT_VERSION,
     });
@@ -213,7 +222,9 @@ async function getClinicalSmsConsent(req, res) {
 async function recordClinicalSmsConsent(req, res) {
   try {
     const patientId = Number(req.params.patientId);
-    const consent = (req.body || {}).consent === true;
+    const b = req.body || {};
+    const consent = b.consent === true;
+    const method = b.consent_method;
 
     const isClinical = await notif.actorHoldsClinicalRole(req.user.id);
     if (!isClinical) {
@@ -224,10 +235,22 @@ async function recordClinicalSmsConsent(req, res) {
       });
     }
 
+    // consent_method is REQUIRED when granting (coded enum, never free text). Not needed
+    // on revoke.
+    if (consent && !SMS_CLINICAL_CONSENT_METHODS.includes(method)) {
+      return res.status(400).json({
+        ok: false,
+        message:
+          "consent_method is required when granting consent and must be one of: " +
+          SMS_CLINICAL_CONSENT_METHODS.join(", ") + ".",
+      });
+    }
+
     await notif.setClinicalConsent({
       patientId,
       consent,
       version: SMS_CLINICAL_CONSENT_VERSION,
+      method: consent ? method : null,
       actorId: req.user.id,
     });
 
@@ -238,17 +261,72 @@ async function recordClinicalSmsConsent(req, res) {
       entityId: patientId,
       organizationId: req.orgScope,
       // Explicit grant/revoke discriminator so the two are distinguishable without
-      // inferring from the bool. NO PHI, no name — patient is entityId, not metadata.
-      metadata: { event: consent ? "grant" : "revoke", consent, version: SMS_CLINICAL_CONSENT_VERSION },
+      // inferring from the bool. method is a CODED value (not PHI). NO name — patient is
+      // entityId, not metadata.
+      metadata: {
+        event: consent ? "grant" : "revoke",
+        consent,
+        version: SMS_CLINICAL_CONSENT_VERSION,
+        ...(consent ? { method } : {}),
+      },
     });
 
     return res.status(200).json({
       ok: true,
       sms_clinical_consent: consent,
       sms_clinical_consent_version: consent ? SMS_CLINICAL_CONSENT_VERSION : null,
+      consent_method: consent ? method : null,
     });
   } catch (err) {
     console.error("recordClinicalSmsConsent error:", err.message);
+    return res.status(500).json({ ok: false, message: "Server error" });
+  }
+}
+
+// POST /api/patients/:patientId/clinical-sms-hard-disable — set/clear the SUD/Part 2
+// per-patient hard-disable of free-text clinical SMS. Body: { disabled: bool }.
+// ASYMMETRIC permissions (deliberate): SET is an active clinician OR care_manager;
+// CLEAR is an active CLINICIAN ONLY (a care_manager can raise the safety flag but not
+// lift it). The reason is NEVER stored — neutral boolean only. Audited, no PHI.
+async function setClinicalHardDisable(req, res) {
+  try {
+    const patientId = Number(req.params.patientId);
+    const disabled = (req.body || {}).disabled === true;
+
+    if (disabled) {
+      const allowed = await notif.actorHoldsClinicalRole(req.user.id);
+      if (!allowed) {
+        return res.status(403).json({
+          ok: false,
+          message:
+            "Setting the clinical-SMS hard-disable requires a clinical role (clinician or care manager).",
+        });
+      }
+    } else {
+      const allowed = await notif.actorIsActiveClinician(req.user.id);
+      if (!allowed) {
+        return res.status(403).json({
+          ok: false,
+          message: "Clearing the clinical-SMS hard-disable requires a clinician.",
+        });
+      }
+    }
+
+    await notif.setClinicalHardDisable({ patientId, disabled, actorId: req.user.id });
+
+    await audit.record({
+      req,
+      action: audit.ACTIONS.SMS_CLINICAL_HARD_DISABLE_CHANGED,
+      entityType: "patient",
+      entityId: patientId,
+      organizationId: req.orgScope,
+      // disable/enable discriminator. NO PHI, no reason, no name — patient is entityId.
+      metadata: { event: disabled ? "disable" : "enable" },
+    });
+
+    return res.status(200).json({ ok: true, sms_clinical_hard_disabled: disabled });
+  } catch (err) {
+    console.error("setClinicalHardDisable error:", err.message);
     return res.status(500).json({ ok: false, message: "Server error" });
   }
 }
@@ -316,6 +394,7 @@ module.exports = {
   setPatientComms,
   getClinicalSmsConsent,
   recordClinicalSmsConsent,
+  setClinicalHardDisable,
   sendNow,
   getPatientNotificationLog,
   acknowledgeInbound,

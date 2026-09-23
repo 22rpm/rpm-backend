@@ -67,6 +67,11 @@ const AUTO_ACK_BODY = ({ clinicName }) =>
 // patient actually agreed to.
 const SMS_CLINICAL_CONSENT_VERSION = "v1-2026-09-21";
 
+// How clinical-SMS consent was obtained — a CODED set, never free text, so a diagnosis
+// can never be typed into it. Staff records consent on the patient's behalf, so these
+// are the only two ways it happens. Matches the consent_method enum column.
+const SMS_CLINICAL_CONSENT_METHODS = ["verbal_phone", "in_person"];
+
 const LIVE_TYPES = Object.values(TYPES).filter((t) => t.live).map((t) => t.key);
 
 module.exports = {
@@ -77,4 +82,5 @@ module.exports = {
   AUTO_ACK_BODY,
   OPT_OUT,
   SMS_CLINICAL_CONSENT_VERSION,
+  SMS_CLINICAL_CONSENT_METHODS,
 };

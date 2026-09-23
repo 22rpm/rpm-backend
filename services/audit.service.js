@@ -43,6 +43,8 @@ const ACTIONS = {
   PATIENT_CONSENT_RECORDED: "patient.consent_recorded",
   // Separate from RPM consent: the clinical-SMS (free-text texting) consent attestation.
   SMS_CLINICAL_CONSENT_RECORDED: "patient.sms_clinical_consent",
+  // The SUD/Part 2 per-patient hard-disable of free-text clinical SMS (neutral boolean).
+  SMS_CLINICAL_HARD_DISABLE_CHANGED: "patient.sms_clinical_hard_disable",
   DOCTOR_CREATE: "doctor.create",
   ADMIN_CREATE: "admin.create",
   USER_DEACTIVATE: "user.deactivate",
