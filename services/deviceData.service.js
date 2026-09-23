@@ -1225,7 +1225,7 @@ const createDeviceDataService = async (
 
             if (formattedPhone) {
               // Create personalized SMS message
-              const smsMessage = `🚨 ALERT: Your patient ${patientName} has a ${overall.direction.toUpperCase()} BP reading (${overall.urgency}): ${
+              const smsMessage = `ALERT: Your patient ${patientName} has a ${overall.direction.toUpperCase()} BP reading (${overall.urgency}): ${
                 processedData.systolic
               }/${
                 processedData.diastolic

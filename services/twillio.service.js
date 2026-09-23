@@ -85,7 +85,7 @@ class TwilioService {
     organizationName = ""
   ) {
     const urgency = alertType.toUpperCase();
-    const baseMessage = `🚨 ${urgency} ALERT: Patient ${patientName} - ${description}`;
+    const baseMessage = `${urgency} ALERT: Patient ${patientName} - ${description}`;
 
     if (organizationName) {
       return `${baseMessage} | ${organizationName}`;
