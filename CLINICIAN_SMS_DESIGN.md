@@ -566,6 +566,18 @@ header). Each is revisitable if the reviewers engage.
   clinical SMS** (a patient-flag check, not content inspection). Resolves open question #3.
   **ANSWERED 2026-09-22** — the per-patient hard-disable is built (Phase 2 increment 2) and, on
   Dr. Aamir's review, no current patients are flagged; see §SUD hard-disable status (2026-09-22).
+- **2026-09-22 — Patient-reported message timeline: build the VERBATIM view (Option A); REJECT
+  machine-extracted symptom labels (Option B) for now.** (Owner call.) Ricky wants patient-sent
+  messages visible as a dated clinical timeline on the patient chart. Decision: surface the patient's
+  **own words, dated** (Option A). **Option B — deriving structured symptom labels ("upset stomach
+  reported") from message text — is rejected for now** because: (1) negation/context failures ("no
+  chest pain", "my husband's cough") would put **fabricated findings into a clinical record**, which
+  carries the authority of the chart with the reliability of a guess; (2) there is **no in-house
+  precedent** for free-text extraction (the only classifier is numeric BP thresholds); and (3) the
+  verbatim timeline already meets the stated need. **Revisitable** only as an **advisory/triage aid**
+  that always links to the verbatim text and is clearly marked machine-derived — **never** as content
+  in a signed RPM/clinical note or the note PDF. (Confirmed 2026-09-22: nothing pulls message content
+  into any clinical note or PDF today.)
 
 ## Open questions — routed to Cleo/Kinza, but NOT blocking (see REVIEW_FOR_CLEO_AND_KINZA.md)
 As of 2026-09-16 the review queue has been pending since Sept 9 and Cleo has not accessed her account.
