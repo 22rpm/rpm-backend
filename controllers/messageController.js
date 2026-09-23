@@ -1,6 +1,8 @@
 // controllers/messageController.js
 const messageService = require("../services/messageService");
 const staffMessages = require("../services/staffMessages.service");
+const notif = require("../services/notification.service");
+const audit = require("../services/audit.service");
 const { getIO } = require("../socket/socketServer");
 
 class MessageController {
@@ -45,6 +47,63 @@ class MessageController {
       res.json({ success: true, data: messages });
     } catch (error) {
       res.status(500).json({ success: false, message: "Failed to load thread", error: error.message });
+    }
+  }
+
+  // POST /api/messages/:patientId/clinical-sms — flag-gated outbound clinical SMS
+  // (CLINICIAN_SMS_DESIGN Phase 2, increment 3). Body: { text, mode: 'free_text'|'nudge' }.
+  // All gating is server-side in notification.sendClinicalMessage (flag -> canSend ->
+  // consent -> opt-out -> hard-disable); this handler only maps the reason to a status.
+  // No PHI is logged (only err.message on failure).
+  async sendClinicalSms(req, res) {
+    try {
+      const patientId = parseInt(req.params.patientId, 10);
+      if (!Number.isInteger(patientId)) {
+        return res.status(400).json({ ok: false, message: "Invalid patientId" });
+      }
+      const b = req.body || {};
+      const mode = b.mode === "nudge" ? "nudge" : "free_text";
+
+      const result = await notif.sendClinicalMessage({
+        actor: req.user,
+        patientId,
+        text: b.text,
+        mode,
+      });
+
+      if (result.ok) {
+        // Record which consent-wording version authorized this free-text message, so a
+        // later revision (v2, …) is traceable per message. No PHI — version + ids only.
+        if (result.mode === "free_text") {
+          await audit.record({
+            req,
+            action: audit.ACTIONS.SMS_CLINICAL_MESSAGE_SENT,
+            entityType: "patient",
+            entityId: patientId,
+            organizationId: req.orgScope,
+            metadata: {
+              version: result.authorized_version,
+              message_id: result.message_id,
+              notification_log_id: result.notification_log_id,
+            },
+          });
+        }
+        return res
+          .status(200)
+          .json({ ok: true, mode: result.mode, message_id: result.message_id });
+      }
+      // Distinct reason per gate. not_permitted is a real authz denial (403);
+      // empty_text is a bad request (400); the rest are policy/transport outcomes (200).
+      const status =
+        result.reason === "not_permitted"
+          ? 403
+          : result.reason === "empty_text"
+          ? 400
+          : 200;
+      return res.status(status).json({ ok: false, reason: result.reason });
+    } catch (err) {
+      console.error("sendClinicalSms error:", err.message);
+      return res.status(500).json({ ok: false, message: "Server error" });
     }
   }
 

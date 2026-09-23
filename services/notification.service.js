@@ -16,9 +16,15 @@
 
 const db = require("../config/db");
 const twilio = require("./twillio.service");
-const { TYPES, AUTO_ACK_BODY } = require("../config/notifications");
+const { TYPES, AUTO_ACK_BODY, NUDGE_BODY } = require("../config/notifications");
 const { pacificDay } = require("./messageNotify.service");
+const messageService = require("./messageService");
 const { ROLES } = require("../config/roles");
+
+// Flag-gated outbound clinical SMS (CLINICIAN_SMS_DESIGN Phase 2, increment 3). OFF by
+// default; same "on" convention as CLINICIAN_DIGEST. Read once at module load; the boot
+// log is emitted from server.js. When off, the send path sends nothing.
+const SMS_CLINICAL_ENABLED = process.env.SMS_CLINICAL_ENABLED === "on";
 
 // Roles that may ATTEST clinical-SMS consent — the actual clinical staff, from the
 // shared role constants (config/roles.js), not bare strings. No named group is exactly
@@ -129,6 +135,109 @@ async function actorHoldsClinicalRole(userId) {
     [userId, CLINICAL_ATTESTER_ROLES]
   );
   return rows.length > 0;
+}
+
+// Outbound clinical SMS from the dashboard (CLINICIAN_SMS_DESIGN Phase 2, increment 3).
+// FLAG-GATED. Two modes:
+//   free_text — real clinical content. Gated on consent + !opted_out + !hard_disabled.
+//   nudge     — no-PHI "open the app" notification. Gated only on !opted_out (carries no
+//               PHI, so consent + hard-disable DON'T apply — the nudge MUST still work for
+//               a hard-disabled or non-consented patient).
+//
+// Gate order, ALL server-side BEFORE any Twilio call: (1) SMS_CLINICAL_ENABLED,
+// (2) canSend (org + assignment), (3) sms_clinical_consent [free_text], (4) !opted_out,
+// (5) !sms_clinical_hard_disabled [free_text]. Any failure returns a distinct `reason`,
+// sends nothing, and writes NO messages row. On success: Twilio send with clinic-name
+// attribution (matching the auto-ack — no person, no credential), then a messages row
+// (channel=sms, sender=staff, patient-keyed) linked to a notification_log outbound row
+// with the delivery status callback. NEVER logs the message body / no PHI to stdout.
+async function sendClinicalMessage({ actor, patientId, text, mode = "free_text" }) {
+  // (1) feature flag
+  if (!SMS_CLINICAL_ENABLED) return { ok: false, reason: "feature_disabled" };
+
+  // (2) authorization — may this actor message THIS patient? (org boundary + assignment
+  // for a clinician; super-admin global) — the same gate that guards /api/messages/send.
+  const allowed = await messageService.canSend(actor, patientId);
+  if (!allowed) return { ok: false, reason: "not_permitted" };
+
+  const isFreeText = mode !== "nudge";
+  if (isFreeText && (!text || !String(text).trim())) {
+    return { ok: false, reason: "empty_text" };
+  }
+
+  const prefs = await getPrefs(patientId);
+
+  // (3) clinical consent — required for free-text (PHI) content, not for the nudge.
+  if (isFreeText && !(prefs && prefs.sms_clinical_consent)) {
+    return { ok: false, reason: "no_consent" };
+  }
+  // (4) opt-out (STOP) — the universal kill switch, applies to BOTH modes.
+  if (prefs && prefs.opted_out) return { ok: false, reason: "opted_out" };
+  // (5) SUD/Part 2 hard-disable — blocks FREE-TEXT ONLY. The nudge still goes through.
+  if (isFreeText && prefs && prefs.sms_clinical_hard_disabled) {
+    return { ok: false, reason: "hard_disabled" };
+  }
+
+  const ctx = await loadSendContext(patientId);
+  const to = ctx && ctx.phoneNumber ? twilio.formatPhoneNumber(ctx.phoneNumber) : null;
+  if (!to) return { ok: false, reason: "no_phone" };
+
+  const clinicName = ctx.clinic_name;
+  const body = isFreeText
+    ? `${clinicName || "Your care team"}: ${String(text).trim()}`
+    : NUDGE_BODY({ clinicName });
+
+  const statusCallback = PUBLIC_BASE_URL
+    ? `${PUBLIC_BASE_URL.replace(/\/$/, "")}/api/notifications/sms-status`
+    : undefined;
+
+  const result = await twilio.sendSMS(to, body, statusCallback ? { statusCallback } : {});
+
+  // Wire/audit row either way — delivery status flows in via the callback by twilio_sid.
+  const logId = await insertLog({
+    patient_id: patientId,
+    organization_id: ctx.organization_id ?? null,
+    type: isFreeText ? "clinical_sms" : "clinical_nudge",
+    direction: "outbound",
+    to_number: to,
+    body,
+    twilio_sid: result.messageId ?? null,
+    status: result.success ? "sent" : "failed",
+    error_code: result.code ? String(result.code) : null,
+    error_message: result.success ? null : result.error || null,
+    sent_at: result.success ? new Date() : null,
+  });
+
+  if (!result.success) {
+    // Carrier-level STOP surfaced on send -> self-heal our opt-out record (rule #1).
+    if (result.code === 21610) await setOptOut({ patientId, source: "twilio_21610" });
+    return { ok: false, reason: "send_failed" };
+  }
+
+  // Success only: write the human conversation row (staff -> patient), patient-keyed, and
+  // link it to the wire row. Free-text stores the clinician's raw text (the thread shows
+  // the message, not the transport prefix; the exact wire body lives in notification_log).
+  // A nudge stores a short no-PHI marker so the thread shows it was sent.
+  const saved = await messageService.saveMessage(
+    actor.id,
+    patientId,
+    isFreeText ? String(text).trim() : "[Sent an app nudge]",
+    { channel: "sms", patientId, notificationLogId: logId }
+  );
+  if (saved && saved.id) {
+    await db.query("UPDATE notification_log SET message_id = ? WHERE id = ?", [saved.id, logId]);
+  }
+
+  return {
+    ok: true,
+    mode: isFreeText ? "free_text" : "nudge",
+    message_id: saved ? saved.id : null,
+    notification_log_id: logId,
+    // The consent-wording version that authorized THIS free-text message (from the
+    // patient's recorded consent). Null for a nudge (no consent required). The controller
+    // records it in the audit log so a later wording revision is traceable per message.
+    authorized_version: isFreeText ? (prefs ? prefs.sms_clinical_consent_version : null) : null,
+  };
 }
 
 // Opt OUT — idempotent upsert. `source` records which of the three layers set it.
@@ -678,6 +787,8 @@ module.exports = {
   setConsent,
   setClinicalConsent,
   setClinicalHardDisable,
+  sendClinicalMessage,
+  SMS_CLINICAL_ENABLED,
   actorHoldsClinicalRole,
   actorIsActiveClinician,
   setOptOut,

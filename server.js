@@ -333,4 +333,12 @@ server.listen(port, "0.0.0.0", () => {
   // Clinician overview digest (weekly/monthly no-PHI nudge). OFF by default — enable with
   // CLINICIAN_DIGEST=on, only after scripts/verifyMail.js confirms prod SMTP.
   clinicianDigestScheduler.start();
+  // Outbound clinical SMS send path — OFF by default, enable with SMS_CLINICAL_ENABLED=on.
+  // Log the state at boot (like the digest) so it's never silently on/off.
+  const { SMS_CLINICAL_ENABLED } = require("./services/notification.service");
+  console.log(
+    SMS_CLINICAL_ENABLED
+      ? "📨 clinical SMS send path ENABLED (SMS_CLINICAL_ENABLED=on)"
+      : "🔕 clinical SMS send path disabled (set SMS_CLINICAL_ENABLED=on to enable)"
+  );
 });

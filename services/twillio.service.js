@@ -16,7 +16,9 @@ class TwilioService {
     try {
       // Validate phone number format
       if (!to || !to.startsWith("+")) {
-        console.log(`❌ Invalid phone number format: ${to}`);
+        // Do NOT log the number — a patient phone number in stdout is PHI (pm2 logs
+        // aren't access-controlled). The number is in notification_log for debugging.
+        console.log("❌ SMS not sent: invalid phone number format");
         return { success: false, error: "Invalid phone number format" };
       }
 
@@ -27,14 +29,17 @@ class TwilioService {
 
       const response = await this.client.messages.create(payload);
 
-      console.log(`✅ SMS sent to ${to}: ${response.sid}`);
+      // SID only — never the destination number (PHI) in stdout. Correlate to the
+      // patient via notification_log.twilio_sid.
+      console.log(`✅ SMS sent: ${response.sid}`);
       return {
         success: true,
         messageId: response.sid,
         status: response.status,
       };
     } catch (error) {
-      console.error(`❌ Failed to send SMS to ${to}:`, error.message);
+      // No number in the log line (PHI). error.message + code are enough to diagnose.
+      console.error("❌ Failed to send SMS:", error.message);
 
       // Handle specific Twilio errors
       let userMessage = "Failed to send SMS";

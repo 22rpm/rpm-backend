@@ -61,6 +61,14 @@ const HELP_BODY = ({ clinicName, clinicPhone }) =>
 const AUTO_ACK_BODY = ({ clinicName }) =>
   `${clinicName || "Your care team"}: Thanks for your message. A team member will reply within one business day (Mon-Fri, 9am-5pm Pacific). This line isn't monitored 24/7 — if this is a medical emergency, call 911.`;
 
+// Notification-only nudge — NO PHI. The default clinical path: tells the patient to open
+// the app, carries no content. Same sender identity as the auto-ack (clinic name only, no
+// person/credential), so the patient sees ONE consistent sender across all our SMS. This
+// is what a clinician sends to a patient who has no clinical-SMS consent, or who is
+// SUD/Part 2 hard-disabled — the nudge still works when free-text is blocked.
+const NUDGE_BODY = ({ clinicName }) =>
+  `${clinicName || "Your care team"}: You have a new message from your care team. Please open the app to read it.`;
+
 // Version of the APPROVED sms_clinical_consent wording (CLINICIAN_SMS_DESIGN.md,
 // owner-approved 2026-09-21). Stamped SERVER-SIDE on every consent record — never taken
 // from the client — so a later wording change is distinguishable from what a given
@@ -80,6 +88,7 @@ module.exports = {
   SEND_WINDOW,
   HELP_BODY,
   AUTO_ACK_BODY,
+  NUDGE_BODY,
   OPT_OUT,
   SMS_CLINICAL_CONSENT_VERSION,
   SMS_CLINICAL_CONSENT_METHODS,

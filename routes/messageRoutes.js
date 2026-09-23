@@ -3,7 +3,7 @@ const express = require('express');
 const router = express.Router();
 const messageController = require('../controllers/messageController');
 const { authMiddleware, authRequired, requireRole } = require("../middleware/auth");
-const { resolveOrgScope } = require("../middleware/orgScope");
+const { resolveOrgScope, scopePatientParam } = require("../middleware/orgScope");
 const { CLINICAL_STAFF } = require("../config/roles");
 
 router.use(authRequired);
@@ -16,6 +16,17 @@ const STAFF = requireRole(...CLINICAL_STAFF);
 router.get('/inbox', STAFF, resolveOrgScope, messageController.getInbox);
 router.get('/unread-count', STAFF, resolveOrgScope, messageController.getUnreadCount);
 router.get('/thread/:patientId', STAFF, resolveOrgScope, messageController.getPatientThread);
+
+// Flag-gated outbound clinical SMS. STAFF + org boundary (resolveOrgScope +
+// scopePatientParam) at the route; notification.sendClinicalMessage runs the full gate
+// (flag, canSend, consent, opt-out, hard-disable) server-side before any Twilio call.
+router.post(
+  '/:patientId/clinical-sms',
+  STAFF,
+  resolveOrgScope,
+  scopePatientParam('patientId'),
+  messageController.sendClinicalSms
+);
 
 router.post('/send', messageController.sendMessage);
 router.get('/conversations', messageController.getUserConversations);

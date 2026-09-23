@@ -45,6 +45,9 @@ const ACTIONS = {
   SMS_CLINICAL_CONSENT_RECORDED: "patient.sms_clinical_consent",
   // The SUD/Part 2 per-patient hard-disable of free-text clinical SMS (neutral boolean).
   SMS_CLINICAL_HARD_DISABLE_CHANGED: "patient.sms_clinical_hard_disable",
+  // A free-text clinical SMS was sent. metadata records the sms_clinical_consent_version
+  // that authorized it (so a later wording revision is traceable per message). No PHI.
+  SMS_CLINICAL_MESSAGE_SENT: "patient.sms_clinical_message_sent",
   DOCTOR_CREATE: "doctor.create",
   ADMIN_CREATE: "admin.create",
   USER_DEACTIVATE: "user.deactivate",
