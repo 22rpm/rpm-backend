@@ -192,6 +192,16 @@ async function getClinicalSmsConsent(req, res) {
   try {
     const patientId = Number(req.params.patientId);
     const prefs = await notif.getPrefs(patientId);
+
+    // Tell the UI what the CURRENT ACTOR may do, computed by the same authoritative
+    // helpers the write paths gate on — so the dashboard never has to infer capability
+    // from a (fragile) client-side JWT role. Reused, not duplicated:
+    //   can_attest_consent   = actorHoldsClinicalRole (active clinician OR care_manager)
+    //                          — also the actor set allowed to SET the hard-disable.
+    //   can_clear_hard_disable = actorIsActiveClinician (active clinician ONLY).
+    const canAttest = await notif.actorHoldsClinicalRole(req.user.id);
+    const canClearHardDisable = await notif.actorIsActiveClinician(req.user.id);
+
     return res.status(200).json({
       ok: true,
       sms_clinical_consent: !!(prefs && prefs.sms_clinical_consent),
@@ -205,6 +215,13 @@ async function getClinicalSmsConsent(req, res) {
       sms_clinical_hard_disabled_by: prefs ? prefs.sms_clinical_hard_disabled_by : null,
       // The wording version a NEW record would be stamped with, for the UI to show.
       current_version: SMS_CLINICAL_CONSENT_VERSION,
+      // Actor capability (authoritative) — the UI shows/hides controls from these.
+      can_attest_consent: canAttest,
+      can_set_hard_disable: canAttest,
+      can_clear_hard_disable: canClearHardDisable,
+      // Whether the outbound SMS send path is enabled at all (flag). When false the UI
+      // must not offer the SMS modes — they would always fail feature_disabled.
+      sms_clinical_enabled: notif.SMS_CLINICAL_ENABLED,
     });
   } catch (err) {
     console.error("getClinicalSmsConsent error:", err.message);
