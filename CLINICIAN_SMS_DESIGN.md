@@ -439,13 +439,15 @@ patients can message and expect a reply, so "surfaced + monitored" is the whole 
 indicator + PHI warning + sensitive-category soft-warn, and the **SUD/Part 2 per-patient
 hard-disable**. Those ride on the outbound path, which Phase 1 doesn't build.
 
-## Consent wording — `sms_clinical_consent` (APPROVED 2026-09-21 by owner — no longer pending)
-Patient-facing risk acknowledgment obtained before any free-text clinical SMS. **APPROVED for use
-2026-09-21 by the owner (Ricky), self-signed because the Cleo/Kinza review queue never engaged (see
-header). This is the version below — coverage window filled (Mon–Fri 9am–5pm Pacific) and STOP
-clarified.** Phase 2 is no longer blocked on a reviewer. Plain language, ~8th-grade reading level.
-`[Clinic]` = the practice name shown to the patient (e.g. "Quantix Health"). Store the wording
-`_version` on each patient's consent so a later change is distinguishable from what they agreed to.
+## Consent wording — `sms_clinical_consent` (v2-2026-09-23, clinically signed off by Dr. Aamir Jamal)
+Patient-facing risk acknowledgment obtained before any free-text clinical SMS. **v2-2026-09-23 —
+reviewed and signed off by Dr. Aamir Jamal (clinician of record) 2026-09-23**, covering the NARROWED
+scope: readings and symptoms only, with medical record number, lab results, and medication details
+explicitly excluded, and the org named (**Physicians of Southern California**, org 2). Supersedes
+v1-2026-09-21 (owner self-approved, broader "readings, symptoms, or medications"). Plain language,
+~8th-grade reading level. The org name shown to the patient is the live org, **Physicians of Southern
+California**. Store the wording `_version` (now `v2-2026-09-23`) on each patient's consent so a later
+change is distinguishable from what they agreed to.
 
 > **Texting about your care — please read before you agree**
 >
@@ -453,8 +455,11 @@ clarified.** Phase 2 is no longer blocked on a reviewer. Plain language, ~8th-gr
 > them if your phone is shared, lost, or stolen. They also pass through your phone company, which we
 > don't control.
 >
-> If you agree, you're allowing **[Clinic]** to send and receive text messages about your care —
-> which may include health information such as your readings, symptoms, or medications.
+> If you agree, you're allowing **Physicians of Southern California** to send and receive text
+> messages about your care. These are limited to your **readings** (like your blood pressure) and your
+> **symptoms** (how you're feeling). To keep your information safer, we will **not** text — and we ask
+> that you **not** text us — your **medical record number, lab results, or medication details**. For
+> anything like that, please call us or use our **secure app**.
 >
 > - You don't have to agree. You can use our **secure app** or a **phone call** instead, and you'll
 >   get the same care either way.
@@ -466,7 +471,7 @@ clarified.** Phase 2 is no longer blocked on a reviewer. Plain language, ~8th-gr
 > - Standard message and data rates may apply.
 >
 > **☐ I understand text messages are not secure, and I agree to send and receive care-related text
-> messages with [Clinic].**
+> messages — my readings and symptoms only — with Physicians of Southern California.**
 
 On the two blanks:
 - **`[COVERAGE WINDOW]` — SET (2026-09-16): Monday–Friday, 9am–5pm Pacific.** The hours the patient is
@@ -543,7 +548,8 @@ This resolves open question #3.
 ### SUD hard-disable status (2026-09-22)
 - **No patients are flagged for hard-disable as of 2026-09-22.** Dr. Aamir Jamal (clinician of
   record) reviewed the current **21 patients** and identified **none** as requiring free-text clinical
-  SMS to be disabled. Relayed by Ricky; **written confirmation from Dr. Aamir is still pending.**
+  SMS to be disabled. **Signed off by Dr. Aamir on 2026-09-23** (his review + the hard-disable scope;
+  earlier "written confirmation pending" is now resolved).
 - **OPEN QUESTION — enrollment trigger not yet defined.** What triggers a hard-disable flag for a
   **NEW** patient at enrollment — **who checks, and against what?** There is currently no defined step,
   owner, or criteria for setting the flag at intake. The flag *mechanism* is built (Phase 2 increment 2)
@@ -599,6 +605,14 @@ header). Each is revisitable if the reviewers engage.
   that always links to the verbatim text and is clearly marked machine-derived — **never** as content
   in a signed RPM/clinical note or the note PDF. (Confirmed 2026-09-22: nothing pulls message content
   into any clinical note or PDF today.)
+- **2026-09-23 — Dr. Aamir Jamal (clinician of record) signed off on the NARROWED consent wording and
+  the SUD/Part-2 hard-disable scope.** Consent wording bumped to **v2-2026-09-23** (§Consent wording):
+  readings and symptoms only; medical record number, lab results, and medication details excluded;
+  org named **Physicians of Southern California** (org 2). The auto-ack (`config/notifications.js`
+  `AUTO_ACK_BODY`) was reconciled to match — readings/symptoms fine to text, those three categories
+  not, in either direction — GSM-7, 2 segments. `SMS_CLINICAL_CONSENT_VERSION` now stamps v2 on new
+  consents so v1 (broader) and v2 (narrowed) records stay distinguishable. First CLINICIAN sign-off
+  (v1 was owner-self-approved because the Cleo/Kinza queue never engaged).
 
 ## Open questions — routed to Cleo/Kinza, but NOT blocking (see REVIEW_FOR_CLEO_AND_KINZA.md)
 As of 2026-09-16 the review queue has been pending since Sept 9 and Cleo has not accessed her account.

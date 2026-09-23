@@ -56,10 +56,13 @@ const HELP_BODY = ({ clinicName, clinicPhone }) =>
   `${clinicName}: For help, call ${clinicPhone || "your clinic"}. Reply STOP to opt out.`;
 
 // Auto-acknowledgement to a patient who texts the clinic (CLINICIAN_SMS_DESIGN P1-7).
-// NO PHI. Sets the response expectation (the coverage window) and the emergency
-// backstop — the safety net for the gap between "patient sent" and "human read".
+// NO PHI. Sets the response expectation (the coverage window) and the emergency backstop.
+// PATIENT-SMS-COPY: reviewed & signed off by Dr. Aamir Jamal 2026-09-23. GSM-7 ONLY
+// (no em-dash, curly quotes, or emoji) so it stays 2 segments, not UCS-2. Reconciled with
+// the sms_clinical_consent wording: readings/symptoms are fine over text; record number,
+// lab results, and medication details are not (either direction).
 const AUTO_ACK_BODY = ({ clinicName }) =>
-  `${clinicName || "Your care team"}: Thanks for your message. A team member will reply within one business day (Mon-Fri, 9am-5pm Pacific). This line isn't monitored 24/7 — if this is a medical emergency, call 911.`;
+  `${clinicName || "Your care team"}: Thanks for your message. A team member replies within one business day (Mon-Fri, 9am-5pm Pacific), not 24/7. Readings and symptoms are fine to text. Please do not text your record number, lab results, or medication details - call us. Emergency? Call 911.`;
 
 // Notification-only nudge — NO PHI. The default clinical path: tells the patient to open
 // the app, carries no content. Same sender identity as the auto-ack (clinic name only, no
@@ -69,11 +72,13 @@ const AUTO_ACK_BODY = ({ clinicName }) =>
 const NUDGE_BODY = ({ clinicName }) =>
   `${clinicName || "Your care team"}: You have a new message from your care team. Please open the app to read it.`;
 
-// Version of the APPROVED sms_clinical_consent wording (CLINICIAN_SMS_DESIGN.md,
-// owner-approved 2026-09-21). Stamped SERVER-SIDE on every consent record — never taken
-// from the client — so a later wording change is distinguishable from what a given
-// patient actually agreed to.
-const SMS_CLINICAL_CONSENT_VERSION = "v1-2026-09-21";
+// Version of the APPROVED sms_clinical_consent wording (CLINICIAN_SMS_DESIGN.md). Stamped
+// SERVER-SIDE on every consent record — never from the client — so a later wording change
+// is distinguishable from what a given patient actually agreed to.
+// v2-2026-09-23: narrowed scope (readings/symptoms only; record number, lab results, and
+// medication details excluded) + org named; clinically signed off by Dr. Aamir Jamal.
+// v1-2026-09-21 was the owner-approved broader wording ("readings, symptoms, or medications").
+const SMS_CLINICAL_CONSENT_VERSION = "v2-2026-09-23";
 
 // How clinical-SMS consent was obtained — a CODED set, never free text, so a diagnosis
 // can never be typed into it. Staff records consent on the patient's behalf, so these
