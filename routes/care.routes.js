@@ -28,6 +28,7 @@ const {
   createLab,
   listLabs,
   correctLab,
+  importLabs,
 } = require("../controllers/labResults.controller");
 const { listStaff, getCallOutcomes } = require("../controllers/careStaff.controller");
 
@@ -160,6 +161,17 @@ router.post(
   resolveOrgScope,
   scopePatientParam("patientId"),
   correctLab
+);
+
+// CSV import (source='file'): staff picks the patient (this route is patient-scoped), uploads,
+// previews, confirms; the server derives the dedup key. Same gate as the other lab routes.
+router.post(
+  "/patients/:patientId/labs/import",
+  authRequired,
+  requireRole(...CLINICAL_STAFF),
+  resolveOrgScope,
+  scopePatientParam("patientId"),
+  importLabs
 );
 
 module.exports = router;

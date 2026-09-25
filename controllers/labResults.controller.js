@@ -5,7 +5,29 @@
 // (req.scopedPatientId / req.orgScope / req.user.id / forced 'manual'), never from the
 // body. Patient-linked access is org-scoped by the route middleware (resolveOrgScope +
 // scopePatientParam). Corrections use the supersedes chain (only the head is correctable).
+const crypto = require("crypto");
 const labService = require("../services/labResults.service");
+
+const MAX_IMPORT_ROWS = 500;
+
+// Deterministic per-row shape used to build the batch dedup hash. Fixed key order, dates
+// as ISO, everything else normalized/nulled — so the same parsed file always serializes
+// identically regardless of raw formatting.
+function canonicalRow(f) {
+  return {
+    test_name: f.testName,
+    value_text: f.valueText,
+    value_num: f.valueNum ?? null,
+    unit: f.unit ?? null,
+    reference_range: f.referenceRange ?? null,
+    abnormal_flag: f.abnormalFlag ?? null,
+    collected_at: f.collectedAt ? f.collectedAt.toISOString() : null,
+    resulted_at: f.resultedAt ? f.resultedAt.toISOString() : null,
+    resulting_lab: f.resultingLab ?? null,
+    loinc_code: f.loincCode ?? null,
+    panel_ref: f.panelRef ?? null,
+  };
+}
 
 // Optional string -> trimmed value or null (empty/whitespace -> null).
 function optStr(v) {
@@ -161,4 +183,75 @@ async function correctLab(req, res) {
   }
 }
 
-module.exports = { createLab, listLabs, correctLab };
+// POST /api/care/patients/:patientId/labs/import
+// CSV import (source='file'). Body: { rows: [ {test_name, value_text, unit, ...}, ... ] } —
+// the client's parsed rows in file order (client also previews them; the server re-validates).
+// The dedup key is DERIVED SERVER-SIDE from the normalized batch (never a client hash):
+// source_ref = "<sha256(canonical batch)>:<rowIndex>", so re-importing the same file
+// dup-skips every row via UNIQUE(source, source_ref). Per-row outcome is returned.
+async function importLabs(req, res) {
+  try {
+    const rows = Array.isArray(req.body && req.body.rows) ? req.body.rows : null;
+    if (!rows || rows.length === 0) {
+      return res.status(400).json({ ok: false, message: "No rows to import" });
+    }
+    if (rows.length > MAX_IMPORT_ROWS) {
+      return res
+        .status(400)
+        .json({ ok: false, message: `Too many rows (max ${MAX_IMPORT_ROWS})` });
+    }
+
+    // Validate + normalize every row up front; the normalized fields feed BOTH the dedup
+    // hash and the insert, so the key reflects exactly what would be stored.
+    const normalized = rows.map((raw) => validateLabBody(raw));
+
+    // Server-derived dedup key over the whole batch, in submitted (file) order.
+    const canonical = JSON.stringify(normalized.map(({ fields }) => canonicalRow(fields)));
+    const batchHash = crypto.createHash("sha256").update(canonical).digest("hex");
+
+    const results = [];
+    let written = 0;
+    let duplicate = 0;
+    let failed = 0;
+    for (let i = 0; i < normalized.length; i++) {
+      const { errors, fields } = normalized[i];
+      if (errors.length) {
+        failed++;
+        results.push({ row: i, outcome: "error", errors });
+        continue;
+      }
+      try {
+        const created = await labService.createResult({
+          patientId: req.scopedPatientId,
+          organizationId: req.orgScope,
+          enteredBy: req.user.id,
+          source: "file",
+          sourceRef: `${batchHash}:${i}`,
+          ...fields,
+        });
+        written++;
+        results.push({ row: i, outcome: "written", id: created.id });
+      } catch (err) {
+        if (err && err.code === "ER_DUP_ENTRY") {
+          duplicate++;
+          results.push({ row: i, outcome: "duplicate" });
+        } else {
+          failed++;
+          results.push({ row: i, outcome: "error", errors: ["Server error"] });
+          console.error("importLabs row error:", err.message);
+        }
+      }
+    }
+
+    return res.status(200).json({
+      ok: true,
+      summary: { written, duplicate, failed, total: normalized.length },
+      results,
+    });
+  } catch (err) {
+    console.error("importLabs error:", err.message);
+    return res.status(500).json({ ok: false, message: "Server error" });
+  }
+}
+
+module.exports = { createLab, listLabs, correctLab, importLabs };

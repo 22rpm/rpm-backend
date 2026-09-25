@@ -43,18 +43,26 @@ function insertColumns(fields) {
   };
 }
 
-// Insert a manual lab result. source='manual', source_ref=null (multiple manual rows are
-// fine — the source_ref UNIQUE only dedupes api/file imports).
-async function createManualResult(fields, executor = db) {
+// Insert a result with an EXPLICIT source + source_ref. Used by CSV import
+// (source='file', source_ref='<batchHash>:<rowIndex>' set by the controller) and, via
+// createManualResult below, by manual entry. source_ref is the UNIQUE(source, source_ref)
+// dedup key — a duplicate insert throws ER_DUP_ENTRY, which the caller treats as a skip.
+async function createResult(fields, executor = db) {
   const [result] = await executor.query(
     `INSERT INTO lab_results
        (patient_id, organization_id, entered_by, test_name, loinc_code, value_text,
         value_num, unit, reference_range, abnormal_flag, collected_at, resulted_at,
         resulting_lab, panel_ref, source, source_ref)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual', NULL)`,
-    columnValues(insertColumns(fields))
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [...columnValues(insertColumns(fields)), fields.source, fields.sourceRef ?? null]
   );
   return getLabById(result.insertId, executor);
+}
+
+// Insert a manual lab result. source='manual', source_ref=null (multiple manual rows are
+// fine — the source_ref UNIQUE only dedupes api/file imports).
+async function createManualResult(fields, executor = db) {
+  return createResult({ ...fields, source: "manual", sourceRef: null }, executor);
 }
 
 // Insert a superseding correction row (source='manual'). entered_by = the corrector (who
@@ -122,6 +130,7 @@ async function findSupersededBy(id) {
 module.exports = {
   ABNORMAL_FLAGS,
   getLabById,
+  createResult,
   createManualResult,
   createCorrection,
   listHeadResultsForPatient,
