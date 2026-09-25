@@ -215,8 +215,16 @@ Fax Intelligence re-reviews and re-pushes a correction. (Correct stays enabled f
 **Decisions needed on the Fax Intelligence side before this can be built:**
 - **Patient-id contract:** Fax Intelligence must send RPM's `patient_id` — and needs a way to obtain
   it (an RPM lookup API? operator paste?).
-- **Org contract:** one principal per org, or org in the payload verified against the principal's
-  allowed orgs?
+- **Org contract — DECIDED (2026-09-25):** Fax Intelligence determines the owning clinic from the
+  **RECEIVING FAX NUMBER**, not from document content. Each clinic gets its own inbound fax number;
+  the **number→org mapping is the security boundary**, so it must be **unique-constrained at the
+  schema level** (one number maps to exactly one org) and **audited on change**. Fax Intelligence
+  therefore knows the org *before any OCR*, and the patient it resolves during human review is scoped
+  to that org — which is exactly what RPM's ingest endpoint verifies against the calling principal's
+  authorized org (§4). This makes **Fax Intelligence multi-tenant (org-scoped), mirroring RPM's
+  `resolveOrgScope` pattern**, rather than one deployment per clinic. (Open sub-item: whether the
+  principal→org authorization is one principal per org or one principal with an allowed-org set — a
+  Fax-Intelligence-side auth-model choice, but the number→org table is the boundary regardless.)
 - **Key/JWT contract:** signing key (or JWKS URL), algorithm (ES384), claims (`iss`/`aud`/`exp`/`jti`),
   token lifetime.
 - **`source_ref` scheme** and the **correction model:** how a re-push represents a correction (a new
