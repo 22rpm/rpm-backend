@@ -232,3 +232,38 @@ The token exchange itself can't be tested until Greenway issues creds + base URL
   leak. Removed the route entirely.
 - **INCIDENT_2026-09-03_prod-cert-san.md** → marked **RESOLVED** (Sept 9), with a renewal-watch
   note tying the duckdns HTTP-01 renewal to the exact-match JWKS decision here.
+
+---
+
+## Future scope — Lab results integration (NOT scoped, NOT started; added 2026-09-24)
+Backlog item (Ricky): import lab results into the platform via lab-provider APIs; Ricky will do the
+provider outreach. Not scoped, not started. Recorded here — rather than a domain *_FOLLOWUPS.md —
+because the first decision is whether THIS FHIR integration already covers it.
+
+**Does the in-progress Greenway/Practice Fusion FHIR scope already include lab results? As designed
+today: NO — but it is the same integration that could, so check before adding a second one.**
+- The requested token scope is **`system/Encounter.read system/Patient.read`** only (§ token
+  exchange) — Encounter + Patient, for "last seen" primary-care dates. There is **no `Observation`
+  or `DiagnosticReport` pull** in the current design.
+- BUT lab results in FHIR are the **`Observation` (category=laboratory)** and **`DiagnosticReport`**
+  resources, and **`Observation` is on Greenway's exposed system-scope resource list** (§0), and as a
+  (g)(10)-certified Standardized API the USCDI **Laboratory** data class must be reachable. So labs
+  that live in the practice's Greenway chart would be reachable by **adding a scope**
+  (`system/Observation.read`, plus `system/DiagnosticReport.read` if Greenway exposes it) to the app +
+  signing key already being stood up here — **not** by building a separate lab integration.
+- The decisive unknown is whether the labs we care about are actually **in the Greenway/Practice
+  Fusion chart** (Greenway is the primary-care EHR).
+
+Open questions (resolve before choosing a path):
+- **Which labs?** Quest, LabCorp, dialysis-provider labs. Renal/dialysis panels often originate at
+  the dialysis provider or a reference lab and may **not** be filed into the PCP's Practice Fusion
+  chart — those would need a direct integration even if Greenway FHIR covers PCP-filed labs.
+- **Direct lab API vs via the existing Greenway FHIR integration.** Confirm coverage through the
+  Greenway app FIRST: (a) does Greenway expose `Observation`/`DiagnosticReport` under the granted
+  `system/*` scopes (Observation: yes per §0; DiagnosticReport: verify in the registration UI), and
+  (b) do the needed results actually appear in THIS practice's Greenway chart? Both yes → add a scope
+  here, no second integration. Labs only at Quest/LabCorp/dialysis → direct integration required.
+- **Results-in only, or orders-out too?** Orders-out (CPOE, order routing, provider sign-off) is a
+  materially larger and different integration class than read-only results.
+- **BAA + credentialing per provider BEFORE any technical work.** Each lab provider (and any interface
+  vendor) needs an executed BAA and credentialing first — same gate as the Twilio BAA.
