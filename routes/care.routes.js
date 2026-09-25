@@ -24,6 +24,11 @@ const {
   listNotes,
   correctNote,
 } = require("../controllers/clinicalNote.controller");
+const {
+  createLab,
+  listLabs,
+  correctLab,
+} = require("../controllers/labResults.controller");
 const { listStaff, getCallOutcomes } = require("../controllers/careStaff.controller");
 
 // Who may log/read clinical time, calls, and notes. Patients never. care_manager IS
@@ -127,6 +132,34 @@ router.post(
   resolveOrgScope,
   scopePatientParam("patientId"),
   correctNote
+);
+
+// --- Lab results (LAB_RESULTS_DESIGN.md, increment 1): manual entry + correction ---
+router.post(
+  "/patients/:patientId/labs",
+  authRequired,
+  requireRole(...CLINICAL_STAFF),
+  resolveOrgScope,
+  scopePatientParam("patientId"),
+  createLab
+);
+
+router.get(
+  "/patients/:patientId/labs",
+  authRequired,
+  requireRole(...CLINICAL_STAFF),
+  resolveOrgScope,
+  scopePatientParam("patientId"),
+  listLabs
+);
+
+router.post(
+  "/patients/:patientId/labs/:id/correct",
+  authRequired,
+  requireRole(...CLINICAL_STAFF),
+  resolveOrgScope,
+  scopePatientParam("patientId"),
+  correctLab
 );
 
 module.exports = router;
