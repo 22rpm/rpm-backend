@@ -4,6 +4,7 @@
 // server-side (req.user.id / req.orgScope), never from the body. Append-only:
 // corrections write a superseding row and preserve the original author.
 const noteService = require("../services/clinicalNote.service");
+const audit = require("../services/audit.service");
 
 // note_type is a short structured tag; the column is VARCHAR(50).
 const MAX_NOTE_TYPE_LEN = 50;
@@ -115,6 +116,18 @@ async function correctNote(req, res) {
       organizationId: req.orgScope,
       noteType: v.noteType,
       body: v.body,
+    });
+
+    // Record WHO corrected the note: the correction row preserves the original
+    // author, so this audit entry is the only trace of the acting corrector.
+    // Ids only — the note body is PHI and must not enter the log.
+    await audit.record({
+      req,
+      action: audit.ACTIONS.NOTE_CORRECTED,
+      entityType: "patient",
+      entityId: req.scopedPatientId,
+      organizationId: req.orgScope,
+      metadata: { original_id: originalId, correction_id: note.id },
     });
 
     return res.status(201).json({ ok: true, note, supersedes: originalId });

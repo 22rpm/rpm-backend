@@ -5,6 +5,7 @@
 // never read from the request body. All patient-linked access is org-scoped by
 // the route middleware (resolveOrgScope + scopePatientParam).
 const timeEntryService = require("../services/timeEntry.service");
+const audit = require("../services/audit.service");
 const {
   validateStartedAt,
   validateDurationMinutes,
@@ -130,6 +131,28 @@ async function correctTimeEntry(req, res) {
       startedAt: startedDate,
       durationSeconds: minutes * 60,
       note: req.body.note.trim(),
+    });
+
+    // Record WHO corrected the entry: the correction row preserves the original
+    // actor, so this audit entry is the only trace of the acting corrector. A
+    // time correction changes billable minutes, so we record what they changed
+    // to — minutes is a billing quantity, not PHI. minutes_before is null when
+    // the original was still incomplete (no stored duration).
+    await audit.record({
+      req,
+      action: audit.ACTIONS.TIME_ENTRY_CORRECTED,
+      entityType: "patient",
+      entityId: req.scopedPatientId,
+      organizationId: req.orgScope,
+      metadata: {
+        original_id: originalId,
+        correction_id: correction.id,
+        minutes_before:
+          original.duration_seconds != null
+            ? Math.round(original.duration_seconds / 60)
+            : null,
+        minutes_after: minutes,
+      },
     });
 
     return res

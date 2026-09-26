@@ -72,6 +72,18 @@ const ACTIONS = {
   // Billing documents
   RPM_NOTE_SIGNED: "rpm_note.signed",
 
+  // Care-activity ledger corrections. The three ledgers are append-only: a
+  // correction writes a NEW row via `supersedes` and (for notes/time) preserves
+  // the ORIGINAL author on that row, so the acting corrector is otherwise
+  // unattributed. These rows are the record of WHO corrected WHAT. metadata
+  // carries record ids only (original_id, correction_id) — plus, for time,
+  // the billable-minutes before/after, since a duration is a billing quantity,
+  // not PHI, and a time correction exists precisely because the minutes changed.
+  // Never the note body or the lab value (both PHI).
+  TIME_ENTRY_CORRECTED: "time_entry.corrected",
+  NOTE_CORRECTED: "clinical_note.corrected",
+  LAB_RESULT_CORRECTED: "lab_result.corrected",
+
   // Medications (patient-reported; clinician confirms/rejects)
   MEDICATION_CONFIRM: "medication.confirm",
   MEDICATION_REJECT: "medication.reject",

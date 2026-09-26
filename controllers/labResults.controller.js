@@ -7,6 +7,7 @@
 // scopePatientParam). Corrections use the supersedes chain (only the head is correctable).
 const crypto = require("crypto");
 const labService = require("../services/labResults.service");
+const audit = require("../services/audit.service");
 
 const MAX_IMPORT_ROWS = 500;
 
@@ -169,6 +170,19 @@ async function correctLab(req, res) {
       enteredBy: req.user.id, // who keyed the correction
       ...fields,
     });
+    // Record WHO corrected the result. lab_results already stores the acting
+    // corrector in entered_by, so this row is the append-only audit trail rather
+    // than the sole attribution. Ids only — the lab value is a clinical result
+    // (PHI) and must not enter the log.
+    await audit.record({
+      req,
+      action: audit.ACTIONS.LAB_RESULT_CORRECTED,
+      entityType: "patient",
+      entityId: req.scopedPatientId,
+      organizationId: req.orgScope,
+      metadata: { original_id: originalId, correction_id: correction.id },
+    });
+
     return res.status(201).json({ ok: true, result: correction, supersedes: originalId });
   } catch (err) {
     // UNIQUE(supersedes) race: another correction landed first.
