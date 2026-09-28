@@ -20,11 +20,14 @@ const TOKEN_TIMEOUT_MS = 10000;
 const EXPIRY_SAFETY_S = 60; // refresh this many seconds before the real expiry
 const ASSERTION_TTL = "4m"; // ≤ 5 min — many SMART servers reject longer
 
-// The scopes the "last seen by primary care" feature needs. Practice Fusion
-// REQUIRES SMART v2 (.rs) syntax — v1 (.read) is rejected as "not permitted"
-// despite being in their docs (confirmed 2026-09-28, see §10). So v2 is the
+// Default scopes = every scope granted to the app (confirmed 2026-09-28, §10):
+// Patient + Encounter + Observation. Practice Fusion REQUIRES SMART v2 (.rs)
+// syntax — v1 (.read) is rejected despite being in their docs — so v2 is the
 // default and pays no failed round trip; v1 remains only as a cheap fallback.
-const DEFAULT_SCOPES = ["system/Encounter.rs", "system/Patient.rs"];
+// Observation.rs must be here or a FHIR Observation read 403s (MSG_OP_NOT_ALLOWED)
+// on scope even though the grant allows it — the resource read is gated by the
+// scopes on the TOKEN, not just by the app's grant.
+const DEFAULT_SCOPES = ["system/Patient.rs", "system/Encounter.rs", "system/Observation.rs"];
 
 // Error taxonomy so callers — especially scripts/greenway-token-test.js — can
 // tell apart failures that have DIFFERENT fixes and must not be confused:
