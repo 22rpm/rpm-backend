@@ -20,7 +20,11 @@
 //   • CONFIG                     → env/key not set up on this box
 
 require("dotenv").config();
-const { getAccessToken, GreenwayError } = require("../services/greenway.service");
+const {
+  getAccessToken,
+  GreenwayError,
+  TOKEN_FORM_PARAMS,
+} = require("../services/greenway.service");
 
 const PROBE_SCOPES = ["system/Encounter.read", "system/Patient.read", "system/Observation.read"];
 const BASE_SCOPES = ["system/Encounter.read", "system/Patient.read"];
@@ -81,6 +85,15 @@ function fail(err) {
         line("cause", err.kind);
     }
     if (err.detail) line("detail", err.detail);
+    if (err.status) line("http status", err.status);
+    // Verbatim token-endpoint response body — OAuth error/error_description are
+    // diagnostic, non-secret fields (a failed request carries no token). This is
+    // what tells "JWKS not registered" apart from "client_secret expected".
+    if (typeof err.body === "string" && err.body.length) {
+      console.log("   --- token endpoint response body (verbatim) ---");
+      console.log(err.body);
+      console.log("   --- end response body ---");
+    }
   } else {
     line("error", err.message);
   }
@@ -91,6 +104,9 @@ function fail(err) {
   console.log("Greenway / Practice Fusion token probe");
   line("FHIR base", process.env.GREENWAY_FHIR_BASE || "(unset)");
   line("client_id", process.env.GREENWAY_CLIENT_ID ? "(set)" : "(unset)");
+  // What actually goes on the wire — note client_id is NOT among these (the
+  // client identity is inside the signed assertion). Some servers require it.
+  line("form params", `${TOKEN_FORM_PARAMS.join(", ")}  (client_id NOT sent)`);
 
   try {
     const r = await tryToken(PROBE_SCOPES, "Encounter + Patient + Observation (probe)");

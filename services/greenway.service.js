@@ -157,6 +157,13 @@ function buildAssertion({ clientId, kid, privateKeyPem }, tokenEndpoint) {
   );
 }
 
+// The exact form parameters we put on the wire (RFC 7523 private_key_jwt).
+// `client_id` is intentionally NOT sent: the client identity is carried by
+// iss/sub inside the signed assertion. Some servers nonetheless require
+// client_id alongside the assertion and some reject it — exposed here so the
+// probe can report exactly what was sent.
+const TOKEN_FORM_PARAMS = ["grant_type", "client_assertion_type", "client_assertion", "scope"];
+
 // ---- token exchange ----
 async function requestToken(tokenEndpoint, assertion, scopes) {
   const body = new URLSearchParams({
@@ -185,11 +192,21 @@ async function requestToken(tokenEndpoint, assertion, scopes) {
     clearTimeout(timer);
   }
 
+  // Read the body as TEXT first so the raw bytes are preserved for debugging,
+  // then try to parse JSON out of it. The OAuth error body ({error,
+  // error_description}) is non-secret and diagnostic, so we keep it verbatim on
+  // the error for the caller to surface.
+  let raw = "";
+  try {
+    raw = await res.text();
+  } catch {
+    /* body already consumed / empty */
+  }
   let payload = null;
   try {
-    payload = await res.json();
+    payload = raw ? JSON.parse(raw) : null;
   } catch {
-    /* non-JSON body handled below */
+    /* non-JSON body — raw still carries it */
   }
 
   if (res.ok && payload && payload.access_token) return payload;
@@ -200,14 +217,21 @@ async function requestToken(tokenEndpoint, assertion, scopes) {
     ? `${oauthErr}${payload.error_description ? ": " + payload.error_description : ""}`
     : `HTTP ${res.status}`;
 
-  if (oauthErr === "invalid_scope")
-    throw new GreenwayError("invalid_scope", "A requested scope was not granted", detail);
+  // Attach the HTTP status + verbatim body so callers can print the exact
+  // response (e.g. to tell "JWKS not registered" from "client_secret expected").
+  const raise = (kind, message) => {
+    const e = new GreenwayError(kind, message, detail);
+    e.status = res.status;
+    e.body = raw;
+    throw e;
+  };
+
+  if (oauthErr === "invalid_scope") raise("invalid_scope", "A requested scope was not granted");
   if (oauthErr === "invalid_client" || res.status === 401)
-    throw new GreenwayError("auth", "Client authentication failed (assertion/registration)", detail);
-  if (oauthErr) throw new GreenwayError("auth", `Token request rejected (${oauthErr})`, detail);
-  if (res.status >= 500)
-    throw new GreenwayError("transient", `Token endpoint error (HTTP ${res.status})`, detail);
-  throw new GreenwayError("auth", `Token request failed (HTTP ${res.status})`, detail);
+    raise("auth", "Client authentication failed (assertion/registration)");
+  if (oauthErr) raise("auth", `Token request rejected (${oauthErr})`);
+  if (res.status >= 500) raise("transient", `Token endpoint error (HTTP ${res.status})`);
+  raise("auth", `Token request failed (HTTP ${res.status})`);
 }
 
 // v1 → v2 SMART scope syntax: system/Resource.read -> system/Resource.rs.
@@ -279,4 +303,4 @@ function invalidate() {
   cachedToken = null;
 }
 
-module.exports = { getAccessToken, invalidate, DEFAULT_SCOPES, GreenwayError };
+module.exports = { getAccessToken, invalidate, DEFAULT_SCOPES, TOKEN_FORM_PARAMS, GreenwayError };
