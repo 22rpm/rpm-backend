@@ -273,6 +273,23 @@ serves the same NPPES dissemination data):
   integration — no separate lab-provider integration is needed for results filed in the PSC chart.
   (Renal/dialysis labs that never reach the PCP chart remain the one caveat — see §"Future scope".)
 
+### Patient identity mapping — MRN resolution (confirmed 2026-09-28, §6)
+- **MRN identifier search WORKS.** `GET /Patient?identifier={mrn}` resolved a real patient
+  (MRN `UM542319` → single Patient, **DOB verified** against our record for patient 23). Confirmed
+  live 2026-09-28 via `scripts/greenway-fetch-test.js --mrn`.
+- **MRN identifier system:** **`https://practicefusion-prod.medicasoft.us/PF`**, type `MR`. Use the
+  system-qualified token `identifier=https://practicefusion-prod.medicasoft.us/PF|{mrn}` for
+  precision once we move past the bring-up probe (bare-value search matched fine, but system|value
+  avoids ever matching an MRN-shaped value under a different system).
+- **MRN format:** two letters + six digits (e.g. `UM542319`); the letters appear to be patient
+  initials. Do NOT rely on the initials meaning anything — treat the whole string as opaque.
+- **Coverage: only 6 of 21 patients have an MRN** (`patient_profiles` has 9 rows, 6 with `mrn`). So
+  identifier match covers **under a third of the roster**; the rest need **supervised human matching**
+  (Slice 3b). Never auto-link on demographics alone.
+- **DOB gate (Slice 3b):** even on an MRN hit, verify `patient_profiles.date_of_birth` matches the
+  FHIR `Patient.birthDate` before storing a mapping — a transcription error at enrollment would
+  otherwise silently link the wrong chart.
+
 **Module:** a new `services/greenway.service.js` exporting `getAccessToken()` — internal only,
 **no route**. Pieces:
 1. **Assertion builder** (`jsonwebtoken@9`, already a dep; `jwt.sign(claims, privateKeyPem,

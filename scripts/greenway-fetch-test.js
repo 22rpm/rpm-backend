@@ -26,29 +26,55 @@ function line(label, value) {
   console.log(`  ${String(label).padEnd(16)} ${value}`);
 }
 
-// Most-recent Encounter's date. PF is FHIR R4 → Encounter.period.start; tolerate
-// R5 actualPeriod just in case.
+// Renders the encounter summary and, if encounters exist but none carried a
+// parseable date, points at --enc-structure to find where the date lives.
+function printEncounters(enc) {
+  if (enc.total === 0) {
+    line("encounters", "none found");
+    return;
+  }
+  line(
+    "encounters",
+    `${enc.total} found` +
+      (enc.date
+        ? `, last encounter ${enc.date}`
+        : `, but none of ${enc.scanned} scanned carried a date`)
+  );
+  if (!enc.date) {
+    console.log("   → run --enc-structure <PF_PATIENT_ID> to see where the date lives (no values).");
+  }
+}
+
+// A single Encounter's date. PF is FHIR R4 → Encounter.period.start/end;
+// tolerate R5 actualPeriod just in case.
 function encounterDate(resource) {
   if (!resource) return null;
   return (
     resource.period?.start ||
     resource.period?.end ||
     resource.actualPeriod?.start ||
-    resource.plannedStartDate ||
+    resource.actualPeriod?.end ||
     null
   );
 }
 
+// Most-recent encounter date. We do NOT trust server-side `_sort=-date` (PF may
+// ignore it, leaving entry[0] as the oldest / a date-less encounter — the cause
+// of the earlier "no date" result). Instead fetch a page and take the MAX date
+// across all entries. Pagination beyond one page is a later (Slice 4) concern.
 async function lastEncounter(patientId) {
-  const bundle = await fhirGet("Encounter", {
-    patient: patientId,
-    _sort: "-date",
-    _count: "1",
-  });
+  const bundle = await fhirGet("Encounter", { patient: patientId, _count: "50" });
   const entries = Array.isArray(bundle?.entry) ? bundle.entry : [];
   const total = typeof bundle?.total === "number" ? bundle.total : entries.length;
-  const date = entries.length ? encounterDate(entries[0].resource) : null;
-  return { total, date };
+  let best = null;
+  let withDate = 0;
+  for (const e of entries) {
+    const d = encounterDate(e.resource);
+    if (!d) continue;
+    withDate += 1;
+    if (!best || Date.parse(d) > Date.parse(best)) best = d;
+  }
+  return { total, scanned: entries.length, withDate, date: best };
 }
 
 async function patientMode(patientId) {
@@ -61,12 +87,7 @@ async function patientMode(patientId) {
   console.log("\n✅ Patient retrieved");
   line("patient id", patient.id);
   line("birthDate", patient.birthDate || "(none on record)");
-  line(
-    "encounters",
-    enc.total === 0
-      ? "none found"
-      : `${enc.total} found, last encounter ${enc.date || "(no date on resource)"}`
-  );
+  printEncounters(enc);
   console.log("\n(birthDate shown for manual verification; Slice 3b enforces the DOB match.)");
   process.exit(0);
 }
@@ -106,16 +127,50 @@ async function mrnMode(mrn) {
   line("patient id", patient.id);
   line("birthDate", patient.birthDate || "(none on record)");
   line("id systems", idSystems.length ? idSystems.join(", ") : "(none listed)");
-  line(
-    "encounters",
-    enc.total === 0
-      ? "none found"
-      : `${enc.total} found, last encounter ${enc.date || "(no date on resource)"}`
-  );
+  printEncounters(enc);
   console.log(
     "\n(‘id systems’ shows type@system, not values — use it to set the MRN system for system|value searches."
   );
   console.log(" birthDate shown for manual verification; Slice 3b enforces the DOB match before storing a mapping.)");
+  process.exit(0);
+}
+
+// Diagnostic: print only the STRUCTURE of the first Encounter — top-level field
+// names and whether period.start/end exist — never any values. Tells us where
+// PF puts the encounter date.
+async function encStructureMode(patientId) {
+  const bundle = await fhirGet("Encounter", { patient: patientId, _count: "1" });
+  console.log("\nEncounter structure (field names only, no values):");
+  line("bundle type", bundle?.resourceType || "(none)");
+  line("total", typeof bundle?.total === "number" ? String(bundle.total) : "(absent)");
+  const entries = Array.isArray(bundle?.entry) ? bundle.entry : [];
+  line("entry count", String(entries.length));
+  const first = entries[0];
+  if (!first) {
+    console.log("\nNo entry to inspect.");
+    process.exit(0);
+  }
+  line("entry[0] keys", Object.keys(first).join(", "));
+  const r = first.resource;
+  if (!r) {
+    console.log("\nentry[0] has no inline resource (reference only).");
+    process.exit(0);
+  }
+  line("resourceType", r.resourceType || "(none)");
+  line("top-level keys", Object.keys(r).join(", "));
+  line(
+    "period",
+    r.period ? `present {start:${"start" in r.period}, end:${"end" in r.period}}` : "absent"
+  );
+  if (r.actualPeriod) {
+    line(
+      "actualPeriod",
+      `present {start:${"start" in r.actualPeriod}, end:${"end" in r.actualPeriod}}`
+    );
+  }
+  const dateish = Object.keys(r).filter((k) => /date|period|time|when|start|end/i.test(k));
+  line("date-ish keys", dateish.join(", ") || "(none)");
+  console.log("\n(Structure only — no values printed.)");
   process.exit(0);
 }
 
@@ -142,19 +197,24 @@ function fail(err) {
 
 (async () => {
   const args = process.argv.slice(2);
-  const patientIdx = args.indexOf("--patient");
-  const mrnIdx = args.indexOf("--mrn");
-  const patientId = patientIdx >= 0 ? args[patientIdx + 1] : null;
-  const mrn = mrnIdx >= 0 ? args[mrnIdx + 1] : null;
+  const val = (flag) => {
+    const i = args.indexOf(flag);
+    return i >= 0 ? args[i + 1] : null;
+  };
+  const patientId = val("--patient");
+  const mrn = val("--mrn");
+  const encStruct = val("--enc-structure");
 
   console.log("Greenway / Practice Fusion FHIR fetch probe (read-only)");
   line("FHIR base", process.env.GREENWAY_FHIR_BASE || "(unset)");
 
+  if (encStruct) return encStructureMode(encStruct).catch(fail);
   if (patientId) return patientMode(patientId).catch(fail);
   if (mrn) return mrnMode(mrn).catch(fail);
 
   console.log("\nUsage:");
   console.log("  node scripts/greenway-fetch-test.js --patient <PF_PATIENT_ID>");
-  console.log("  node scripts/greenway-fetch-test.js --mrn <MRN>        (e.g. UM542319)");
+  console.log("  node scripts/greenway-fetch-test.js --mrn <MRN>                 (e.g. UM542319)");
+  console.log("  node scripts/greenway-fetch-test.js --enc-structure <PF_PATIENT_ID>  (diagnose date field)");
   process.exit(2);
 })();
