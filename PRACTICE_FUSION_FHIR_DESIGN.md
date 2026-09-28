@@ -198,6 +198,64 @@ it (SMART Backend Services publishes it there). Cache it; fall back to `GREENWAY
 if discovery is unavailable. This avoids baking in a token path that could differ per Greenway
 environment (sandbox vs prod).
 
+> **⚠️ `GREENWAY_FHIR_BASE` is PER-PRACTICE, not global (found 2026-09-28).** Practice Fusion's
+> published directory (`ServiceBaseURLs.json`) issues a **distinct base URL per organization** —
+> the org's GUID is embedded in the path (`…/fhir/r4/v1/{org-guid}`). The single
+> `GREENWAY_FHIR_BASE` env var this design assumes is only correct while we serve **one** clinic
+> (Physicians of Southern California — resolved in §10). **If we add clinics this becomes
+> per-organization config**: a base URL (and its own discovered `token_endpoint`) keyed by our
+> internal `organization_id`, not one global var. The signing key/JWKS and `client_id` may still
+> be shared across practices (one registered app), but the FHIR base + patient-id mapping (§6) are
+> per-org. Flagged now so the token client (§9) isn't built around a global base it will outgrow.
+
+## 10. Resolved directory entry — Physicians of Southern California (2026-09-28)
+Pulled from Practice Fusion's public `ServiceBaseURLs.json` (a FHIR `Bundle` of `Organization` +
+`Endpoint` resources; each Organization carries two endpoints — Patient Access and Provider/System
+Access — referenced by id). Exactly one name match: **"Physicians of Southern California Inc."**
+
+- **Provider / System Access base URL (OURS — `system/` scopes):**
+  `https://api.practicefusion.com/fhir/r4/v1/6d0a66bd-9317-4a37-b0f4-d717fe7840ad`
+  → this is `GREENWAY_FHIR_BASE` for PSC. (Runtime FHIR host is `api.practicefusion.com`; Greenway
+  is the developer/registration platform — consistent with §0.)
+- Patient Access base (NOT ours, different path — `fmh/`): `…/fhir/fmh/r4/v1/6d0a66bd-…`
+- **Org identifiers** (for Ricky to confirm it's the right PSC): NPI **1710587670**;
+  EIN/TIN (urn:oid:2.16.840.1.113883.4.4) **85-3634539**; PF org GUID
+  **6d0a66bd-9317-4a37-b0f4-d717fe7840ad**. Address on file: 315 N 3rd Ave Ste 303A, Covina, CA.
+- The directory is searchable by **org name**, **NPI**, **EIN/TIN**, and **PF org GUID** — any of
+  these locates the entry if the name ever drifts.
+
+**NPPES confirmation — NPI 1710587670 (2026-09-28, Ricky-confirmed).** Looked up in the NPPES
+registry (via NLM's NPI API mirror — `npiregistry.cms.gov` was unreachable from the build env, NLM
+serves the same NPPES dissemination data):
+- **Organization:** PHYSICIANS OF SOUTHERN CALIFORNIA INC — NPI-2 (org), "Clinic or Group Practice".
+- **NPPES practice address:** **1304 W Holt Blvd, Ste A, Ontario, CA 91762**, (909) 542-2777.
+- **Taxonomies:** primary **261QM1300X** (Clinic/Center — Multi-Specialty); also **207R00000X**
+  (Internal Medicine) and **261QP2300X** (Clinic/Center — Primary Care), plus Mental Health / Medical
+  Specialty / Podiatric. The Internal Medicine + Primary Care taxonomies support the "last seen by
+  primary care" premise — PCP encounters should exist in this chart.
+- **⚠️ Address discrepancy (benign):** NPPES lists **Ontario** (1304 W Holt Blvd) while the PF
+  directory lists **Covina** (315 N 3rd Ave). Same NPI + same legal name → **same organization**,
+  different location on file between registries (multi-site group). **Ricky confirmed the Ontario
+  address is PSC.** Not a blocker — our FHIR base is keyed to the PF **org GUID**, not the address.
+- **Still to confirm with PSC's Practice Fusion admin:** that PF org GUID
+  **6d0a66bd-9317-4a37-b0f4-d717fe7840ad** is the correct organization to pull from (the directory
+  match is by name/NPI; the GUID that keys the FHIR base should be verified with PSC directly before
+  we rely on it in prod).
+
+**SMART configuration at that base** (`GET {base}/.well-known/smart-configuration`, fetched 2026-09-28):
+- `token_endpoint`: `https://api.practicefusion.com/fhir/r4/v1/6d0a66bd-…/token`
+- `grant_types_supported`: includes **`client_credentials`** ✅ (the Backend Services grant).
+- **Auth method — asymmetric confirmed.** The doc does **not** publish a
+  `token_endpoint_auth_methods_supported` field; instead its `capabilities` array advertises
+  **`client-confidential-asymmetric`** (= `private_key_jwt`, our ES384 signed assertion verified via
+  our JWKS) alongside `client-confidential-symmetric` (client_secret). **So we use `private_key_jwt`
+  — the ES384 + JWKS path already stood up (§3–4) is the right one; we do NOT need a client_secret.**
+- **Scopes — NOT settled here.** `scopes_supported` is **absent** from this smart-config, so
+  `system/Observation.read` (the labs question) **cannot be confirmed from discovery**. `capabilities`
+  shows `permission-v1` + `permission-v2` (both scope syntaxes) but does not enumerate resources.
+  The granted scopes are confirmed only at **app registration / by exercising the scope** — so the
+  labs go/no-go (§"Future scope") stays open pending the registration UI or a live token attempt.
+
 **Module:** a new `services/greenway.service.js` exporting `getAccessToken()` — internal only,
 **no route**. Pieces:
 1. **Assertion builder** (`jsonwebtoken@9`, already a dep; `jwt.sign(claims, privateKeyPem,
