@@ -320,14 +320,81 @@ async function getAccessToken(scopes = DEFAULT_SCOPES) {
 }
 
 // Drop the cached token — call after a 401 from a downstream FHIR request so the
-// next getAccessToken() re-mints. (Used by the Encounter fetch slice, §5.)
+// next getAccessToken() re-mints. (Used by fhirGet below.)
 function invalidate() {
   cachedToken = null;
+}
+
+// ---- authenticated FHIR GET (read-only) ----
+// Fetches a FHIR resource or search Bundle from GREENWAY_FHIR_BASE with a bearer
+// from getAccessToken(). On a 401 (token expired mid-use) it invalidates the
+// cache and retries ONCE. Returns the parsed JSON (a resource or a Bundle);
+// throws GreenwayError on failure. Does NOT log — the caller decides what
+// (PHI-safe) detail to surface. Pagination (Bundle link[next]) is a later
+// concern; this returns a single page.
+const FHIR_TIMEOUT_MS = 15000;
+
+async function fhirGet(resourcePath, searchParams = {}, _retried = false) {
+  const { fhirBase } = readConfig();
+  const tok = await getAccessToken(); // default v2 scopes (Encounter.rs + Patient.rs)
+
+  const url = new URL(`${fhirBase}/${String(resourcePath).replace(/^\/+/, "")}`);
+  for (const [k, v] of Object.entries(searchParams)) {
+    if (v !== undefined && v !== null) url.searchParams.set(k, v);
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FHIR_TIMEOUT_MS);
+  let res;
+  try {
+    res = await fetch(url, {
+      headers: { Authorization: `Bearer ${tok.accessToken}`, Accept: "application/fhir+json" },
+      signal: controller.signal,
+    });
+  } catch (err) {
+    throw new GreenwayError("transient", "FHIR request unreachable", `${err.name}: ${err.message}`);
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (res.status === 401 && !_retried) {
+    // Token likely expired between mint and use — re-mint once.
+    invalidate();
+    return fhirGet(resourcePath, searchParams, true);
+  }
+
+  let raw = "";
+  try {
+    raw = await res.text();
+  } catch {
+    /* empty body */
+  }
+  let body = null;
+  try {
+    body = raw ? JSON.parse(raw) : null;
+  } catch {
+    /* non-JSON handled below */
+  }
+
+  if (!res.ok) {
+    const detail =
+      body && body.message
+        ? `${body.subcode ? body.subcode + ": " : ""}${body.message}`
+        : `HTTP ${res.status}`;
+    const kind = res.status === 401 ? "auth" : res.status >= 500 ? "transient" : "fhir";
+    const e = new GreenwayError(kind, `FHIR ${resourcePath} failed (HTTP ${res.status})`, detail);
+    e.status = res.status;
+    e.body = raw;
+    throw e;
+  }
+
+  return body;
 }
 
 module.exports = {
   getAccessToken,
   probeToken,
+  fhirGet,
   invalidate,
   DEFAULT_SCOPES,
   TOKEN_FORM_PARAMS,
