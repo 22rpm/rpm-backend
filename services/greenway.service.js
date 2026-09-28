@@ -213,12 +213,24 @@ async function requestToken(tokenEndpoint, assertion, scopes) {
 
   // OAuth error body: { error, error_description }. These are non-secret codes.
   const oauthErr = payload && payload.error ? payload.error : null;
+  // Practice Fusion does NOT use the OAuth `error` field for a scope denial. It
+  // returns its own shape, e.g.:
+  //   { "subcode":"Unauthorized", "message":"client does not have permissions to requested scope" }
+  // Detect a scope-permission denial from that message so it's classified as
+  // invalid_scope (fires the v1→v2 retry; the probe reports it as a scope issue,
+  // not an auth failure). Per PF docs a system app can only request scopes the
+  // EHR user has authorized — so this usually means the scope isn't granted yet.
+  const scopeDenied =
+    oauthErr === "invalid_scope" ||
+    !!(payload && typeof payload.message === "string" && /scope/i.test(payload.message));
   const detail = oauthErr
     ? `${oauthErr}${payload.error_description ? ": " + payload.error_description : ""}`
-    : `HTTP ${res.status}`;
+    : payload && payload.message
+      ? `${payload.subcode ? payload.subcode + ": " : ""}${payload.message}`
+      : `HTTP ${res.status}`;
 
   // Attach the HTTP status + verbatim body so callers can print the exact
-  // response (e.g. to tell "JWKS not registered" from "client_secret expected").
+  // response (e.g. to tell "scope not authorized" from "client_secret expected").
   const raise = (kind, message) => {
     const e = new GreenwayError(kind, message, detail);
     e.status = res.status;
@@ -226,7 +238,7 @@ async function requestToken(tokenEndpoint, assertion, scopes) {
     throw e;
   };
 
-  if (oauthErr === "invalid_scope") raise("invalid_scope", "A requested scope was not granted");
+  if (scopeDenied) raise("invalid_scope", "A requested scope was not granted");
   if (oauthErr === "invalid_client" || res.status === 401)
     raise("auth", "Client authentication failed (assertion/registration)");
   if (oauthErr) raise("auth", `Token request rejected (${oauthErr})`);
@@ -239,7 +251,7 @@ function scopesToV2(scopes) {
   return scopes.map((s) => s.replace(/\.read$/, ".rs").replace(/\.write$/, ".cud"));
 }
 
-async function fetchFreshToken(scopes) {
+async function fetchFreshToken(scopes, retryV2 = true) {
   const cfg = readConfig();
   const tokenEndpoint = await discoverTokenEndpoint(cfg.fhirBase);
 
@@ -250,7 +262,8 @@ async function fetchFreshToken(scopes) {
   } catch (err) {
     // v1 (.read) rejected as invalid_scope → retry once with v2 (.rs) syntax,
     // with a FRESH assertion (new jti). Any other error propagates unchanged.
-    if (err instanceof GreenwayError && err.kind === "invalid_scope") {
+    // The probe passes retryV2=false so it can test each exact scope string.
+    if (retryV2 && err instanceof GreenwayError && err.kind === "invalid_scope") {
       payload = await requestToken(
         tokenEndpoint,
         buildAssertion(cfg, tokenEndpoint),
@@ -270,6 +283,13 @@ async function fetchFreshToken(scopes) {
     scopeSyntax,
     expiresAt: Date.now() + Math.max(0, expiresIn - EXPIRY_SAFETY_S) * 1000,
   };
+}
+
+// One exact token attempt for the given scope set — NO v1→v2 retry, never
+// cached. Used by the probe to test each scope string exactly as written, so we
+// learn which resource AND which syntax the app is actually authorized for.
+async function probeToken(scopes) {
+  return fetchFreshToken(scopes, false);
 }
 
 // ---- public: cached, single-flight token for the DEFAULT scope set ----
@@ -303,4 +323,11 @@ function invalidate() {
   cachedToken = null;
 }
 
-module.exports = { getAccessToken, invalidate, DEFAULT_SCOPES, TOKEN_FORM_PARAMS, GreenwayError };
+module.exports = {
+  getAccessToken,
+  probeToken,
+  invalidate,
+  DEFAULT_SCOPES,
+  TOKEN_FORM_PARAMS,
+  GreenwayError,
+};

@@ -22,12 +22,24 @@
 require("dotenv").config();
 const {
   getAccessToken,
+  probeToken,
   GreenwayError,
   TOKEN_FORM_PARAMS,
 } = require("../services/greenway.service");
 
 const PROBE_SCOPES = ["system/Encounter.read", "system/Patient.read", "system/Observation.read"];
 const BASE_SCOPES = ["system/Encounter.read", "system/Patient.read"];
+
+// --per-scope: request ONE scope per token call, both syntaxes, to learn exactly
+// which resource + syntax the app is authorized for. Order per Ricky.
+const PER_SCOPE_LIST = [
+  "system/Patient.read",
+  "system/Patient.rs",
+  "system/Encounter.read",
+  "system/Encounter.rs",
+  "system/Observation.read",
+  "system/Observation.rs",
+];
 
 function line(label, value) {
   console.log(`  ${String(label).padEnd(15)} ${value}`);
@@ -100,14 +112,65 @@ function fail(err) {
   process.exit(1);
 }
 
-(async () => {
-  console.log("Greenway / Practice Fusion token probe");
-  line("FHIR base", process.env.GREENWAY_FHIR_BASE || "(unset)");
-  line("client_id", process.env.GREENWAY_CLIENT_ID ? "(set)" : "(unset)");
-  // What actually goes on the wire — note client_id is NOT among these (the
-  // client identity is inside the signed assertion). Some servers require it.
-  line("form params", `${TOKEN_FORM_PARAMS.join(", ")}  (client_id NOT sent)`);
+// Compact, non-secret reason string for a rejected scope (prefers PF's own
+// { subcode, message } body over the generic detail).
+function shortReason(err) {
+  if (!(err instanceof GreenwayError)) return err.message;
+  let msg = err.detail || err.kind;
+  try {
+    const b = JSON.parse(err.body || "");
+    if (b && b.message) msg = `${b.subcode ? b.subcode + ": " : ""}${b.message}`;
+  } catch {
+    /* body not JSON — keep detail */
+  }
+  return msg;
+}
 
+// --per-scope: one scope per token request, both syntaxes, → a granted/rejected
+// table. Tells us exactly which resource + which syntax the app is authorized
+// for. Uses probeToken (no v1→v2 auto-retry) so each string is tested as-written.
+async function perScopeProbe() {
+  console.log("\nPer-scope probe — one scope per token request:\n");
+  const rows = [];
+  for (const scope of PER_SCOPE_LIST) {
+    try {
+      const tok = await probeToken([scope]);
+      rows.push({ scope, ok: true, info: tok.grantedScope || "(granted; server echoed no scope)" });
+    } catch (err) {
+      // config/discovery aren't scope-specific — abort the whole probe.
+      if (err instanceof GreenwayError && (err.kind === "config" || err.kind === "discovery")) {
+        return fail(err);
+      }
+      rows.push({ scope, ok: false, info: shortReason(err) });
+    }
+  }
+
+  const w = Math.max(...PER_SCOPE_LIST.map((s) => s.length));
+  console.log("  " + "SCOPE".padEnd(w) + "   RESULT     DETAIL");
+  console.log("  " + "-".repeat(w) + "   --------   " + "-".repeat(6));
+  for (const r of rows) {
+    console.log(
+      "  " + r.scope.padEnd(w) + "   " + (r.ok ? "GRANTED " : "rejected") + "   " + r.info
+    );
+  }
+
+  const granted = rows.filter((r) => r.ok).map((r) => r.scope);
+  console.log("");
+  if (granted.length) {
+    const allV2 = granted.every((s) => s.endsWith(".rs"));
+    const allV1 = granted.every((s) => s.endsWith(".read"));
+    const syntax = allV2 ? "v2 (.rs)" : allV1 ? "v1 (.read)" : "mixed";
+    console.log(`➡️  GRANTED: ${granted.join(" ")}`);
+    console.log(`   Working syntax: ${syntax}`);
+    process.exit(0);
+  }
+  console.log("➡️  No scope was granted in EITHER syntax.");
+  console.log("   Per PF docs, a system app can only request scopes AUTHORIZED BY THE EHR USER.");
+  console.log("   → PSC must authorize this app's scopes inside their Practice Fusion EHR first.");
+  process.exit(1);
+}
+
+async function combinedProbe() {
   try {
     const r = await tryToken(PROBE_SCOPES, "Encounter + Patient + Observation (probe)");
     if (!r.hasObs) {
@@ -137,4 +200,17 @@ function fail(err) {
     }
     return fail(err);
   }
+}
+
+(async () => {
+  const perScope = process.argv.includes("--per-scope");
+  console.log("Greenway / Practice Fusion token probe" + (perScope ? " — per-scope mode" : ""));
+  line("FHIR base", process.env.GREENWAY_FHIR_BASE || "(unset)");
+  line("client_id", process.env.GREENWAY_CLIENT_ID ? "(set)" : "(unset)");
+  // What actually goes on the wire — note client_id is NOT among these (the
+  // client identity is inside the signed assertion). Some servers require it.
+  line("form params", `${TOKEN_FORM_PARAMS.join(", ")}  (client_id NOT sent)`);
+
+  if (perScope) return perScopeProbe();
+  return combinedProbe();
 })();
