@@ -27,8 +27,9 @@ const {
   TOKEN_FORM_PARAMS,
 } = require("../services/greenway.service");
 
-const PROBE_SCOPES = ["system/Encounter.read", "system/Patient.read", "system/Observation.read"];
-const BASE_SCOPES = ["system/Encounter.read", "system/Patient.read"];
+// PF requires v2 (.rs) syntax (§10); the service falls back to v1 if needed.
+const PROBE_SCOPES = ["system/Encounter.rs", "system/Patient.rs", "system/Observation.rs"];
+const BASE_SCOPES = ["system/Encounter.rs", "system/Patient.rs"];
 
 // --per-scope: request ONE scope per token call, both syntaxes, to learn exactly
 // which resource + syntax the app is authorized for. Order per Ricky.
@@ -53,9 +54,7 @@ async function tryToken(scopes, label) {
   console.log(`\n✅ SUCCESS — ${label}`);
   line(
     "scope syntax",
-    tok.scopeSyntax === "v2"
-      ? "v2 (.rs) — v1 (.read) was rejected, v2 accepted"
-      : "v1 (.read)"
+    tok.scopeSyntax === "v2" ? "v2 (.rs)" : "v1 (.read) [fallback]"
   );
   line("granted scope", granted || "(server returned no scope field)");
   line("token_type", tok.tokenType);

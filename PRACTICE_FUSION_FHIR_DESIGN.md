@@ -250,11 +250,28 @@ serves the same NPPES dissemination data):
   **`client-confidential-asymmetric`** (= `private_key_jwt`, our ES384 signed assertion verified via
   our JWKS) alongside `client-confidential-symmetric` (client_secret). **So we use `private_key_jwt`
   — the ES384 + JWKS path already stood up (§3–4) is the right one; we do NOT need a client_secret.**
-- **Scopes — NOT settled here.** `scopes_supported` is **absent** from this smart-config, so
-  `system/Observation.read` (the labs question) **cannot be confirmed from discovery**. `capabilities`
-  shows `permission-v1` + `permission-v2` (both scope syntaxes) but does not enumerate resources.
-  The granted scopes are confirmed only at **app registration / by exercising the scope** — so the
-  labs go/no-go (§"Future scope") stays open pending the registration UI or a live token attempt.
+- **Scopes — not in discovery; settled empirically.** `scopes_supported` is **absent** from this
+  smart-config, so scopes were confirmed by exercising them against the live token endpoint (below).
+
+### Scope syntax + grants — RESOLVED (2026-09-28, live token probe)
+- **Practice authorization was a real, distinct prerequisite.** Before the app was authorized for PSC
+  in the EHR (**App marketplace → Authorize app**, completed **2026-09-28**), the token endpoint
+  returned "practice has not granted access to system application." That is a genuinely separate gate
+  from the scope-syntax issue below — both had to be cleared.
+- **Practice Fusion REQUIRES SMART v2 (`.rs`) scope syntax. v1 (`.read`) is rejected** — even though
+  v1 strings are listed as "supported" in PF's own FHIR API docs. Confirmed by a per-scope probe: all
+  three `.rs` scopes granted, all three `.read` forms rejected.
+- **⚠️ Misleading error.** PF's response for an unrecognized/unpermitted scope is
+  `{"subcode":"Unauthorized","message":"client does not have permissions to requested scope"}` —
+  it reads as an **authorization** failure but here it meant **wrong syntax** (`.read` vs `.rs`). This
+  cost a detour: it is NOT the OAuth `invalid_scope` shape, so our client first misfiled it as an auth
+  failure. `greenway.service.js` now treats any "…scope" message as a scope denial, and **defaults to
+  v2** (`.rs`) so no call pays a failed round trip; v1 remains only as a cheap fallback.
+- **Granted scopes (confirmed):** **`system/Patient.rs`**, **`system/Encounter.rs`**,
+  **`system/Observation.rs`**. `getAccessToken()` default = `system/Encounter.rs system/Patient.rs`.
+- **✅ LABS ANSWERED: `system/Observation.rs` is GRANTED.** Lab results ARE reachable through THIS
+  integration — no separate lab-provider integration is needed for results filed in the PSC chart.
+  (Renal/dialysis labs that never reach the PCP chart remain the one caveat — see §"Future scope".)
 
 **Module:** a new `services/greenway.service.js` exporting `getAccessToken()` — internal only,
 **no route**. Pieces:
@@ -298,19 +315,19 @@ Backlog item (Ricky): import lab results into the platform via lab-provider APIs
 provider outreach. Not scoped, not started. Recorded here — rather than a domain *_FOLLOWUPS.md —
 because the first decision is whether THIS FHIR integration already covers it.
 
-**Does the in-progress Greenway/Practice Fusion FHIR scope already include lab results? As designed
-today: NO — but it is the same integration that could, so check before adding a second one.**
-- The requested token scope is **`system/Encounter.read system/Patient.read`** only (§ token
-  exchange) — Encounter + Patient, for "last seen" primary-care dates. There is **no `Observation`
-  or `DiagnosticReport` pull** in the current design.
-- BUT lab results in FHIR are the **`Observation` (category=laboratory)** and **`DiagnosticReport`**
-  resources, and **`Observation` is on Greenway's exposed system-scope resource list** (§0), and as a
-  (g)(10)-certified Standardized API the USCDI **Laboratory** data class must be reachable. So labs
-  that live in the practice's Greenway chart would be reachable by **adding a scope**
-  (`system/Observation.read`, plus `system/DiagnosticReport.read` if Greenway exposes it) to the app +
-  signing key already being stood up here — **not** by building a separate lab integration.
-- The decisive unknown is whether the labs we care about are actually **in the Greenway/Practice
-  Fusion chart** (Greenway is the primary-care EHR).
+**✅ ANSWERED (2026-09-28): this integration DOES cover lab results.** `system/Observation.rs` is a
+**granted** scope for our app on the PSC chart (confirmed by live token probe, §10). Lab results are
+FHIR `Observation` (category=laboratory) resources, so results filed in the PSC Practice Fusion chart
+are reachable through the app + signing key already stood up here — **no separate lab-provider
+integration is needed for PCP-filed labs.** (Superseded the earlier "As designed today: NO" reading,
+which predated confirming the grant.)
+- To pull labs, the Observation fetch slice requests `system/Observation.rs` (already granted) and
+  filters `category=laboratory`. `DiagnosticReport` (panel-level grouping) was not probed; add
+  `system/DiagnosticReport.rs` only if we find we need report-level structure — Observation carries the
+  discrete result values on its own.
+- **The one remaining caveat is data location, not access:** labs only reachable if they are actually
+  **in the PSC Practice Fusion chart.** Renal/dialysis panels that originate at a dialysis provider or
+  reference lab and are never filed to the PCP chart still need a direct integration — see below.
 
 Open questions (resolve before choosing a path):
 - **Which labs?** Quest, LabCorp, dialysis-provider labs. Renal/dialysis panels often originate at

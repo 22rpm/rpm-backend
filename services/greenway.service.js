@@ -20,10 +20,11 @@ const TOKEN_TIMEOUT_MS = 10000;
 const EXPIRY_SAFETY_S = 60; // refresh this many seconds before the real expiry
 const ASSERTION_TTL = "4m"; // ≤ 5 min — many SMART servers reject longer
 
-// The scopes the "last seen by primary care" feature needs (SMART v1 syntax).
-// Callers may pass a different set (the token-test probe adds Observation to
-// settle the labs question).
-const DEFAULT_SCOPES = ["system/Encounter.read", "system/Patient.read"];
+// The scopes the "last seen by primary care" feature needs. Practice Fusion
+// REQUIRES SMART v2 (.rs) syntax — v1 (.read) is rejected as "not permitted"
+// despite being in their docs (confirmed 2026-09-28, see §10). So v2 is the
+// default and pays no failed round trip; v1 remains only as a cheap fallback.
+const DEFAULT_SCOPES = ["system/Encounter.rs", "system/Patient.rs"];
 
 // Error taxonomy so callers — especially scripts/greenway-token-test.js — can
 // tell apart failures that have DIFFERENT fixes and must not be confused:
@@ -246,30 +247,31 @@ async function requestToken(tokenEndpoint, assertion, scopes) {
   raise("auth", `Token request failed (HTTP ${res.status})`);
 }
 
-// v1 → v2 SMART scope syntax: system/Resource.read -> system/Resource.rs.
+// SMART scope-syntax converters. v2 = system/Resource.rs, v1 = .read.
 function scopesToV2(scopes) {
   return scopes.map((s) => s.replace(/\.read$/, ".rs").replace(/\.write$/, ".cud"));
 }
+function scopesToV1(scopes) {
+  return scopes.map((s) => s.replace(/\.rs$/, ".read").replace(/\.cud$/, ".write"));
+}
+const isV2 = (scopes) => scopes.every((s) => /\.(rs|cud)$/.test(s));
 
-async function fetchFreshToken(scopes, retryV2 = true) {
+async function fetchFreshToken(scopes, allowFallback = true) {
   const cfg = readConfig();
   const tokenEndpoint = await discoverTokenEndpoint(cfg.fhirBase);
+  const attempt = (s) => requestToken(tokenEndpoint, buildAssertion(cfg, tokenEndpoint), s);
 
+  // Send the caller's syntax first. The default is v2 (.rs) — Practice Fusion's
+  // required syntax — so normally there is NO retry. Only on invalid_scope do we
+  // try the OTHER syntax once (fresh assertion, new jti) as a cheap safety net.
+  let used = scopes;
   let payload;
-  let scopeSyntax = "v1";
   try {
-    payload = await requestToken(tokenEndpoint, buildAssertion(cfg, tokenEndpoint), scopes);
+    payload = await attempt(scopes);
   } catch (err) {
-    // v1 (.read) rejected as invalid_scope → retry once with v2 (.rs) syntax,
-    // with a FRESH assertion (new jti). Any other error propagates unchanged.
-    // The probe passes retryV2=false so it can test each exact scope string.
-    if (retryV2 && err instanceof GreenwayError && err.kind === "invalid_scope") {
-      payload = await requestToken(
-        tokenEndpoint,
-        buildAssertion(cfg, tokenEndpoint),
-        scopesToV2(scopes)
-      );
-      scopeSyntax = "v2";
+    if (allowFallback && err instanceof GreenwayError && err.kind === "invalid_scope") {
+      used = isV2(scopes) ? scopesToV1(scopes) : scopesToV2(scopes);
+      payload = await attempt(used);
     } else {
       throw err;
     }
@@ -280,12 +282,12 @@ async function fetchFreshToken(scopes, retryV2 = true) {
     accessToken: payload.access_token,
     tokenType: payload.token_type || "Bearer",
     grantedScope: payload.scope || "",
-    scopeSyntax,
+    scopeSyntax: isV2(used) ? "v2" : "v1",
     expiresAt: Date.now() + Math.max(0, expiresIn - EXPIRY_SAFETY_S) * 1000,
   };
 }
 
-// One exact token attempt for the given scope set — NO v1→v2 retry, never
+// One exact token attempt for the given scope set — NO syntax fallback, never
 // cached. Used by the probe to test each scope string exactly as written, so we
 // learn which resource AND which syntax the app is actually authorized for.
 async function probeToken(scopes) {
