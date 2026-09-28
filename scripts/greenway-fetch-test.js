@@ -174,6 +174,86 @@ async function encStructureMode(patientId) {
   process.exit(0);
 }
 
+// An Observation's date. US Core Observation → effectiveDateTime (most common),
+// effectivePeriod.start, or the record `issued` time as a last resort.
+function obsDate(r) {
+  if (!r) return null;
+  return r.effectiveDateTime || r.effectivePeriod?.start || r.effectivePeriod?.end || r.issued || null;
+}
+
+async function fetchObsCategory(patientId, category) {
+  const bundle = await fhirGet("Observation", { patient: patientId, category, _count: "50" });
+  const entries = Array.isArray(bundle?.entry) ? bundle.entry : [];
+  const total = typeof bundle?.total === "number" ? bundle.total : entries.length;
+  let effDT = 0;
+  let effPer = 0;
+  let issued = 0;
+  let best = null;
+  for (const e of entries) {
+    const r = e.resource || {};
+    if (r.effectiveDateTime) effDT += 1;
+    if (r.effectivePeriod) effPer += 1;
+    if (r.issued) issued += 1;
+    const d = obsDate(r);
+    if (d && (!best || Date.parse(d) > Date.parse(best))) best = d;
+  }
+  return { total, scanned: entries.length, effDT, effPer, issued, date: best, sample: entries[0]?.resource || null };
+}
+
+// The BIG question: does PSC's chart carry dated Observations? That decides
+// whether Observation.rs can be the lab feed (vs a separate lab-provider /
+// Fax Intelligence integration). Reports counts + date-field presence per
+// category, and the structure of one result (field names only, no values).
+async function observationMode(patientId) {
+  const cats = ["laboratory", "vital-signs"];
+  const results = [];
+  console.log("");
+  for (const cat of cats) {
+    const r = await fetchObsCategory(patientId, cat);
+    results.push({ cat, ...r });
+    console.log(`  category=${cat}`);
+    line("  total", String(r.total));
+    line("  scanned", String(r.scanned));
+    line("  effectiveDateTime", `${r.effDT}/${r.scanned} present`);
+    line("  effectivePeriod", `${r.effPer}/${r.scanned} present`);
+    line("  issued", `${r.issued}/${r.scanned} present`);
+    line("  most recent date", r.date || "(none)");
+    console.log("");
+  }
+
+  const sample = results.map((r) => r.sample).find(Boolean);
+  if (sample) {
+    console.log("Structure of one Observation (field names only, no values):");
+    line("top-level keys", Object.keys(sample).join(", "));
+    line("effectiveDateTime", String("effectiveDateTime" in sample));
+    line(
+      "effectivePeriod",
+      sample.effectivePeriod
+        ? `present {start:${"start" in sample.effectivePeriod}, end:${"end" in sample.effectivePeriod}}`
+        : "absent"
+    );
+    line("issued", String("issued" in sample));
+    const dateish = Object.keys(sample).filter((k) => /date|time|period|issued|effective/i.test(k));
+    line("date-ish keys", dateish.join(", ") || "(none)");
+    console.log("");
+  }
+
+  const anyDated = results.some((r) => r.date);
+  const anyObs = results.some((r) => r.total > 0 || r.scanned > 0);
+  if (anyDated) {
+    console.log("➡️  PSC's chart HAS dated Observations → the FHIR lab feed (Observation.rs) is VIABLE.");
+    console.log("   No separate lab-provider integration is needed for results filed in the PSC chart.");
+  } else if (anyObs) {
+    console.log("➡️  Observations exist but carry NO dates → not usable as a dated lab source.");
+    console.log("   Labs would have to come from lab providers / Fax Intelligence instead.");
+  } else {
+    console.log("➡️  NO Observations at all for either category.");
+    console.log("   The FHIR lab feed is NOT available from PSC's chart — labs must come from the lab");
+    console.log('   providers directly or via Fax Intelligence (see §"Future scope").');
+  }
+  process.exit(0);
+}
+
 function fail(err) {
   console.log("\n❌ FAILURE");
   if (err instanceof GreenwayError) {
@@ -204,11 +284,13 @@ function fail(err) {
   const patientId = val("--patient");
   const mrn = val("--mrn");
   const encStruct = val("--enc-structure");
+  const observation = val("--observation");
 
   console.log("Greenway / Practice Fusion FHIR fetch probe (read-only)");
   line("FHIR base", process.env.GREENWAY_FHIR_BASE || "(unset)");
 
   if (encStruct) return encStructureMode(encStruct).catch(fail);
+  if (observation) return observationMode(observation).catch(fail);
   if (patientId) return patientMode(patientId).catch(fail);
   if (mrn) return mrnMode(mrn).catch(fail);
 
@@ -216,5 +298,6 @@ function fail(err) {
   console.log("  node scripts/greenway-fetch-test.js --patient <PF_PATIENT_ID>");
   console.log("  node scripts/greenway-fetch-test.js --mrn <MRN>                 (e.g. UM542319)");
   console.log("  node scripts/greenway-fetch-test.js --enc-structure <PF_PATIENT_ID>  (diagnose date field)");
+  console.log("  node scripts/greenway-fetch-test.js --observation <PF_PATIENT_ID>   (labs+vitals viability)");
   process.exit(2);
 })();

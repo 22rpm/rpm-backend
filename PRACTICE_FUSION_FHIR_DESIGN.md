@@ -290,6 +290,21 @@ serves the same NPPES dissemination data):
   FHIR `Patient.birthDate` before storing a mapping — a transcription error at enrollment would
   otherwise silently link the wrong chart.
 
+### ❌ "Last seen by primary care" — NOT VIABLE from this data (verdict 2026-09-28)
+**The Encounter-based "last seen" field (§1) cannot be built and is abandoned.** A live probe of
+PSC's chart (patient `710a29fa-…`, 3 encounters) found the Encounter resources are **dateless
+stubs** — top-level keys are only `class, status, type, subject, serviceProvider, meta, id`. **No
+`period`, no `participant`, no date-bearing field on any of the three.**
+- **Not an API limitation — a data-population reality on PSC's side.** PF's documented Encounter
+  (US Core `us-core-encounter`) fully supports `period` + `participant.period` (their own example
+  populates both); PSC's records simply don't carry them. The `date` search param exists but the
+  element it sorts on isn't in the data, which is why `_sort=-date` was silently ignored.
+- **`meta.lastUpdated` is NOT a substitute** and must not be used — it is a record-write timestamp
+  (in PF sample data every resource shares one bulk-load `lastUpdated`), not a clinical/visit date.
+- **Consequence:** the §1 GO verdict (which rested on the API *supporting* Encounter, true) is
+  overtaken by data reality. Do not build the field. The clinician-overview "last seen" column is
+  dropped from this integration.
+
 **Module:** a new `services/greenway.service.js` exporting `getAccessToken()` — internal only,
 **no route**. Pieces:
 1. **Assertion builder** (`jsonwebtoken@9`, already a dep; `jwt.sign(claims, privateKeyPem,
