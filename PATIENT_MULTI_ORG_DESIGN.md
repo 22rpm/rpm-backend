@@ -5,8 +5,12 @@ patient record belong to MORE THAN ONE organization (e.g. a PCP practice *and* a
 clinic, both paying customers) instead of today's single `users.organization_id`.
 **Date:** 2026-10-01. **Author:** scoped with Ricky.
 
-> **Blocking decisions below (§7) need Ricky's sign-off before any build.** The `dev_data`
-> (readings) decision in particular drives the schema and the staging, so settle it first.
+> **§7 decisions recorded 2026-10-01 (Ricky).** Readings = attributed-to-PCP + dialysis-readable;
+> alerts = PCP-paged + both-view; messages = per-org private; org type lives on `organizations`;
+> demographics both-editable (with an audit recommendation). These introduce a THIRD visibility
+> mode — "attributed + cross-org readable" (§3a) — which the scoping layer cannot express as one
+> global rule; it is per-table and, for readings/alerts, per-purpose (read vs bill vs page). Still
+> design-only: no code, no migration.
 
 ---
 
@@ -68,31 +72,63 @@ migrations, 2026-09-30.)
 **Class B splits cleanly:**
 - **Correctly SHARED (leave as-is):** `patient_profiles`, `patient_allergies`,
   `patient_comm_prefs`, `devices` — these ARE the shared demographics/identity layer.
-- **Clinical, NEEDS A DECISION (§7.1–7.3):** `dev_data`, `alerts`/`alert_assignments`/
-  `alert_reads`, `messages`. Each must either **gain an `organization_id` column** (stamp the
-  acting org going forward; backfill existing rows to the patient's current single org) **or** be
-  consciously declared **shared** across the patient's orgs.
+- **Clinical, DECIDED (§7.1–7.3, 2026-10-01):** `dev_data`, `alerts`/`alert_assignments`/
+  `alert_reads`, `messages` all **gain an `organization_id` column** (stamp the acting/creating
+  org going forward; backfill existing rows to the patient's current single org). What differs is
+  the *visibility mode* applied to each — see §3a.
 
-## 4. Per-table shared / per-org decision table
+## 3a. THREE visibility modes (not two)
 
-| Table | Class | Proposed treatment | Needs schema change? |
+The §7 decisions mean visibility is **not** binary shared-vs-per-org. There are **three** modes:
+
+1. **SHARED** — no `organization_id` on the row; any member org sees it. (Demographics/identity.)
+2. **PER-ORG PRIVATE** — row carries `organization_id`; visible ONLY to the owning org
+   (`WHERE row.organization_id = req.orgScope`). (Notes, labs, time, meds, scheduled calls, rpm
+   notes, consents, billing status, notification_log, **messages**.)
+3. **ATTRIBUTED + CROSS-ORG READABLE** (new, from §7.1/§7.2) — row carries `organization_id` naming
+   the **owning/billing/paging** org, but **any member org may READ it**. Ownership (billing,
+   paging) is gated by the row's org; read is gated only by membership. (`dev_data` readings;
+   `alerts`.)
+
+**Can the scoping layer express this? Partly — and mode 3 forces per-table/per-purpose handling.**
+- The **membership gate** (`scopePatientParam` / `canAccessPatient`, once cut to
+  `patient_organizations`) answers "may this caller touch this patient at all." That is the single
+  shared primitive and it is necessary for all three modes — but it is **not sufficient** to
+  distinguish them.
+- The mode is then expressed **per table, and for mode 3 per query PURPOSE**, by whether a query
+  appends the row-org filter:
+  - **SHARED** → never append a row-org filter (no column exists).
+  - **PER-ORG PRIVATE** → append `AND organization_id = req.orgScope` on every access.
+  - **ATTRIBUTED + CROSS-ORG READABLE** → **READ paths do NOT append it** (membership is the whole
+    gate); **BILLING and PAGING paths DO** (`WHERE organization_id = <owning org>`). The SAME table
+    (`dev_data`, `alerts`) therefore uses different filters for different purposes.
+- Consequence: **mode 3 cannot be a single global middleware rule.** The middleware gives the
+  patient boundary; each table — and for readings/alerts, each *purpose* (read vs bill vs page) —
+  chooses its own row-org filter. This is the main complexity the §7 decisions introduce, and it
+  is why the leak test (§6) must assert per-*purpose*, not just per-table.
+
+## 4. Per-table shared / per-org / readable decision table
+
+Modes per §3a: **SHARED** / **PRIVATE** (per-org) / **READABLE** (attributed + cross-org readable).
+
+| Table | Class | Mode | Needs schema change? |
 |---|---|---|---|
-| `users` (demographics) | — | **Shared** (name/DOB/MRN/contact) | No |
-| `patient_profiles` | B | **Shared** | No |
-| `patient_allergies` | B | **Shared** | No |
-| `patient_comm_prefs` | B | **Shared** | No |
-| `devices` | B | **Shared** (physical device identity) | No |
-| `patient_doctor_assignments` | — (no org col) | **Per-org** (see §7, assignment semantics) | Decide |
-| `dev_data` (readings) | B | **OPEN — §7.1** | Yes, if attributed |
-| `alerts` / `alert_assignments` / `alert_reads` | B | **OPEN — §7.2** | Yes, if attributed |
-| `messages` | B | **Recommend attribute — §7.3** | Yes, if attributed |
-| `time_entries`, `patient_calls`, `clinical_notes` | A | Per-org (already) | No |
-| `lab_results` | A | Per-org (already) | No |
-| `patient_medications` | A | Per-org (already) — **but fix insert, §8** | No |
-| `scheduled_calls` | A | Per-org (already) | No |
-| `rpm_notes`, `patient_billing_status` | A | Per-org (already) | No |
-| `patient_consents` | A | Per-org (consent is given to a specific clinic) | No |
-| `notification_log` | A | Per-org (already) | No |
+| `users` (demographics) | — | **SHARED** (name/DOB/MRN/contact) | No |
+| `patient_profiles` | B | **SHARED** | No |
+| `patient_allergies` | B | **SHARED** | No |
+| `patient_comm_prefs` | B | **SHARED** | No |
+| `devices` | B | **SHARED** (physical device identity) | No |
+| `patient_doctor_assignments` | — (no org col) | **PRIVATE** (assignment is per-org) | Decide col add |
+| `dev_data` (readings) | B | **READABLE** — own=PCP (bills), dialysis reads (§7.1) | **Yes — add org col** |
+| `alerts` / `alert_assignments` / `alert_reads` | B | **READABLE** — route to PCP, both view (§7.2) | **Yes — add org col** |
+| `messages` | B | **PRIVATE** — attributed, not cross-org readable (§7.3) | **Yes — add org col** |
+| `time_entries`, `patient_calls`, `clinical_notes` | A | **PRIVATE** (already) | No |
+| `lab_results` | A | **PRIVATE** (already) | No |
+| `patient_medications` | A | **PRIVATE** (already) — **but fix insert, §8** | No |
+| `scheduled_calls` | A | **PRIVATE** (already) | No |
+| `rpm_notes`, `patient_billing_status` | A | **PRIVATE** (already) | No |
+| `patient_consents` | A | **PRIVATE** (consent is given to a specific clinic) | No |
+| `notification_log` | A | **PRIVATE** (already) | No |
 
 ## 5. Staged migration path (no big-bang on a live clinical system)
 
@@ -116,13 +152,20 @@ Backfill guarantees exactly one membership == the old column, so every decision 
 agree across a patient sample and a wrong-org sample, before the flip. **Second memberships are NOT
 allowed yet.**
 
-**Stage 1.5 — Class B clinical schema expansion (only the tables §7.1–7.3 say to attribute).**
-Add `organization_id` to `dev_data` / `alerts` / `messages` as decided; stamp it at insert from
-the acting org; backfill existing rows to the patient's current single org; switch their reads from
-the `users`-join (`alert.route.js:1959-2379`, `staffMessages.service.js:30-77`,
-`messageService.js:259-303`) to the row's own column. Class A needs none of this.
-*Verify:* with single-org patients, each affected read returns identical results before vs after
-(the backfilled org equals the patient's only org).
+**Stage 1.5 — Class B clinical schema expansion (`dev_data`, `alerts`, `messages`).**
+Add `organization_id` to all three; stamp at insert (device→org for readings/alerts = PCP; staff
+party's org for messages); backfill existing rows to the patient's current single org. Then apply
+the per-mode read changes (§3a):
+- **`messages` (PRIVATE):** switch reads to `AND organization_id = req.orgScope`
+  (`messageService.js:88-99,259-303`, `staffMessages.service.js:30-77`).
+- **`dev_data` / `alerts` (READABLE):** **drop** the `users`-join org filter on read/list paths
+  (`alert.route.js:1959-2379`, reading reads) so membership alone gates viewing; **add**
+  `organization_id = <owning PCP org>` on the **billing** path (`billingSummary.service.js:38`
+  reading counts) and the **paging** path (`deviceData.service.js:916,984` alert fan-out).
+Class A needs none of this.
+*Verify:* with single-org patients, every affected read/bill/page path returns identical results
+before vs after (the backfilled org equals the patient's only org, so all three modes collapse to
+today's behavior). Only once that parity holds is a second membership allowed (Stage 2).
 
 **Stage 2 — enable the feature (second org) + confirm isolation.**
 Allow adding a patient to a second org (admin endpoint/UI). Now memberships pass for BOTH orgs;
@@ -144,62 +187,87 @@ create/see *your own* clinical rows; row visibility (Layer 2) keeps clinical dat
 owning org. Enforceable at the scoping layer for Class A and for Class B *once attributed*; the
 shared-vs-per-org call is per-table (§4).
 
-**The gating test (CI, standing, blocks Stage 2):** seed a patient with active memberships in org A
-and org B; create one row of EVERY patient-linked type stamped org B — **including a `dev_data`
-reading, its resulting `alert`, and a `message`** (the Class B clinical trio, where a leak is most
-likely), plus the Class A types. Authenticated as an org-A user AND as a super-admin scoped to A,
-hit every patient-data read endpoint and assert: **none** of org B's rows appear, and shared
-demographics **do**. Mirror it (org-A data vs org-B viewer). Plus a static check that every
-patient-linked read filters on the row's own `organization_id`, never a `users` join.
+**The gating test (CI, standing, blocks Stage 2)** must assert per *mode* and, for READABLE, per
+*purpose*. Seed a patient with active memberships in a PCP org and a dialysis org; create one row of
+every patient-linked type, plus the Class B clinical trio (`dev_data` reading, resulting `alert`,
+`message`). Then assert:
+- **PRIVATE (notes, labs, time, meds, scheduled calls, rpm notes, consents, `messages`):** a row
+  created by the PCP org is invisible to a dialysis-scoped viewer and vice versa; demographics are
+  visible to both. (Mirror both directions.)
+- **READABLE (`dev_data`, `alerts`):** a PCP-owned reading/alert **IS readable** by the dialysis-
+  scoped clinical view (membership gate), **but** the dialysis org's **billing summary shows ZERO**
+  RPM reading count for it, and **paging** targets only the PCP org. This read-yes / bill-no /
+  page-PCP split is the subtle assertion mode 3 demands.
+- **SHARED:** demographics visible to both; a MRN/DOB edit by one org is visible to the other (and,
+  per §7.5, audited).
+Plus a static check: PRIVATE reads filter on the row's own `organization_id` (never a `users`
+join); READABLE *billing/paging* paths filter on the row's org while READABLE *read* paths do not.
 
 **What breaks if we get it wrong:** (a) cross-org PHI leak — a dialysis clinic sees PCP notes/labs/
 readings or vice versa (HIPAA minimum-necessary violation); (b) over-restriction — a `users`-join
 query returns nothing because the patient's single `users.organization_id` is now one of two.
 (a) is the dangerous one and is concentrated in the Class B clinical tables.
 
-## 7. OPEN DECISIONS — need Ricky's answer before build
+## 7. DECISIONS (recorded 2026-10-01, Ricky)
 
-### 7.1 `dev_data` (readings) — attribute to creating org, or shared?
-**Driver:** if BOTH a dialysis clinic and a PCP practice bill RPM for the same patient, each must
-bill its OWN readings, which requires attributing every reading to the org that captured it → add
-`organization_id` to `dev_data`. **"Shared" means only ONE org can bill that patient for RPM** —
-there is no per-org reading count to substantiate two separate 99454-type claims, and both orgs
-would see all readings. This is the decision that drives the schema and Stage 1.5; settle it first.
-- *Attribute:* add the column, stamp at ingest from the device→org path, backfill historical rows
-  to the patient's current org. Enables dual-org RPM billing; more work.
-- *Shared:* no schema change; only one org bills; both orgs see all vitals (may be clinically fine,
-  but forecloses dual RPM billing).
+### 7.1 `dev_data` (readings) — ATTRIBUTED + CROSS-ORG READABLE
+**Decision:** PCP bills RPM; dialysis clinics do NOT. Readings are **attributed to the creating
+org** (add `organization_id` to `dev_data`), and dialysis member orgs get **READ access** — they
+can view readings but not bill them. (Mode 3, §3a.)
+**Schema:** add `organization_id` to `dev_data`; stamp at ingest from the device→org path; backfill
+existing rows to the patient's current single org. (This is the one high-volume Class B table that
+grows a column — plan the backfill and the index on `(user_id, organization_id, created_at)`.)
+**Billing cohort queries:** `billingSummary.service.js:38` (and any RPM reading-count) must count
+**only readings whose `dev_data.organization_id` = the billing org**, not all of the patient's
+readings. Today the cohort is `WHERE users.organization_id = ?`; under this decision a reading's
+billability follows the READING's org, not the patient's membership. A dialysis org running a
+billing summary must get ZERO RPM reading counts for a shared patient even though it can read those
+readings in the clinical view — read path and billing path diverge (see §3a mode 3).
 
-### 7.2 `alerts` — attributed or shared?
-**Patient-safety angle:** alerts fire from readings and drive paging. For a dual-org patient, **who
-gets paged?** If readings are attributed (§7.1), alerts should be too, so the dialysis team is paged
-for dialysis-captured readings and PCP for PCP-captured — not both for everything (alert fatigue), and
-not the wrong team (missed escalation). If alerts are shared, both orgs' on-call see every alert.
-Alerts/`alert_assignments`/`alert_reads` carry no org today (`alert.route.js:1959-2379`), so
-attributing means a schema add on all three. **Recommend this track §7.1 — readings and their alerts
-should be attributed or shared together**, not split.
+### 7.2 `alerts` — ROUTED to PCP, VISIBLE to both (ATTRIBUTED + CROSS-ORG READABLE)
+**Decision:** PCP gets paged; dialysis can view the data. Alerts are **routed/owned by the PCP org**
+but **readable by any member org**. (Mode 3.)
+**Schema:** add `organization_id` to `alerts` (= the owning/paging org, i.e. the reading's org per
+§7.1, which is PCP). `alert_assignments` (paging targets) continue to resolve within the owning
+(PCP) org; `alert_reads` follow the reader. **Paging path** filters `alerts.organization_id = PCP`;
+**read/list path** is gated by membership only (dialysis sees the alert). The existing alert
+queries that derive org via `JOIN users p ... WHERE p.organization_id = ?`
+(`alert.route.js:1959-2379`, `deviceData.service.js:916,984`) split accordingly: list/view drop the
+users-join org filter (membership gate suffices); fan-out/paging use the new `alerts.organization_id`.
 
-### 7.3 `messages` — attribute (RECOMMENDATION, pending decision)
-**Recommendation: ATTRIBUTE.** A cross-org-visible message thread is a PHI exposure — a dialysis
-clinician reading the PCP↔patient thread (and vice versa). `messages` has no org column and
-`getThread` is not even org-scoped today (it relies on `canAccessPatient`), so once membership is
-multi-org the full thread would be visible to both orgs. Attributing (stamp the staff party's org;
-backfill to the patient's current org) keeps each org's correspondence to itself. Pending your
-confirmation.
+### 7.3 `messages` — PER-ORG PRIVATE (decided; my call)
+**Decision: PRIVATE, not cross-org readable.** Unlike readings/alerts — which are clinical
+*observations* both care teams legitimately benefit from — a message thread is **relationship-
+specific correspondence** between one care team and the patient. A dialysis nurse's exchange with
+the patient is not clinical data the PCP needs, and exposing it is gratuitous PHI spread that could
+also surface content meant for a single relationship. So `messages` gets an `organization_id` (the
+staff party's org) and is visible ONLY to that org (mode 2). This honors the original PHI-exposure
+concern and is deliberately stricter than readings/alerts.
+**Schema:** add `organization_id` to `messages`; stamp from the staff party's org at save
+(`messageService.saveMessage`); backfill to the patient's current org. `getThread`
+(`messageService.js:88-99`), inbox (`staffMessages.service.js:30-77`) and unread all add
+`AND organization_id = req.orgScope`.
 
-### 7.4 `relationship` on the membership vs a `type` on the organization
-Is "pcp / dialysis / rpm" a property of the **membership** (this patient↔this org) or of the **org
-itself**? A dialysis clinic is *always* a dialysis clinic → the type belongs on `organizations`, and
-the join needs no `relationship`. It only belongs on the join if the SAME org can be one patient's
-PCP and another patient's dialysis. This changes the schema (drop `relationship` from the join vs
-keep it). Need your answer; also sets the Stage-0 backfill default (what relationship to assign
-existing single-org memberships).
+### 7.4 `relationship` lives on the ORGANIZATION, not the membership
+**Decision:** an org is either a PCP practice or a dialysis clinic, never both. The type belongs on
+`organizations`, not on the join.
+**Schema changes:** (a) add `type` (enum `pcp` | `dialysis`, extensible) to `organizations`;
+(b) **drop `relationship` from `patient_organizations`** — the join becomes
+`(patient_user_id, organization_id, is_active, added_at, added_by)` with `UNIQUE(patient_user_id,
+organization_id)`. (c) The "who bills / who pages" rules key off `organizations.type` (PCP bills RPM
+and is the alert owner, §7.1/§7.2) rather than a per-membership relationship. (d) Stage-0 backfill no
+longer needs to choose a per-membership relationship — it just inserts membership rows; each org's
+`type` is set once on `organizations`. **Simpler schema and simpler backfill.**
 
-### 7.5 Who may EDIT shared demographics?
-`users`/`patient_profiles` (name, DOB, MRN, contact) are shared across member orgs. If BOTH orgs can
-edit them, one clinic silently changes the other's view, and MRN edits could break the Practice
-Fusion mapping. Options: restrict edits to an owning/PCP org; or allow both but audit every change
-(append-only). Need a rule before Stage 2.
+### 7.5 Shared demographics — both orgs may edit (with a recommendation)
+**Decision:** both member orgs may edit shared demographics (`users` / `patient_profiles`).
+**Recommendation (NOT a blocking decision):** **audit every demographic edit** — who changed which
+field, when — even though both can edit. **Concern on record:** MRN and DOB are exactly what Practice
+Fusion patient matching depends on (`PRACTICE_FUSION_FHIR_DESIGN.md` §10 — identifier search by MRN,
+DOB-verified). A silent edit by one org to MRN or DOB can **break the other org's chart link** to the
+PF record (and any future Observation/labs pull). So at minimum these fields' changes should be
+audited and, ideally, surfaced to both orgs; whether to additionally *restrict* MRN/DOB edits is left
+open. Recorded as a recommendation to revisit, not a gate on Stage 2.
 
 ## 8. Defect to fix REGARDLESS of multi-org
 
