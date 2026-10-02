@@ -84,11 +84,26 @@ async function sendPatientMessageAlert(to, { orgName, loginUrl }) {
   });
 }
 
+// Generic OPS alert — infrastructure/monitoring, NOT patient-facing and NO PHI. Reuses the
+// same proven transporter as the rest of this module. Recipient is OPS_ALERT_EMAIL (fall back
+// to GMAIL_USER so it always has somewhere to go). Throws on failure so a caller can log it.
+async function sendOpsEmail({ subject, text, html }) {
+  const to = process.env.OPS_ALERT_EMAIL || process.env.GMAIL_USER;
+  await transporter.sendMail({
+    from: `"TwentyTwo RPM Ops" <${process.env.GMAIL_USER}>`,
+    to,
+    subject,
+    text,
+    ...(html ? { html } : {}),
+  });
+}
+
 module.exports = {
   sendOtpEmail,
   sendPasswordResetEmail,
   sendDigestEmail,
   sendPatientMessageAlert,
+  sendOpsEmail,
   verifyTransport,
 };
 
