@@ -137,8 +137,14 @@ to the receipt day.)
 
 ### B. Requires an App Store release (the real fix)
 5. **Send `Authorization: Bearer` on the reading POST** (`outbox.js`, `historySync.js`,
-   `bpReading.js`) from the AsyncStorage token, matching medications/profile/settings — so delivery
-   no longer depends on the 45-minute cookie.
+   `bpReading.js`) from the AsyncStorage token — so delivery no longer depends on the 45-minute
+   cookie. **CORRECTION (2026-10-02):** an earlier draft said this "matches medications/profile/
+   settings." It does not — `authRequired` (`middleware/auth.js:110`) reads the cookie ONLY and
+   **ignores the `Authorization` header**, and medications/profile/settings use the same
+   `authRequired`, so they are cookie-dependent too (they have been failing the same way, unreported
+   — the cookie expiry degrades the whole authenticated surface, not just readings). Bearer must
+   therefore be **enabled on the backend first** — see `BUILD_55_DELIVERY_RELIABILITY.md` §B1 — and
+   only then will sending it from the app help.
 6. **Add a 401 handler / interceptor** that, on a 401, refreshes (via the corrected contract, #4) and
    retries once; on refresh failure, bounce to Login rather than silently queueing forever.
 7. **Fix the refresh call** to use `credentials:'include'` (or move fully to Bearer) and to read the
